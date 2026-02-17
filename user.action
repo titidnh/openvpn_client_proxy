@@ -1,0 +1,2 @@
+{ +filter{remove_proxy_headers} }
+/

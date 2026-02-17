@@ -1,0 +1,6 @@
+FILTER remove_proxy_headers
+s/^(X-Forwarded-For:.*)$/X-Forwarded-For: removed/Ig
+s/^(Via:.*)$/Via: removed/Ig
+s/^(Forwarded:.*)$/Forwarded: removed/Ig
+s/^(Proxy-Connection:.*)$/Proxy-Connection: removed/Ig
+s/^(Client-IP:.*)$/Client-IP: removed/Ig
