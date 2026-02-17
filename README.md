@@ -21,8 +21,8 @@ docker build -t openvpn-client-proxy:latest .
 Provide your OpenVPN client configuration as /vpn/vpn.conf inside the container. The simplest way is to mount a host directory containing your OpenVPN files to `/vpn`:
 
 ```sh
-# Mount a folder that contains vpn.conf (and optionally vpn.auth) to /vpn
 docker run --cap-add=NET_ADMIN --device /dev/net/tun --rm \
+  --memory 128MB --health-interval=30s --health-timeout=5s --health-retries=3 \
   -v /path/to/vpn:/vpn:ro \
   -p 3128:3128 openvpn-client-proxy:latest
 ```
