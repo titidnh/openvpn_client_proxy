@@ -1,4 +1,4 @@
-FROM alpine:3.18
+FROM alpine:3
 EXPOSE 3128
 RUN addgroup -S vpn \
   && apk add --no-cache \
