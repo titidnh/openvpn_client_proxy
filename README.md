@@ -54,3 +54,32 @@ Notes:
 
 **License**
 See repository LICENSE file.
+
+**Docker Compose (example)**
+
+The following `docker-compose.yml` shows a minimal example for running the image (example from titi@WaterlooSrv):
+
+```yaml
+titi@WaterlooSrv:~/docker_source/vpn_fr $ cat docker-compose.yml
+services:
+  vpnes:
+    image: titidnh/openvpn_client_proxy:latest
+    network_mode: bridge
+    container_name: vpn_proxy
+    restart: always
+    mem_limit: 128M
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    healthcheck:
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - ./data:/vpn:ro
+    ports:
+      - "3128:3128"
+```
+
+Comme documentation de docker compose.
