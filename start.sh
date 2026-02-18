@@ -24,16 +24,46 @@ setup_iptables() {
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 
-	# Allow OpenVPN handshake to VPN server port (parse from config if possible)
+	# Allow DNS upstreams configured in dnsmasq.conf but restrict to the
+	# dnsmasq process only (owner match). This forces other processes to use
+	# the local resolver at 127.0.0.1.
+	if [ -f /etc/dnsmasq.conf ]; then
+		grep -E '^\s*server=' /etc/dnsmasq.conf | sed 's/^\s*server=//' | while read -r dns; do
+			case "$dns" in
+				*[.:]* )
+					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					;;
+			esac
+		done
+	fi
+
+	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
+	# Support both formats: "remote host port" and "remote host:port".
 	if [ -f "$conf" ]; then
-		port=$(awk '/^remote /{print $3; exit}' "$conf" || true)
+		remote_line=$(awk '/^remote /{print; exit}' "$conf" || true)
+		host=""
+		port=""
 		proto=$(awk '/^proto /{print $2; exit}' "$conf" || true)
+		if [ -n "$remote_line" ]; then
+			set -- $remote_line
+			hostpart="$2"
+			if echo "$hostpart" | grep -q ':'; then
+				host=$(echo "$hostpart" | cut -d: -f1)
+				port=$(echo "$hostpart" | cut -d: -f2)
+			else
+				host="$hostpart"
+				if [ "$#" -ge 3 ]; then port="$3"; fi
+			fi
+		fi
 		if [ -z "$port" ]; then
 			port=1194
 		fi
 		if [ -z "$proto" ]; then
 			proto=udp
 		fi
+		# Allow handshake to the parsed port (any destination). For tighter
+		# security we could resolve $host and restrict to that IP.
 		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
 	else
 		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
