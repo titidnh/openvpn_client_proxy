@@ -1,24 +1,20 @@
-FROM alpine:3
-EXPOSE 3128
+FROM alpine:3.18
 
-# Copy config and scripts first so we can set permissions in the same layer
-COPY privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
-COPY openvpn.sh /usr/local/bin/openvpn.sh
-COPY start.sh /start.sh
-COPY dnsmasq.conf /etc/dnsmasq.conf
-
-# Install packages, create group and set executable permissions in one layer
-RUN addgroup -S vpn \
-  && apk add --no-cache \
+RUN addgroup -S vpn && adduser -S -G vpn vpn
+COPY --chown=vpn:vpn privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
+COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
+COPY --chown=root:root start.sh /start.sh
+COPY --chown=vpn:vpn dnsmasq.conf /etc/dnsmasq.conf
+RUN apk add --no-cache \
     bash \
     openvpn \
     privoxy \
     dnsmasq \
+    iptables \
     tini \
     ca-certificates \
-  && chmod +x /usr/local/bin/openvpn.sh /start.sh
-
-# Healthcheck removed to avoid adding curl and reduce image size
+  && chmod 0755 /usr/local/bin/openvpn.sh /start.sh \
+  && chown root:root /usr/local/bin/openvpn.sh /start.sh
 
 VOLUME ["/vpn"]
 ENTRYPOINT ["/sbin/tini", "--", "/start.sh"]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -x
+set -e
 
 dir="/vpn"
 conf="$dir/vpn.conf"
