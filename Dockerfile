@@ -1,4 +1,4 @@
-FROM alpine:3.18-minirootfs
+FROM alpine:3.18
 
 # Create vpn user
 RUN addgroup -S vpn \
