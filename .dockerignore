@@ -1,0 +1,11 @@
+*
+!privoxy.config
+!default.action
+!default.filter
+!user.action
+!user.filter
+!openvpn.sh
+!start.sh
+!dnsmasq.conf
+!healthcheck.sh
+!Dockerfile

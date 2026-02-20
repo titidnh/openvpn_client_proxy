@@ -1,26 +1,30 @@
-FROM alpine:3.18
+FROM alpine:3.18-minirootfs
 
-RUN addgroup -S vpn && adduser -S -G vpn vpn
+# Create vpn user
+RUN addgroup -S vpn \
+  && adduser -S -G vpn vpn
+
+# Copy configuration and scripts (only required files are included via .dockerignore)
 COPY --chown=vpn:vpn privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
-COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
-COPY --chown=root:root start.sh /start.sh
 COPY --chown=vpn:vpn dnsmasq.conf /etc/dnsmasq.conf
+COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
+COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY --chown=root:root start.sh /start.sh
+
+# Install runtime packages in a single layer, set permissions and remove documentation to save space
 RUN apk add --no-cache \
-    bash \
     openvpn \
     privoxy \
     dnsmasq \
     iptables \
     tini \
     ca-certificates \
-    curl \
     netcat-openbsd \
+    curl \
     bind-tools \
-  && chmod 0755 /usr/local/bin/openvpn.sh /start.sh \
-  && chown root:root /usr/local/bin/openvpn.sh /start.sh
-
-  COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
-  RUN chmod 0755 /usr/local/bin/healthcheck.sh || true
+  && chmod 0755 /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \
+  && chown root:root /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \
+  && rm -rf /usr/share/man /usr/share/doc /usr/share/locale /var/cache/apk/*
 
 VOLUME ["/vpn"]
 
