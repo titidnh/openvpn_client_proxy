@@ -16,3 +16,15 @@ s/([?&])utm_[^=]+=[^&]*//ig
 s/[?&]$//g
 # Try to remove utm params in Location response header lines
 s/^(Location: [^\n\r?]*)([?&]utm_[^\n\r]*)/\1/Ig
+
+FILTER block_js_trackers
+# Remove external script tags that match common tracker keywords/domains
+s@<script[^>]*src=["']?[^"'>]*(googletagmanager|google-analytics|analytics\.js|analytics-min|gtag|ga\.js|doubleclick|adsservice|adservice|adsystem|fingerprint|fingerprintjs|fingerprint2|cdn\.ampproject|adservice)[^"'>]*["']?[^>]*>\s*</script>@@ig
+# Remove generic script tags loading from known tracking domains
+s@<script[^>]*src=["']?[^"'>]*(analytics|tracker|track)\.[^"'>]*["']?[^>]*>\s*</script>@@ig
+# Remove inline scripts that contain fingerprinting API usage (best-effort)
+s@<script[^>]*>[^<]*(CanvasRenderingContext2D|getImageData|toDataURL|WebGLRenderingContext|getContext\(|AudioContext|OfflineAudioContext)[^<]*</script>@@ig
+
+# Inject a small defensive script to override common fingerprinting APIs (may break some sites)
+# Insert before closing </head>
+s@</head>@<script>try{HTMLCanvasElement.prototype.toDataURL=function(){return ""};HTMLCanvasElement.prototype.getContext=function(){return null};if(window.WebGLRenderingContext){window.WebGLRenderingContext=function(){};}if(window.AudioContext){window.AudioContext=function(){throw new Error('blocked');}}navigator.__defineGetter__('plugins',function(){return []});navigator.__defineGetter__('languages',function(){return ['en-US']});}catch(e){};</script></head>@ig
