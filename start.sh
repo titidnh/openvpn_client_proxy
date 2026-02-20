@@ -23,15 +23,20 @@ setup_iptables() {
 	# Allow DNS to local resolver (dnsmasq)
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
-	# allow local unbound (DoT forwarder) on 127.0.0.1:5353
-	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5353 -j ACCEPT || true
-	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5353 -j ACCEPT || true
 
-	# dnsmasq forwards to local unbound; only allow local resolver (127.0.0.1:53)
-	# (per-upstream rules are unnecessary and may be invalid when using "server=127.0.0.1#5353")
-
-	# Allow DoT outbound only for the unbound process (prevents other processes from doing DoT)
-	iptables -A OUTPUT -p tcp -m owner --uid-owner unbound --dport 853 -j ACCEPT || true
+	# Allow DNS upstreams configured in dnsmasq.conf but restrict to the
+	# dnsmasq process only (owner match). This forces other processes to use
+	# the local resolver at 127.0.0.1.
+	if [ -f /etc/dnsmasq.conf ]; then
+		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
+			case "$dns" in
+				*[.:]* )
+					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					;;
+			esac
+		done
+	fi
 
 	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
 	# Support both formats: "remote host port" and "remote host:port".
@@ -98,13 +103,6 @@ start_dnsmasq() {
 	fi
 }
 
-start_unbound() {
-    if [ -f /etc/unbound/unbound.conf ]; then
-        unbound -d -c /etc/unbound/unbound.conf &
-        unbound_pid=$!
-    fi
-}
-
 start_privoxy() {
 	/usr/sbin/privoxy --no-daemon /etc/privoxy/privoxy.config &
 	privoxy_pid=$!
@@ -123,10 +121,7 @@ supervise_all() {
 		setup_iptables
 		setup_ip6tables
 
-		# start unbound, dnsmasq and privoxy (pids set by functions)
-		start_unbound
-		# give unbound a moment to be ready
-		sleep 1
+		# start dnsmasq and privoxy (pids set by functions)
 		start_dnsmasq
 		start_privoxy
 
@@ -182,7 +177,6 @@ supervise_all() {
 		kill "${vpn_pid}" 2>/dev/null || true
 		kill "${privoxy_pid}" 2>/dev/null || true
 		kill "${dnsmasq_pid}" 2>/dev/null || true
-		kill "${unbound_pid}" 2>/dev/null || true
 		wait 2>/dev/null || true
 
 		# exponential backoff before restart
