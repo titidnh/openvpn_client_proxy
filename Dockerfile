@@ -13,8 +13,18 @@ RUN apk add --no-cache \
     iptables \
     tini \
     ca-certificates \
+    curl \
+    netcat-openbsd \
+    bind-tools \
   && chmod 0755 /usr/local/bin/openvpn.sh /start.sh \
   && chown root:root /usr/local/bin/openvpn.sh /start.sh
 
+  COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
+  RUN chmod 0755 /usr/local/bin/healthcheck.sh || true
+
 VOLUME ["/vpn"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD /usr/local/bin/healthcheck.sh || exit 1
+
 ENTRYPOINT ["/sbin/tini", "--", "/start.sh"]

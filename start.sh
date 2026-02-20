@@ -28,7 +28,7 @@ setup_iptables() {
 	# dnsmasq process only (owner match). This forces other processes to use
 	# the local resolver at 127.0.0.1.
 	if [ -f /etc/dnsmasq.conf ]; then
-		grep -E '^\s*server=' /etc/dnsmasq.conf | sed 's/^\s*server=//' | while read -r dns; do
+		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
 			case "$dns" in
 				*[.:]* )
 					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
@@ -99,39 +99,97 @@ start_dnsmasq() {
 		rm -f /etc/resolv.conf || true
 		echo "nameserver 127.0.0.1" > /etc/resolv.conf
 		dnsmasq --keep-in-foreground --conf-file=/etc/dnsmasq.conf &
+		dnsmasq_pid=$!
 	fi
 }
 
 start_privoxy() {
 	/usr/sbin/privoxy --no-daemon /etc/privoxy/privoxy.config &
+	privoxy_pid=$!
 }
 
-supervise_openvpn() {
-	# Loop forever: (re)apply iptables then start openvpn; if it exits, restart
+start_openvpn() {
+    /usr/local/bin/openvpn.sh &
+    vpn_pid=$!
+}
+
+supervise_all() {
 	attempt=0
 	while true; do
 		attempt=$((attempt+1))
+
 		setup_iptables
 		setup_ip6tables
-		/usr/local/bin/openvpn.sh &
-		vpn_pid=$!
-		# wait for the openvpn process to exit
-		wait "$vpn_pid" || true
-		# exponential/backoff restart delay to avoid rapid restarts
+
+		# start dnsmasq and privoxy (pids set by functions)
+		start_dnsmasq
+		start_privoxy
+
+		# start openvpn wrapper
+		start_openvpn
+
+		echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
+
+		# monitor loop: check processes, privoxy port and DNS resolution
+		check_interval=10
+		fail=0
+		while true; do
+			sleep "$check_interval"
+
+			# check openvpn
+			if ! kill -0 "$vpn_pid" >/dev/null 2>&1; then
+				echo "[supervisor] openvpn process died"
+				fail=1
+			fi
+
+			# check privoxy listen port
+			proxy_port=3128
+			if [ -f /etc/privoxy/privoxy.config ]; then
+				addr=$(awk '/^[[:space:]]*listen-address/ {print $2; exit}' /etc/privoxy/privoxy.config || true)
+				if [ -n "$addr" ]; then
+					proxy_port=$(echo "$addr" | awk -F: '{print $NF}')
+				fi
+			fi
+			if ! nc -z -w 3 127.0.0.1 "$proxy_port" >/dev/null 2>&1; then
+				echo "[supervisor] privoxy not listening on 127.0.0.1:$proxy_port"
+				fail=1
+			fi
+
+			# check dnsmasq process
+			if ! kill -0 "${dnsmasq_pid:-0}" >/dev/null 2>&1; then
+				echo "[supervisor] dnsmasq process died"
+				fail=1
+			fi
+
+			# check DNS resolution via local resolver
+			if ! nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+				echo "[supervisor] DNS resolution via 127.0.0.1 failed"
+				fail=1
+			fi
+
+			if [ "$fail" -eq 1 ]; then
+				break
+			fi
+		done
+
+		# kill started processes
+		echo "[supervisor] failure detected - killing services to restart"
+		kill "${vpn_pid}" 2>/dev/null || true
+		kill "${privoxy_pid}" 2>/dev/null || true
+		kill "${dnsmasq_pid}" 2>/dev/null || true
+		wait 2>/dev/null || true
+
+		# exponential backoff before restart
 		sleep_s=$((5 * attempt))
 		if [ "$sleep_s" -gt 60 ]; then
 			sleep_s=60
 		fi
-		echo "[openvpn] process exited — restarting in ${sleep_s}s (attempt ${attempt})"
+		echo "[supervisor] restarting all services in ${sleep_s}s (attempt ${attempt})"
 		sleep "$sleep_s"
 	done
 }
 
 trap 'kill 0 || true; exit 0' INT TERM
 
-# Start services
-start_dnsmasq
-start_privoxy
-
 # Run supervisor in foreground so signals are handled directly
-supervise_openvpn
+supervise_all
