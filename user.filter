@@ -4,3 +4,15 @@ s/^(Via:.*)$/Via: removed/Ig
 s/^(Forwarded:.*)$/Forwarded: removed/Ig
 s/^(Proxy-Connection:.*)$/Proxy-Connection: removed/Ig
 s/^(Client-IP:.*)$/Client-IP: removed/Ig
+
+# Additional header removals to improve privacy
+s/^(Referer:.*)$/Referer: removed/Ig
+s/^(Referrer-Policy:.*)$/Referrer-Policy: removed/Ig
+
+FILTER strip_utm
+# Remove common UTM/tracking query parameters in URLs and Location headers
+s/([?&])utm_[^=]+=[^&]*//ig
+# Clean trailing ? or & left after removals
+s/[?&]$//g
+# Try to remove utm params in Location response header lines
+s/^(Location: [^\n\r?]*)([?&]utm_[^\n\r]*)/\1/Ig

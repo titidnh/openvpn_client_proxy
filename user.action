@@ -1,2 +1,2 @@
-{ +filter{remove_proxy_headers} }
+{ +filter{remove_proxy_headers} +filter{strip_utm} }
 /
