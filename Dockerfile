@@ -16,11 +16,17 @@ RUN apk add --no-cache \
     curl \
     netcat-openbsd \
     bind-tools \
+    unbound \
   && chmod 0755 /usr/local/bin/openvpn.sh /start.sh \
   && chown root:root /usr/local/bin/openvpn.sh /start.sh
 
   COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
   RUN chmod 0755 /usr/local/bin/healthcheck.sh || true
+  COPY --chown=root:root unbound.conf /etc/unbound/unbound.conf
+  RUN mkdir -p /var/lib/unbound || true
+  # create unbound user/group and set ownership for unbound data dir
+  RUN addgroup -S unbound && adduser -S -G unbound -h /var/lib/unbound -H unbound || true \
+  && chown -R unbound:unbound /var/lib/unbound || true
 
 VOLUME ["/vpn"]
 

@@ -80,3 +80,21 @@ services:
     ports:
       - "3128:3128"
 ```
+
+## What's new (privacy & reliability)
+
+- Healthcheck: `/usr/local/bin/healthcheck.sh` verifies OpenVPN reachability and outbound proxying via Privoxy; used by the Docker `HEALTHCHECK`.
+- Supervisor: `start.sh` now launches and supervises `unbound`, `dnsmasq`, `privoxy` and `openvpn` via `supervise_all` (automatic restart with backoff).
+- Privoxy filters: improved `user.filter`/`user.action` to remove tracking headers, strip UTM params and apply best-effort JS/CSS tracker neutralisation.
+- DNS: added `unbound` as a local resolver (DoT to `family.adguard-dns.com`) with `dnsmasq` forwarding to `127.0.0.1#5353` to prevent DNS leaks.
+- Firewall: iptables configured at container start to restrict DoT (TCP/853) to the `unbound` user and to force all other processes to use the local resolver.
+- Dockerfile: installs `curl`, `netcat-openbsd`, `bind-tools`, `unbound`, and copies the healthcheck and `unbound.conf` into the image.
+
+Rebuild and test locally:
+
+```bash
+docker build -t openvpn-client-proxy:local .
+docker run --rm -v $(pwd)/vpn:/vpn --cap-add=NET_ADMIN --device /dev/net/tun openvpn-client-proxy:local
+```
+
+Note: the container requires `--cap-add=NET_ADMIN` to manage network interfaces and iptables.
