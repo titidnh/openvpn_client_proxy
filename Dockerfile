@@ -47,7 +47,6 @@ RUN apt-get update \
     tini \
     netcat-openbsd \
     dnsutils \
-    openrc \
   && chmod 0755 /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \
   && chown root:root /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \
   && apt-get clean \
