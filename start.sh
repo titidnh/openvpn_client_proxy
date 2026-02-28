@@ -13,7 +13,8 @@ setup_iptables() {
 	iptables -P OUTPUT DROP
 	iptables -P FORWARD DROP
 	iptables -P INPUT ACCEPT
-
+	iptables -A INPUT -i tailscale+ -j ACCEPT || true
+	
 	# Allow loopback
 	iptables -A OUTPUT -o lo -j ACCEPT
 
@@ -23,9 +24,6 @@ setup_iptables() {
 	# Allow traffic via tun (when tunnel is up) and tailscale interfaces
 	iptables -A OUTPUT -o tun+ -j ACCEPT
 	iptables -A OUTPUT -o tailscale+ -j ACCEPT
-	# Allow all traffic coming from / to tailscale interfaces
-	iptables -A INPUT -i tailscale+ -j ACCEPT || true
-	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
 	# Allow forwarding from tailscale into tun (and related return traffic)
 	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
 	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
@@ -61,17 +59,14 @@ setup_iptables() {
 	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
 	if [ -f "$conf" ]; then
 		remote_line=$(awk '/^remote /{print; exit}' "$conf" || true)
-		host=""
 		port=""
 		proto=$(awk '/^proto /{print $2; exit}' "$conf" || true)
 		if [ -n "$remote_line" ]; then
 			set -- $remote_line
 			hostpart="$2"
 			if echo "$hostpart" | grep -q ':'; then
-				host=$(echo "$hostpart" | cut -d: -f1)
 				port=$(echo "$hostpart" | cut -d: -f2)
 			else
-				host="$hostpart"
 				if [ "$#" -ge 3 ]; then port="$3"; fi
 			fi
 		fi
@@ -97,8 +92,6 @@ setup_iptables() {
 	# Ensure OUTPUT and FORWARD jump to LOGDROP at the end (idempotent)
 	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
 	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
-
-	# (iptables periodic dump removed)
 }
 
 # Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
@@ -138,8 +131,8 @@ start_dnsmasq() {
 			return 0
 		fi
 
-		# Start dnsmasq in foreground writing logs to stdout so docker logs show them
-		dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=- >/dev/null 2>&1 &
+		# Start dnsmasq in foreground; --log-facility=- sends logs to stdout (visible in docker logs)
+		dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=- &
 		dnsmasq_pid=$!
 
 		# Wait briefly for dnsmasq to bind to 127.0.0.1:53
@@ -221,15 +214,12 @@ EOF
 			sysctl -p "$sysctl_conf" || true
 		fi
 
-		# Run tailscale up in background to avoid blocking supervisor; capture exit-node advertising if requested
+		# Run tailscale up in background; logs available in /var/log/tailscale-up.log
 		(tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
-		up_cmd_pid=$!
 		# If advertise-exit-node is requested, ensure it's set (tailscale set is idempotent)
 		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
-			# run in background so it doesn't block startup
 			(tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
 		fi
-		# Note: we don't wait for `tailscale up` here; status/logs are available in /var/log/tailscale-up.log
 	else
 		echo "[tailscale] no authkey provided; skipping 'tailscale up'"
 	fi
@@ -293,8 +283,8 @@ supervise_all() {
 		echo "[supervisor] failure detected - killing services to restart"
 		kill "${vpn_pid}" 2>/dev/null || true
 		kill "${privoxy_pid}" 2>/dev/null || true
-		kill "${dnsmasq_pid}" 2>/dev/null || true
-			kill "${tailscaled_pid:-0}" 2>/dev/null || true
+		kill "${dnsmasq_pid:-0}" 2>/dev/null || true
+		kill "${tailscaled_pid:-0}" 2>/dev/null || true
 		wait 2>/dev/null || true
 
 		# exponential backoff before restart
