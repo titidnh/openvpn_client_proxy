@@ -69,6 +69,33 @@ setup_iptables() {
 	else
 		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
 	fi
+
+	# Create a LOGDROP chain to log then drop unmatched packets (rate-limited).
+	# This helps debugging dropped traffic; logs appear in kernel log and we also
+	# periodically dump iptables counters to stdout for visibility in `docker logs`.
+	if ! iptables -L LOGDROP >/dev/null 2>&1; then
+		iptables -N LOGDROP >/dev/null 2>&1 || true
+	fi
+	iptables -C LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || \
+		iptables -A LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || true
+	iptables -C LOGDROP -j DROP >/dev/null 2>&1 || iptables -A LOGDROP -j DROP >/dev/null 2>&1 || true
+
+	# Ensure OUTPUT and FORWARD jump to LOGDROP at the end (idempotent)
+	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
+	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
+
+	# Setup a background logger that periodically dumps iptables counters to stdout
+	if [ ! -f /var/run/iptables-logger.pid ] || ! kill -0 "$(cat /var/run/iptables-logger.pid)" 2>/dev/null; then
+		(
+			while true; do
+				echo "[iptables dump] $(date -Is)";
+				iptables -L -v -n --line-numbers || true;
+				ip6tables -L -v -n --line-numbers || true;
+				sleep 30;
+			done
+		) &
+		echo $! > /var/run/iptables-logger.pid || true
+	fi
 }
 
 # Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
@@ -121,7 +148,9 @@ setup_tailscale() {
 			DL="wget -qO-"
 			INSTALLED_CURL=0
 		else
-			apk add --no-cache curl >/dev/null 2>&1 || true
+			# Container uses Debian; install curl temporarily via apt
+			apt-get update >/dev/null 2>&1 || true
+			apt-get install -y --no-install-recommends curl >/dev/null 2>&1 || true
 			DL="curl -fsSL"
 			INSTALLED_CURL=1
 		fi
@@ -137,10 +166,45 @@ setup_tailscale() {
 			fi
 		fi
 
-		# cleanup apk cache and temporary tailscale files
-		rm -rf /var/cache/apk/* /tmp/tailscale* /var/tmp/tailscale* || true
+		# cleanup temporary tailscale files and uninstall transient curl if we installed it
+		rm -rf /tmp/tailscale* /var/tmp/tailscale* || true
 		if [ "${INSTALLED_CURL:-0}" -eq 1 ]; then
-			apk del curl || true
+			apt-get remove -y curl >/dev/null 2>&1 || true
+			apt-get autoremove -y >/dev/null 2>&1 || true
+			apt-get clean >/dev/null 2>&1 || true
+			rm -rf /var/lib/apt/lists/* || true
+		fi
+
+		# Persist Tailscale state under /vpn so container recreations keep auth/state
+		# Use /vpn/tailscale for /var/lib/tailscale and /vpn/tailscale-etc for /etc/tailscale
+		if [ -d /vpn ]; then
+			PERSIST_VAR=/vpn/tailscale
+			PERSIST_ETC=/vpn/tailscale-etc
+			mkdir -p "$PERSIST_VAR" "$PERSIST_ETC" || true
+
+			# If there is existing state in image, move it to the persistent dir (one-time)
+			if [ -d /var/lib/tailscale ] && [ -z "$(ls -A "$PERSIST_VAR" 2>/dev/null || true)" ]; then
+				mv /var/lib/tailscale/* "$PERSIST_VAR/" 2>/dev/null || true
+				rm -rf /var/lib/tailscale || true
+			fi
+			if [ -d /etc/tailscale ] && [ -z "$(ls -A "$PERSIST_ETC" 2>/dev/null || true)" ]; then
+				mv /etc/tailscale/* "$PERSIST_ETC/" 2>/dev/null || true
+				rm -rf /etc/tailscale || true
+			fi
+
+			# Ensure symlinks from expected locations to persisted dirs
+			if [ ! -L /var/lib/tailscale ]; then
+				rm -rf /var/lib/tailscale || true
+				ln -s "$PERSIST_VAR" /var/lib/tailscale || true
+			fi
+			if [ ! -L /etc/tailscale ]; then
+				rm -rf /etc/tailscale || true
+				ln -s "$PERSIST_ETC" /etc/tailscale || true
+			fi
+
+			# Fix permissions
+			chown -R root:root "$PERSIST_VAR" "$PERSIST_ETC" >/dev/null 2>&1 || true
+			echo "[start] persisted tailscale state under /vpn (will survive container recreation)"
 		fi
 	fi
 
