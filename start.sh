@@ -223,6 +223,27 @@ EOF
 	# Advertise exit node if connected
 	if tailscale status >/dev/null 2>&1; then
 		tailscale set --advertise-exit-node || true
+
+		# Configure NAT and FORWARDing so Tailscale exit-node forwards traffic to the internet.
+		# Detect external interface (tries `ip route` then /proc/net/route) and add idempotent rules.
+		ext_if=""
+		if command -v ip >/dev/null 2>&1; then
+			ext_if=$(ip route 2>/dev/null | awk '/^default/ {print $5; exit}')
+		fi
+		if [ -z "$ext_if" ] && [ -f /proc/net/route ]; then
+			ext_if=$(awk '$2=="00000000" {print $1; exit}' /proc/net/route)
+		fi
+		if [ -n "$ext_if" ]; then
+			iptables -t nat -C POSTROUTING -o "$ext_if" -j MASQUERADE >/dev/null 2>&1 || \
+				iptables -t nat -A POSTROUTING -o "$ext_if" -j MASQUERADE >/dev/null 2>&1 || true
+			iptables -C FORWARD -i tailscale+ -o "$ext_if" -j ACCEPT >/dev/null 2>&1 || \
+				iptables -A FORWARD -i tailscale+ -o "$ext_if" -j ACCEPT >/dev/null 2>&1 || true
+			iptables -C FORWARD -i "$ext_if" -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
+				iptables -A FORWARD -i "$ext_if" -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
+			echo "[start] configured NAT/forwarding via $ext_if for Tailscale exit-node"
+		else
+			echo "[start] warning: could not detect external interface for NAT; exit-node may not provide internet" 
+		fi
 	else
 		echo "[start] tailscale not connected after attempts"
 	fi
