@@ -1,4 +1,9 @@
+# Use Debian slim base. Make APT non-interactive and ensure basic APT tools are present.
 FROM debian:trixie-slim
+
+# Prevent interactive prompts during package installs
+ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=${DEBIAN_FRONTEND}
 
 # By default Tailscale is disabled at runtime. These env vars control runtime behaviour.
 # - `ENABLE_TAILSCALE`: set to "true" to enable installing/configuring Tailscale at container start
@@ -22,6 +27,16 @@ COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
 COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY --chown=root:root start.sh /start.sh
 
+# Prepare APT and install minimal tooling first to avoid interactive prompts and missing package errors
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    apt-utils \
+    ca-certificates \
+    gnupg \
+    dirmngr \
+    apt-transport-https \
+  && rm -rf /var/lib/apt/lists/*
+
 # Install runtime packages, including openrc so `rc-update` is available for installers that expect it.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -30,7 +45,6 @@ RUN apt-get update \
     dnsmasq \
     iptables \
     tini \
-    ca-certificates \
     netcat-openbsd \
     dnsutils \
     openrc \
