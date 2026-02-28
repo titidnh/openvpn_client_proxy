@@ -218,6 +218,17 @@ start_tailscale() {
 			up_flags="$up_flags --advertise-exit-node"
 		fi
 		echo "[tailscale] running 'tailscale up'"
+		# If advertise-exit-node is requested, enable kernel IP forwarding first
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			sysctl_conf=/etc/sysctl.d/99-tailscale.conf
+			mkdir -p /etc/sysctl.d || true
+			# Add settings idempotently
+			grep -q '^net.ipv4.ip_forward' "$sysctl_conf" 2>/dev/null || echo 'net.ipv4.ip_forward = 1' >> "$sysctl_conf"
+			grep -q '^net.ipv6.conf.all.forwarding' "$sysctl_conf" 2>/dev/null || echo 'net.ipv6.conf.all.forwarding = 1' >> "$sysctl_conf"
+			# Load the new sysctl settings
+			sysctl -p "$sysctl_conf" || true
+		fi
+
 		# Run tailscale up in background to avoid blocking supervisor; capture exit-node advertising if requested
 		(tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
 		up_cmd_pid=$!
