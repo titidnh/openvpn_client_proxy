@@ -91,6 +91,10 @@ services:
     container_name: vpn_proxy
     restart: always
     mem_limit: 128M
+    # If tailscale activated
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
     cap_add:
       - NET_ADMIN
     devices:
