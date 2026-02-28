@@ -10,12 +10,11 @@ ENV DEBIAN_FRONTEND=${DEBIAN_FRONTEND}
 # TAILSCALE_ACCEPT_ROUTES → pass --accept-routes to `tailscale up`
 # TAILSCALE_ADVERTISE_EXIT_NODE → advertise this node as a Tailscale exit node
 ENV ENABLE_TAILSCALE=false \
-    TAILSCALE_AUTHKEY="" \
-    TAILSCALE_FLAGS="" \
-    TAILSCALE_ACCEPT_ROUTES=false \
-    TAILSCALE_HOSTNAME="openvpn-client-proxy" \
-    TAILSCALE_STATE_DIR="/var/lib/tailscale" \
-    TAILSCALE_ADVERTISE_EXIT_NODE=false
+  TAILSCALE_AUTHKEY="" \
+  TAILSCALE_FLAGS="" \
+  TAILSCALE_ACCEPT_ROUTES=false \
+  TAILSCALE_HOSTNAME="openvpn-client-proxy" \
+  TAILSCALE_ADVERTISE_EXIT_NODE=false
 
 RUN groupadd -r vpn && useradd -r -g vpn -M -s /usr/sbin/nologin vpn
 

@@ -3,7 +3,6 @@
 set -eu
 
 conf="/vpn/vpn.conf"
-TAILSCALE_STATE_DIR="${TAILSCALE_STATE_DIR:-/var/lib/tailscale}"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
@@ -172,11 +171,11 @@ start_tailscale() {
 		return 0
 	fi
 
-	# Ensure state and run directories exist (persist state at TAILSCALE_STATE_DIR)
-	mkdir -p "$TAILSCALE_STATE_DIR" "$TAILSCALE_RUN_DIR" || true
+	# Ensure state and run directories exist (state is hardcoded to /var/lib/tailscale)
+	mkdir -p /var/lib/tailscale "$TAILSCALE_RUN_DIR" || true
 
-	echo "[tailscale] starting tailscaled (state=$TAILSCALE_STATE_DIR run=$TAILSCALE_RUN_DIR)"
-	tailscaled --state="$TAILSCALE_STATE_DIR/tailscaled.state" --socket="$TAILSCALE_RUN_DIR/tailscaled.sock" >/var/log/tailscaled.log 2>&1 &
+	echo "[tailscale] starting tailscaled (state=/var/lib/tailscale run=$TAILSCALE_RUN_DIR)"
+	tailscaled --state="/var/lib/tailscale/tailscaled.state" --socket="$TAILSCALE_RUN_DIR/tailscaled.sock" >/var/log/tailscaled.log 2>&1 &
 	export TAILSCALE_SOCKET="$TAILSCALE_RUN_DIR/tailscaled.sock"
 	tailscaled_pid=$!
 
