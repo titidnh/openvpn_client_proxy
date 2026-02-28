@@ -3,6 +3,9 @@
 set -eu
 
 conf="/vpn/vpn.conf"
+TAILSCALE_STATE_DIR="${TAILSCALE_STATE_DIR:-/var/lib/tailscale}"
+TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
+TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
 setup_iptables() {
 	# Flush previous rules and set restrictive defaults
@@ -17,30 +20,45 @@ setup_iptables() {
 	# Allow established/related
 	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-	# Allow traffic via tun (when tunnel is up)
+	# Allow traffic via tun (when tunnel is up) and tailscale interfaces
 	iptables -A OUTPUT -o tun+ -j ACCEPT
 	iptables -A OUTPUT -o tailscale+ -j ACCEPT
+	# Allow all traffic coming from / to tailscale interfaces
+	iptables -A INPUT -i tailscale+ -j ACCEPT || true
+	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	# Allow forwarding from tailscale into tun (and related return traffic)
+	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
+	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
-	# Allow DNS to local resolver (dnsmasq)
+	# Local DNS resolver (dnsmasq) on 127.0.0.1
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 
-	# Allow DNS upstreams configured in dnsmasq.conf but restrict to the
-	# dnsmasq process only (owner match). This forces other processes to use
-	# the local resolver at 127.0.0.1.
+	# Allow DNS upstreams listed in /etc/dnsmasq.conf (no owner-match):
+	# dnsmasq may run as root inside containers so owner-match can be unreliable.
 	if [ -f /etc/dnsmasq.conf ]; then
 		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
 			case "$dns" in
 				*[.:]* )
-					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
-					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					# allow upstream UDP/TCP 53 to the configured server IP/host
+					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT || true
+					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT || true
 					;;
 			esac
 		done
+	else
+		# Fallback: allow common public DNS servers so bootstrapping can resolve
+		iptables -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT || true
+		iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT || true
 	fi
 
+	# Allow outbound HTTPS (required by tailscaled to reach controlplane/DERP)
+	# Note: this opens port 443 for all processes in the container. To be
+	# stricter, run tailscaled under a dedicated UID and replace this rule
+	# with an owner-match rule for that UID.
+	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT || true
+
 	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
-	# Support both formats: "remote host port" and "remote host:port".
 	if [ -f "$conf" ]; then
 		remote_line=$(awk '/^remote /{print; exit}' "$conf" || true)
 		host=""
@@ -63,16 +81,12 @@ setup_iptables() {
 		if [ -z "$proto" ]; then
 			proto=udp
 		fi
-		# Allow handshake to the parsed port (any destination). For tighter
-		# security we could resolve $host and restrict to that IP.
 		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
 	else
 		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
 	fi
 
 	# Create a LOGDROP chain to log then drop unmatched packets (rate-limited).
-	# This helps debugging dropped traffic; logs appear in kernel log and we also
-	# periodically dump iptables counters to stdout for visibility in `docker logs`.
 	if ! iptables -L LOGDROP >/dev/null 2>&1; then
 		iptables -N LOGDROP >/dev/null 2>&1 || true
 	fi
@@ -84,18 +98,7 @@ setup_iptables() {
 	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
 	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
 
-	# Setup a background logger that periodically dumps iptables counters to stdout
-	if [ ! -f /var/run/iptables-logger.pid ] || ! kill -0 "$(cat /var/run/iptables-logger.pid)" 2>/dev/null; then
-		(
-			while true; do
-				echo "[iptables dump] $(date -Is)";
-				iptables -L -v -n --line-numbers || true;
-				ip6tables -L -v -n --line-numbers || true;
-				sleep 30;
-			done
-		) &
-		echo $! > /var/run/iptables-logger.pid || true
-	fi
+	# (iptables periodic dump removed)
 }
 
 # Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
@@ -123,218 +126,36 @@ setup_ip6tables() {
 	# Do not allow any other IPv6 outbound traffic
 }
 
-setup_tailscale() {
-	if [ "${ENABLE_TAILSCALE:-false}" != "true" ] && [ "${ENABLE_TAILSCALE}" != "1" ]; then
-		return
-	fi
-
-	echo "[start] ENABLE_TAILSCALE=true — configuring Tailscale"
-
-	# Temporarily disable exit-on-error inside this function because
-	# installer scripts and optional system utilities (rc-update, apk, etc.)
-	# may return non-zero even when the end state is acceptable. We re-enable
-	# strict mode at the end of the function.
-	set +e
-
-	# --- Ensure tailscale binary is present (install at runtime if necessary) ---
-	if ! command -v tailscale >/dev/null 2>&1; then
-		echo "[start] tailscale binary not found — attempting runtime install"
-
-		# choose downloader or install curl temporarily
-		if command -v curl >/dev/null 2>&1; then
-			DL="curl -fsSL"
-			INSTALLED_CURL=0
-		elif command -v wget >/dev/null 2>&1; then
-			DL="wget -qO-"
-			INSTALLED_CURL=0
-		else
-			# Container uses Debian; install curl temporarily via apt
-			apt-get update >/dev/null 2>&1 || true
-			apt-get install -y --no-install-recommends curl >/dev/null 2>&1 || true
-			DL="curl -fsSL"
-			INSTALLED_CURL=1
-		fi
-
-		# run official installer; tolerate failures that still result in a usable binary
-		if $DL https://tailscale.com/install.sh | sh; then
-			echo "[start] tailscale installer completed"
-		else
-			if command -v tailscale >/dev/null 2>&1; then
-				echo "[start] tailscale installer reported errors but tailscale is present — continuing"
-			else
-				echo "[start] warning: tailscale installer failed"
-			fi
-		fi
-
-		# cleanup temporary tailscale files and uninstall transient curl if we installed it
-		rm -rf /tmp/tailscale* /var/tmp/tailscale* || true
-		if [ "${INSTALLED_CURL:-0}" -eq 1 ]; then
-			apt-get remove -y curl >/dev/null 2>&1 || true
-			apt-get autoremove -y >/dev/null 2>&1 || true
-			apt-get clean >/dev/null 2>&1 || true
-			rm -rf /var/lib/apt/lists/* || true
-		fi
-
-		# Persist Tailscale state under /vpn so container recreations keep auth/state
-		# Use /vpn/tailscale for /var/lib/tailscale and /vpn/tailscale-etc for /etc/tailscale
-		if [ -d /vpn ]; then
-			# check writability of /vpn (some mounts may be read-only)
-			if [ -w /vpn ] || touch /vpn/.write_test >/dev/null 2>&1; then
-				PERSIST_VAR=/vpn/tailscale
-				PERSIST_ETC=/vpn/tailscale-etc
-				if mkdir -p "$PERSIST_VAR" "$PERSIST_ETC" 2>/dev/null; then
-					PERSIST_OK=1
-				else
-					PERSIST_OK=0
-				fi
-				# If mkdir failed, mark not writable
-				if [ "${PERSIST_OK:-0}" -ne 1 ]; then
-					echo "[start] warning: /vpn exists but is not writable; skipping tailscale persistence"
-				else
-					# If there is existing state in image, move it to the persistent dir (one-time)
-					if [ -d /var/lib/tailscale ] && [ -z "$(ls -A "$PERSIST_VAR" 2>/dev/null || true)" ]; then
-						mv /var/lib/tailscale/* "$PERSIST_VAR/" 2>/dev/null || true
-						rm -rf /var/lib/tailscale || true
-					fi
-					if [ -d /etc/tailscale ] && [ -z "$(ls -A "$PERSIST_ETC" 2>/dev/null || true)" ]; then
-						mv /etc/tailscale/* "$PERSIST_ETC/" 2>/dev/null || true
-						rm -rf /etc/tailscale || true
-					fi
-
-					# Ensure symlinks from expected locations to persisted dirs
-					if [ ! -L /var/lib/tailscale ]; then
-						rm -rf /var/lib/tailscale || true
-						ln -s "$PERSIST_VAR" /var/lib/tailscale || true
-					fi
-					if [ ! -L /etc/tailscale ]; then
-						rm -rf /etc/tailscale || true
-						ln -s "$PERSIST_ETC" /etc/tailscale || true
-					fi
-
-					# Fix permissions
-					chown -R root:root "$PERSIST_VAR" "$PERSIST_ETC" >/dev/null 2>&1 || true
-					echo "[start] persisted tailscale state under /vpn (will survive container recreation)"
-				fi
-			else
-				echo "[start] /vpn is not writable; skipping tailscale persistence"
-			fi
-		fi
-	fi
-
-	# --- Ensure kernel IP forwarding is enabled (idempotent) ---
-	if [ -d /etc/sysctl.d ]; then
-		# write idempotently: only replace the file if contents differ
-		tmpf=$(mktemp /tmp/99-tailscale.XXXXXX) || tmpf="/tmp/99-tailscale.$$"
-		cat > "$tmpf" <<'EOF'
-net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
-EOF
-		if [ -f /etc/sysctl.d/99-tailscale.conf ] && cmp -s "$tmpf" /etc/sysctl.d/99-tailscale.conf; then
-			rm -f "$tmpf"
-		else
-			mv "$tmpf" /etc/sysctl.d/99-tailscale.conf
-		fi
-		sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null 2>&1 || true
-	else
-		# Update /etc/sysctl.conf idempotently: modify existing or append, then replace only if changed
-		tmpf=$(mktemp /tmp/sysctl.XXXXXX) || tmpf="/tmp/sysctl.$$"
-		if [ -f /etc/sysctl.conf ]; then
-			cp /etc/sysctl.conf "$tmpf"
-		else
-			: > "$tmpf"
-		fi
-
-		if grep -q '^net.ipv4.ip_forward' "$tmpf" 2>/dev/null; then
-			sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward = 1/' "$tmpf" || true
-		else
-			echo 'net.ipv4.ip_forward = 1' >> "$tmpf"
-		fi
-
-		if grep -q '^net.ipv6.conf.all.forwarding' "$tmpf" 2>/dev/null; then
-			sed -i 's/^net.ipv6.conf.all.forwarding.*/net.ipv6.conf.all.forwarding = 1/' "$tmpf" || true
-		else
-			echo 'net.ipv6.conf.all.forwarding = 1' >> "$tmpf"
-		fi
-
-		if [ -f /etc/sysctl.conf ] && cmp -s "$tmpf" /etc/sysctl.conf; then
-			rm -f "$tmpf"
-		else
-			mv "$tmpf" /etc/sysctl.conf
-		fi
-		sysctl -p /etc/sysctl.conf >/dev/null 2>&1 || true
-	fi
-
-	if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
-		if command -v tailscaled >/dev/null 2>&1; then
-			echo "[start] starting tailscaled"
-			tailscaled >/dev/null 2>&1 &
-			sleep 1
-		fi
-
-		# Build flags for `tailscale up`
-		TS_FLAGS="${TAILSCALE_FLAGS:-}"
-		if [ "${TAILSCALE_ACCEPT_ROUTES:-false}" = "true" ] || [ "${TAILSCALE_ACCEPT_ROUTES}" = "1" ]; then
-			TS_FLAGS="$TS_FLAGS --accept-routes"
-		fi
-		# Optional: set machine hostname for Tailscale
-		if [ -n "${TAILSCALE_HOSTNAME:-}" ]; then
-			TS_FLAGS="$TS_FLAGS --hostname ${TAILSCALE_HOSTNAME}"
-		fi
-
-		# Bring interface up (support non-interactive authkey)
-		if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
-			tailscale up --authkey "${TAILSCALE_AUTHKEY}" $TS_FLAGS || true
-		else
-			tailscale up $TS_FLAGS || true
-		fi
-	fi
-
-	# wait for tailscale to be ready (up to ~15s)
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-		if tailscale status >/dev/null 2>&1; then
-			break
-		fi
-		sleep 1
-	done
-
-	# Advertise exit node if connected
-	if tailscale status >/dev/null 2>&1; then
-		tailscale set --advertise-exit-node || true
-
-		# Configure NAT and FORWARDing so Tailscale exit-node forwards traffic to the internet.
-		# Detect external interface (tries `ip route` then /proc/net/route) and add idempotent rules.
-		ext_if=""
-		if command -v ip >/dev/null 2>&1; then
-			ext_if=$(ip route 2>/dev/null | awk '/^default/ {print $5; exit}')
-		fi
-		if [ -z "$ext_if" ] && [ -f /proc/net/route ]; then
-			ext_if=$(awk '$2=="00000000" {print $1; exit}' /proc/net/route)
-		fi
-		if [ -n "$ext_if" ]; then
-			iptables -t nat -C POSTROUTING -o "$ext_if" -j MASQUERADE >/dev/null 2>&1 || \
-				iptables -t nat -A POSTROUTING -o "$ext_if" -j MASQUERADE >/dev/null 2>&1 || true
-			iptables -C FORWARD -i tailscale+ -o "$ext_if" -j ACCEPT >/dev/null 2>&1 || \
-				iptables -A FORWARD -i tailscale+ -o "$ext_if" -j ACCEPT >/dev/null 2>&1 || true
-			iptables -C FORWARD -i "$ext_if" -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
-				iptables -A FORWARD -i "$ext_if" -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
-			echo "[start] configured NAT/forwarding via $ext_if for Tailscale exit-node"
-		else
-			echo "[start] warning: could not detect external interface for NAT; exit-node may not provide internet" 
-		fi
-	else
-		echo "[start] tailscale not connected after attempts"
-	fi
-
-	# Re-enable strict mode for the rest of the script
-	set -e
-}
-
 start_dnsmasq() {
 	if [ -f /etc/dnsmasq.conf ]; then
 		rm -f /etc/resolv.conf || true
 		echo "nameserver 127.0.0.1" > /etc/resolv.conf
-		dnsmasq --keep-in-foreground --conf-file=/etc/dnsmasq.conf &
+
+		# Test configuration before starting to capture errors early
+		if ! dnsmasq --test --conf-file=/etc/dnsmasq.conf >/tmp/dnsmasq.test 2>&1; then
+			echo "[start] dnsmasq config test failed:" 
+			sed -n '1,200p' /tmp/dnsmasq.test || true
+			return 0
+		fi
+
+		# Start dnsmasq in foreground writing logs to stdout so docker logs show them
+		dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=- >/dev/null 2>&1 &
 		dnsmasq_pid=$!
+
+		# Wait briefly for dnsmasq to bind to 127.0.0.1:53
+		bound=0
+		for i in 1 2 3 4 5; do
+			if nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1; then
+				bound=1
+				break
+			fi
+			sleep 1
+		done
+		if [ "$bound" -eq 1 ]; then
+			echo "[start] dnsmasq started (pid=$dnsmasq_pid) and is listening on 127.0.0.1:53"
+		else
+			echo "[start] dnsmasq did not bind to 127.0.0.1:53; check /tmp/dnsmasq.test and dnsmasq logs"
+		fi
 	fi
 }
 
@@ -348,16 +169,82 @@ start_openvpn() {
     vpn_pid=$!
 }
 
+start_tailscale() {
+	# Only start tailscaled if explicitly enabled and binary exists
+	if [ "${ENABLE_TAILSCALE:-false}" != "true" ]; then
+		return 0
+	fi
+	if ! command -v tailscaled >/dev/null 2>&1; then
+		echo "[tailscale] tailscaled not installed; skipping"
+		return 0
+	fi
+
+	# Ensure state and run directories exist (persist state at TAILSCALE_STATE_DIR)
+	mkdir -p "$TAILSCALE_STATE_DIR" "$TAILSCALE_RUN_DIR" || true
+
+	echo "[tailscale] starting tailscaled (state=$TAILSCALE_STATE_DIR run=$TAILSCALE_RUN_DIR)"
+	tailscaled --state="$TAILSCALE_STATE_DIR/tailscaled.state" --socket="$TAILSCALE_RUN_DIR/tailscaled.sock" >/var/log/tailscaled.log 2>&1 &
+	export TAILSCALE_SOCKET="$TAILSCALE_RUN_DIR/tailscaled.sock"
+	tailscaled_pid=$!
+
+	# Wait for tailscaled socket to appear or for `tailscale status` to respond
+	timeout=20
+	waited=0
+	until tailscale status >/dev/null 2>&1 || [ "$waited" -ge "$timeout" ]; do
+		sleep 1
+		waited=$((waited+1))
+	done
+
+	if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+		up_flags="${TAILSCALE_FLAGS:-}"
+		if [ "${TAILSCALE_ACCEPT_ROUTES:-false}" = "true" ]; then
+			up_flags="$up_flags --accept-routes"
+		fi
+		if [ -n "${TAILSCALE_HOSTNAME:-}" ]; then
+			up_flags="$up_flags --hostname=${TAILSCALE_HOSTNAME}"
+		fi
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			up_flags="$up_flags --advertise-exit-node"
+		fi
+		echo "[tailscale] running 'tailscale up'"
+		# If advertise-exit-node is requested, enable kernel IP forwarding first
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			sysctl_conf=/etc/sysctl.d/99-tailscale.conf
+			mkdir -p /etc/sysctl.d || true
+			# Overwrite the sysctl config to ensure forwarding is enabled
+			cat > "$sysctl_conf" <<'EOF'
+# Managed by openvpn_client_proxy start.sh for Tailscale exit-node
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+			# Load the new sysctl settings (may fail without appropriate privileges)
+			sysctl -p "$sysctl_conf" || true
+		fi
+
+		# Run tailscale up in background to avoid blocking supervisor; capture exit-node advertising if requested
+		(tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
+		up_cmd_pid=$!
+		# If advertise-exit-node is requested, ensure it's set (tailscale set is idempotent)
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			# run in background so it doesn't block startup
+			(tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
+		fi
+		# Note: we don't wait for `tailscale up` here; status/logs are available in /var/log/tailscale-up.log
+	else
+		echo "[tailscale] no authkey provided; skipping 'tailscale up'"
+	fi
+}
+
 supervise_all() {
 	attempt=0
 	while true; do
 		attempt=$((attempt+1))
-		setup_tailscale
+		start_dnsmasq
 		setup_iptables
 		setup_ip6tables
-		start_dnsmasq
 		start_privoxy
 		start_openvpn
+		start_tailscale
 
 		echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
 
@@ -407,6 +294,7 @@ supervise_all() {
 		kill "${vpn_pid}" 2>/dev/null || true
 		kill "${privoxy_pid}" 2>/dev/null || true
 		kill "${dnsmasq_pid}" 2>/dev/null || true
+			kill "${tailscaled_pid:-0}" 2>/dev/null || true
 		wait 2>/dev/null || true
 
 		# exponential backoff before restart
