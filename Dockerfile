@@ -67,7 +67,7 @@ VOLUME ["/vpn"]
 
 # Persist Tailscale state so recreating the container keeps identity
 # Users can bind-mount or use a named volume for `/var/lib/tailscale`.
-#VOLUME ["/var/lib/tailscale"]
+VOLUME ["/var/lib/tailscale"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
