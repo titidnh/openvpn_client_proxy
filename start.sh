@@ -211,10 +211,13 @@ start_tailscale() {
 		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
 			sysctl_conf=/etc/sysctl.d/99-tailscale.conf
 			mkdir -p /etc/sysctl.d || true
-			# Add settings idempotently
-			grep -q '^net.ipv4.ip_forward' "$sysctl_conf" 2>/dev/null || echo 'net.ipv4.ip_forward = 1' >> "$sysctl_conf"
-			grep -q '^net.ipv6.conf.all.forwarding' "$sysctl_conf" 2>/dev/null || echo 'net.ipv6.conf.all.forwarding = 1' >> "$sysctl_conf"
-			# Load the new sysctl settings
+			# Overwrite the sysctl config to ensure forwarding is enabled
+			cat > "$sysctl_conf" <<'EOF'
+# Managed by openvpn_client_proxy start.sh for Tailscale exit-node
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+			# Load the new sysctl settings (may fail without appropriate privileges)
 			sysctl -p "$sysctl_conf" || true
 		fi
 
