@@ -16,6 +16,7 @@ ENV TAILSCALE_FLAGS=""
 ENV TAILSCALE_ACCEPT_ROUTES=false
 ENV TAILSCALE_HOSTNAME="openvpn-client-proxy"
 ENV TAILSCALE_STATE_DIR="/var/lib/tailscale"
+ENV TAILSCALE_ADVERTISE_EXIT_NODE=false
 
 # Create vpn user (system user, no home)
 RUN groupadd -r vpn \

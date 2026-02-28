@@ -5,6 +5,7 @@ set -eu
 conf="/vpn/vpn.conf"
 TAILSCALE_STATE_DIR="${TAILSCALE_STATE_DIR:-/var/lib/tailscale}"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
+TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
 setup_iptables() {
 	# Flush previous rules and set restrictive defaults
@@ -213,9 +214,19 @@ start_tailscale() {
 		if [ -n "${TAILSCALE_HOSTNAME:-}" ]; then
 			up_flags="$up_flags --hostname=${TAILSCALE_HOSTNAME}"
 		fi
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			up_flags="$up_flags --advertise-exit-node"
+		fi
 		echo "[tailscale] running 'tailscale up'"
-		tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags || 
-			echo "[tailscale] tailscale up failed (non-fatal)"
+		# Run tailscale up in background to avoid blocking supervisor; capture exit-node advertising if requested
+		(tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
+		up_cmd_pid=$!
+		# If advertise-exit-node is requested, ensure it's set (tailscale set is idempotent)
+		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+			# run in background so it doesn't block startup
+			(tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
+		fi
+		# Note: we don't wait for `tailscale up` here; status/logs are available in /var/log/tailscale-up.log
 	else
 		echo "[tailscale] no authkey provided; skipping 'tailscale up'"
 	fi
