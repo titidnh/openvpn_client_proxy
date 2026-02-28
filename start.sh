@@ -178,33 +178,46 @@ setup_tailscale() {
 		# Persist Tailscale state under /vpn so container recreations keep auth/state
 		# Use /vpn/tailscale for /var/lib/tailscale and /vpn/tailscale-etc for /etc/tailscale
 		if [ -d /vpn ]; then
-			PERSIST_VAR=/vpn/tailscale
-			PERSIST_ETC=/vpn/tailscale-etc
-			mkdir -p "$PERSIST_VAR" "$PERSIST_ETC" || true
+			# check writability of /vpn (some mounts may be read-only)
+			if [ -w /vpn ] || touch /vpn/.write_test >/dev/null 2>&1; then
+				PERSIST_VAR=/vpn/tailscale
+				PERSIST_ETC=/vpn/tailscale-etc
+				if mkdir -p "$PERSIST_VAR" "$PERSIST_ETC" 2>/dev/null; then
+					PERSIST_OK=1
+				else
+					PERSIST_OK=0
+				fi
+				# If mkdir failed, mark not writable
+				if [ "${PERSIST_OK:-0}" -ne 1 ]; then
+					echo "[start] warning: /vpn exists but is not writable; skipping tailscale persistence"
+				else
+					# If there is existing state in image, move it to the persistent dir (one-time)
+					if [ -d /var/lib/tailscale ] && [ -z "$(ls -A "$PERSIST_VAR" 2>/dev/null || true)" ]; then
+						mv /var/lib/tailscale/* "$PERSIST_VAR/" 2>/dev/null || true
+						rm -rf /var/lib/tailscale || true
+					fi
+					if [ -d /etc/tailscale ] && [ -z "$(ls -A "$PERSIST_ETC" 2>/dev/null || true)" ]; then
+						mv /etc/tailscale/* "$PERSIST_ETC/" 2>/dev/null || true
+						rm -rf /etc/tailscale || true
+					fi
 
-			# If there is existing state in image, move it to the persistent dir (one-time)
-			if [ -d /var/lib/tailscale ] && [ -z "$(ls -A "$PERSIST_VAR" 2>/dev/null || true)" ]; then
-				mv /var/lib/tailscale/* "$PERSIST_VAR/" 2>/dev/null || true
-				rm -rf /var/lib/tailscale || true
-			fi
-			if [ -d /etc/tailscale ] && [ -z "$(ls -A "$PERSIST_ETC" 2>/dev/null || true)" ]; then
-				mv /etc/tailscale/* "$PERSIST_ETC/" 2>/dev/null || true
-				rm -rf /etc/tailscale || true
-			fi
+					# Ensure symlinks from expected locations to persisted dirs
+					if [ ! -L /var/lib/tailscale ]; then
+						rm -rf /var/lib/tailscale || true
+						ln -s "$PERSIST_VAR" /var/lib/tailscale || true
+					fi
+					if [ ! -L /etc/tailscale ]; then
+						rm -rf /etc/tailscale || true
+						ln -s "$PERSIST_ETC" /etc/tailscale || true
+					fi
 
-			# Ensure symlinks from expected locations to persisted dirs
-			if [ ! -L /var/lib/tailscale ]; then
-				rm -rf /var/lib/tailscale || true
-				ln -s "$PERSIST_VAR" /var/lib/tailscale || true
+					# Fix permissions
+					chown -R root:root "$PERSIST_VAR" "$PERSIST_ETC" >/dev/null 2>&1 || true
+					echo "[start] persisted tailscale state under /vpn (will survive container recreation)"
+				fi
+			else
+				echo "[start] /vpn is not writable; skipping tailscale persistence"
 			fi
-			if [ ! -L /etc/tailscale ]; then
-				rm -rf /etc/tailscale || true
-				ln -s "$PERSIST_ETC" /etc/tailscale || true
-			fi
-
-			# Fix permissions
-			chown -R root:root "$PERSIST_VAR" "$PERSIST_ETC" >/dev/null 2>&1 || true
-			echo "[start] persisted tailscale state under /vpn (will survive container recreation)"
 		fi
 	fi
 
