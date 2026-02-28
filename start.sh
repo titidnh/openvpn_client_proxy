@@ -377,8 +377,8 @@ supervise_all() {
 	while true; do
 		attempt=$((attempt+1))
 #		setup_tailscale
-#		setup_iptables
-#		setup_ip6tables
+		setup_iptables
+		setup_ip6tables
 		start_dnsmasq
 		start_privoxy
 		start_openvpn
