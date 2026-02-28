@@ -22,6 +22,12 @@ setup_iptables() {
 	# Allow traffic via tun (when tunnel is up) and tailscale interfaces
 	iptables -A OUTPUT -o tun+ -j ACCEPT
 	iptables -A OUTPUT -o tailscale+ -j ACCEPT
+	# Allow all traffic coming from / to tailscale interfaces
+	iptables -A INPUT -i tailscale+ -j ACCEPT || true
+	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	# Allow forwarding from tailscale into tun (and related return traffic)
+	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
+	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
 	# Local DNS resolver (dnsmasq) on 127.0.0.1
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
