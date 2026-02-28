@@ -98,18 +98,7 @@ setup_iptables() {
 	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
 	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
 
-	# Setup a background logger that periodically dumps iptables counters to stdout
-	if [ ! -f /var/run/iptables-logger.pid ] || ! kill -0 "$(cat /var/run/iptables-logger.pid)" 2>/dev/null; then
-		(
-			while true; do
-				echo "[iptables dump] $(date -Is)";
-				iptables -L -v -n --line-numbers || true;
-				ip6tables -L -v -n --line-numbers || true;
-				sleep 30;
-			done
-		) &
-		echo $! > /var/run/iptables-logger.pid || true
-	fi
+	# (iptables periodic dump removed)
 }
 
 # Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
