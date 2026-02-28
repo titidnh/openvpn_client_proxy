@@ -333,8 +333,32 @@ start_dnsmasq() {
 	if [ -f /etc/dnsmasq.conf ]; then
 		rm -f /etc/resolv.conf || true
 		echo "nameserver 127.0.0.1" > /etc/resolv.conf
-		dnsmasq --keep-in-foreground --conf-file=/etc/dnsmasq.conf &
+
+		# Test configuration before starting to capture errors early
+		if ! dnsmasq --test --conf-file=/etc/dnsmasq.conf >/tmp/dnsmasq.test 2>&1; then
+			echo "[start] dnsmasq config test failed:" 
+			sed -n '1,200p' /tmp/dnsmasq.test || true
+			return 0
+		fi
+
+		# Start dnsmasq in foreground writing logs to stdout so docker logs show them
+		dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf --log-facility=- >/dev/null 2>&1 &
 		dnsmasq_pid=$!
+
+		# Wait briefly for dnsmasq to bind to 127.0.0.1:53
+		bound=0
+		for i in 1 2 3 4 5; do
+			if nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1; then
+				bound=1
+				break
+			fi
+			sleep 1
+		done
+		if [ "$bound" -eq 1 ]; then
+			echo "[start] dnsmasq started (pid=$dnsmasq_pid) and is listening on 127.0.0.1:53"
+		else
+			echo "[start] dnsmasq did not bind to 127.0.0.1:53; check /tmp/dnsmasq.test and dnsmasq logs"
+		fi
 	fi
 }
 
