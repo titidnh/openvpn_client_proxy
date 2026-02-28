@@ -103,6 +103,12 @@ setup_tailscale() {
 
 	echo "[start] ENABLE_TAILSCALE=true — configuring Tailscale"
 
+	# Temporarily disable exit-on-error inside this function because
+	# installer scripts and optional system utilities (rc-update, apk, etc.)
+	# may return non-zero even when the end state is acceptable. We re-enable
+	# strict mode at the end of the function.
+	set +e
+
 	# --- Ensure tailscale binary is present (install at runtime if necessary) ---
 	if ! command -v tailscale >/dev/null 2>&1; then
 		echo "[start] tailscale binary not found — attempting runtime install"
@@ -120,9 +126,15 @@ setup_tailscale() {
 			INSTALLED_CURL=1
 		fi
 
-		# run official installer; tolerate failure but log it
-		if ! $DL https://tailscale.com/install.sh | sh; then
-			echo "[start] warning: tailscale installer failed"
+		# run official installer; tolerate failures that still result in a usable binary
+		if $DL https://tailscale.com/install.sh | sh; then
+			echo "[start] tailscale installer completed"
+		else
+			if command -v tailscale >/dev/null 2>&1; then
+				echo "[start] tailscale installer reported errors but tailscale is present — continuing"
+			else
+				echo "[start] warning: tailscale installer failed"
+			fi
 		fi
 
 		# cleanup apk cache and temporary tailscale files
@@ -187,6 +199,10 @@ EOF
 		if [ "${TAILSCALE_ACCEPT_ROUTES:-false}" = "true" ] || [ "${TAILSCALE_ACCEPT_ROUTES}" = "1" ]; then
 			TS_FLAGS="$TS_FLAGS --accept-routes"
 		fi
+		# Optional: set machine hostname for Tailscale
+		if [ -n "${TAILSCALE_HOSTNAME:-}" ]; then
+			TS_FLAGS="$TS_FLAGS --hostname ${TAILSCALE_HOSTNAME}"
+		fi
 
 		# Bring interface up (support non-interactive authkey)
 		if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
@@ -210,6 +226,9 @@ EOF
 	else
 		echo "[start] tailscale not connected after attempts"
 	fi
+
+	# Re-enable strict mode for the rest of the script
+	set -e
 }
 
 start_dnsmasq() {

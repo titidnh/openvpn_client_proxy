@@ -11,6 +11,7 @@ ENV ENABLE_TAILSCALE=false
 ENV TAILSCALE_AUTHKEY=""
 ENV TAILSCALE_FLAGS=""
 ENV TAILSCALE_ACCEPT_ROUTES=false
+ENV TAILSCALE_HOSTNAME="openvpn-client-proxy"
 
 # Create vpn user
 RUN addgroup -S vpn \

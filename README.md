@@ -87,6 +87,7 @@ Environment variables (runtime):
 - `TAILSCALE_AUTHKEY`: optional pre-shared auth key for non-interactive `tailscale up`.
 - `TAILSCALE_FLAGS`: extra flags appended to `tailscale up`.
 - `TAILSCALE_ACCEPT_ROUTES` (default: `false`): when `true`, `--accept-routes` is added to `tailscale up`.
+- `TAILSCALE_HOSTNAME`: optional hostname to register for this machine in Tailscale (passed to `tailscale up --hostname`).
 
 Example run enabling Tailscale with an auth key and accepting routes:
 
@@ -145,6 +146,8 @@ services:
       # TAILSCALE_AUTHKEY: "tskey-xxx"
       # Optional: accept routes advertised by other nodes
       # TAILSCALE_ACCEPT_ROUTES: "false"
+      # Optional: set the Tailscale machine hostname (no spaces)
+      # TAILSCALE_HOSTNAME: "my-vpn-node"
       # Additional flags to append to `tailscale up` (optional)
       # TAILSCALE_FLAGS: "--os=linux"
 
