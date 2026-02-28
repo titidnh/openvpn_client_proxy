@@ -20,6 +20,10 @@ ENV TAILSCALE_HOSTNAME="openvpn-client-proxy"
 RUN groupadd -r vpn \
   && useradd -r -g vpn -M -s /usr/sbin/nologin vpn || true
 
+COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
+COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY --chown=root:root start.sh /start.sh
+
 # Prepare APT and install minimal tooling first to avoid interactive prompts and missing package errors
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -33,6 +37,7 @@ RUN apt-get update \
 # Install runtime packages, including openrc so `rc-update` is available for installers that expect it.
 RUN apt-get update \
   && apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" --no-install-recommends \
+    openrc \
     openvpn \
     privoxy \
     dnsmasq \
@@ -48,9 +53,6 @@ RUN apt-get update \
 # Copy configuration and scripts (only required files are included via .dockerignore)
 COPY --chown=vpn:vpn privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
 COPY --chown=vpn:vpn dnsmasq.conf /etc/dnsmasq.conf
-COPY --chown=root:root openvpn.sh /usr/local/bin/openvpn.sh
-COPY --chown=root:root healthcheck.sh /usr/local/bin/healthcheck.sh
-COPY --chown=root:root start.sh /start.sh
 
 VOLUME ["/vpn"]
 
