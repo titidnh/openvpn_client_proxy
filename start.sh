@@ -19,30 +19,39 @@ setup_iptables() {
 	# Allow established/related
 	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-	# Allow traffic via tun (when tunnel is up)
+	# Allow traffic via tun (when tunnel is up) and tailscale interfaces
 	iptables -A OUTPUT -o tun+ -j ACCEPT
 	iptables -A OUTPUT -o tailscale+ -j ACCEPT
 
-	# Allow DNS to local resolver (dnsmasq)
+	# Local DNS resolver (dnsmasq) on 127.0.0.1
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
 
-	# Allow DNS upstreams configured in dnsmasq.conf but restrict to the
-	# dnsmasq process only (owner match). This forces other processes to use
-	# the local resolver at 127.0.0.1.
+	# Allow DNS upstreams listed in /etc/dnsmasq.conf (no owner-match):
+	# dnsmasq may run as root inside containers so owner-match can be unreliable.
 	if [ -f /etc/dnsmasq.conf ]; then
 		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
 			case "$dns" in
 				*[.:]* )
-					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
-					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -m owner --uid-owner dnsmasq -j ACCEPT || true
+					# allow upstream UDP/TCP 53 to the configured server IP/host
+					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT || true
+					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT || true
 					;;
 			esac
 		done
+	else
+		# Fallback: allow common public DNS servers so bootstrapping can resolve
+		iptables -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT || true
+		iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT || true
 	fi
 
+	# Allow outbound HTTPS (required by tailscaled to reach controlplane/DERP)
+	# Note: this opens port 443 for all processes in the container. To be
+	# stricter, run tailscaled under a dedicated UID and replace this rule
+	# with an owner-match rule for that UID.
+	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT || true
+
 	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
-	# Support both formats: "remote host port" and "remote host:port".
 	if [ -f "$conf" ]; then
 		remote_line=$(awk '/^remote /{print; exit}' "$conf" || true)
 		host=""
@@ -65,16 +74,12 @@ setup_iptables() {
 		if [ -z "$proto" ]; then
 			proto=udp
 		fi
-		# Allow handshake to the parsed port (any destination). For tighter
-		# security we could resolve $host and restrict to that IP.
 		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
 	else
 		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
 	fi
 
 	# Create a LOGDROP chain to log then drop unmatched packets (rate-limited).
-	# This helps debugging dropped traffic; logs appear in kernel log and we also
-	# periodically dump iptables counters to stdout for visibility in `docker logs`.
 	if ! iptables -L LOGDROP >/dev/null 2>&1; then
 		iptables -N LOGDROP >/dev/null 2>&1 || true
 	fi
@@ -217,9 +222,9 @@ supervise_all() {
 		start_dnsmasq
 		setup_iptables
 		setup_ip6tables
-		start_tailscale
 		start_privoxy
 		start_openvpn
+		start_tailscale
 
 		echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
 
