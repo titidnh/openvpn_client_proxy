@@ -15,6 +15,7 @@ ENV TAILSCALE_AUTHKEY=""
 ENV TAILSCALE_FLAGS=""
 ENV TAILSCALE_ACCEPT_ROUTES=false
 ENV TAILSCALE_HOSTNAME="openvpn-client-proxy"
+ENV TAILSCALE_STATE_DIR="/var/lib/tailscale"
 
 # Create vpn user (system user, no home)
 RUN groupadd -r vpn \
@@ -31,6 +32,7 @@ RUN apt-get update \
     ca-certificates \
     gnupg \
     dirmngr \
+    curl \
     apt-transport-https \
   && rm -rf /var/lib/apt/lists/*
 
@@ -50,11 +52,21 @@ RUN apt-get update \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
 
+# Install Tailscale via official install script
+# This fetches and runs https://tailscale.com/install.sh which sets up the
+# repository and installs the tailscale/tailscaled packages for this distro.
+RUN curl -fsSL https://tailscale.com/install.sh | sh \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy configuration and scripts (only required files are included via .dockerignore)
 COPY --chown=vpn:vpn privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
 COPY --chown=vpn:vpn dnsmasq.conf /etc/dnsmasq.conf
 
 VOLUME ["/vpn"]
+
+# Persist Tailscale state so recreating the container keeps identity
+# Users can bind-mount or use a named volume for `/var/lib/tailscale`.
+VOLUME ["/var/lib/tailscale"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
