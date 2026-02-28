@@ -214,10 +214,10 @@ supervise_all() {
 	attempt=0
 	while true; do
 		attempt=$((attempt+1))
+		start_dnsmasq
 		setup_iptables
 		setup_ip6tables
 		start_tailscale
-		start_dnsmasq
 		start_privoxy
 		start_openvpn
 
