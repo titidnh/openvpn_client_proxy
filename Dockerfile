@@ -1,5 +1,17 @@
 FROM alpine:3.18
 
+# By default enable Tailscale in the image (propagated from build arg). Can be overridden at runtime
+# Build-time: `--build-arg ENABLE_TAILSCALE=true|false` — controls whether tailscale is installed
+# Runtime: `-e ENABLE_TAILSCALE=true|false` — controls whether start.sh will attempt to configure/run tailscale
+# Tailscale runtime configuration (optional)
+# - `TAILSCALE_AUTHKEY`: set a pre-shared auth key for non-interactive `tailscale up`
+# - `TAILSCALE_FLAGS`: extra flags to append to `tailscale up`
+# - `TAILSCALE_ACCEPT_ROUTES`: set to "true" to pass `--accept-routes` to `tailscale up`
+ENV ENABLE_TAILSCALE=false
+ENV TAILSCALE_AUTHKEY=""
+ENV TAILSCALE_FLAGS=""
+ENV TAILSCALE_ACCEPT_ROUTES=false
+
 # Create vpn user
 RUN addgroup -S vpn \
   && adduser -S -G vpn vpn
@@ -20,7 +32,6 @@ RUN apk add --no-cache \
     tini \
     ca-certificates \
     netcat-openbsd \
-    curl \
     bind-tools \
   && chmod 0755 /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \
   && chown root:root /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh /start.sh \

@@ -19,6 +19,7 @@ setup_iptables() {
 
 	# Allow traffic via tun (when tunnel is up)
 	iptables -A OUTPUT -o tun+ -j ACCEPT
+	iptables -A OUTPUT -o tailscale+ -j ACCEPT
 
 	# Allow DNS to local resolver (dnsmasq)
 	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
@@ -86,12 +87,129 @@ setup_ip6tables() {
 
 	# Allow traffic via tun (when tunnel is up)
 	ip6tables -A OUTPUT -o tun+ -j ACCEPT || true
+	ip6tables -A OUTPUT -o tailscale+ -j ACCEPT || true
 
 	# Allow DNS to local resolver (if any) on ::1
 	ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT || true
 	ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT || true
 
 	# Do not allow any other IPv6 outbound traffic
+}
+
+setup_tailscale() {
+	if [ "${ENABLE_TAILSCALE:-false}" != "true" ] && [ "${ENABLE_TAILSCALE}" != "1" ]; then
+		return
+	fi
+
+	echo "[start] ENABLE_TAILSCALE=true — configuring Tailscale"
+
+	# --- Ensure tailscale binary is present (install at runtime if necessary) ---
+	if ! command -v tailscale >/dev/null 2>&1; then
+		echo "[start] tailscale binary not found — attempting runtime install"
+
+		# choose downloader or install curl temporarily
+		if command -v curl >/dev/null 2>&1; then
+			DL="curl -fsSL"
+			INSTALLED_CURL=0
+		elif command -v wget >/dev/null 2>&1; then
+			DL="wget -qO-"
+			INSTALLED_CURL=0
+		else
+			apk add --no-cache curl >/dev/null 2>&1 || true
+			DL="curl -fsSL"
+			INSTALLED_CURL=1
+		fi
+
+		# run official installer; tolerate failure but log it
+		if ! $DL https://tailscale.com/install.sh | sh; then
+			echo "[start] warning: tailscale installer failed"
+		fi
+
+		# cleanup apk cache and temporary tailscale files
+		rm -rf /var/cache/apk/* /tmp/tailscale* /var/tmp/tailscale* || true
+		if [ "${INSTALLED_CURL:-0}" -eq 1 ]; then
+			apk del curl || true
+		fi
+	fi
+
+	# --- Ensure kernel IP forwarding is enabled (idempotent) ---
+	if [ -d /etc/sysctl.d ]; then
+		# write idempotently: only replace the file if contents differ
+		tmpf=$(mktemp /tmp/99-tailscale.XXXXXX) || tmpf="/tmp/99-tailscale.$$"
+		cat > "$tmpf" <<'EOF'
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+		if [ -f /etc/sysctl.d/99-tailscale.conf ] && cmp -s "$tmpf" /etc/sysctl.d/99-tailscale.conf; then
+			rm -f "$tmpf"
+		else
+			mv "$tmpf" /etc/sysctl.d/99-tailscale.conf
+		fi
+		sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null 2>&1 || true
+	else
+		# Update /etc/sysctl.conf idempotently: modify existing or append, then replace only if changed
+		tmpf=$(mktemp /tmp/sysctl.XXXXXX) || tmpf="/tmp/sysctl.$$"
+		if [ -f /etc/sysctl.conf ]; then
+			cp /etc/sysctl.conf "$tmpf"
+		else
+			: > "$tmpf"
+		fi
+
+		if grep -q '^net.ipv4.ip_forward' "$tmpf" 2>/dev/null; then
+			sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward = 1/' "$tmpf" || true
+		else
+			echo 'net.ipv4.ip_forward = 1' >> "$tmpf"
+		fi
+
+		if grep -q '^net.ipv6.conf.all.forwarding' "$tmpf" 2>/dev/null; then
+			sed -i 's/^net.ipv6.conf.all.forwarding.*/net.ipv6.conf.all.forwarding = 1/' "$tmpf" || true
+		else
+			echo 'net.ipv6.conf.all.forwarding = 1' >> "$tmpf"
+		fi
+
+		if [ -f /etc/sysctl.conf ] && cmp -s "$tmpf" /etc/sysctl.conf; then
+			rm -f "$tmpf"
+		else
+			mv "$tmpf" /etc/sysctl.conf
+		fi
+		sysctl -p /etc/sysctl.conf >/dev/null 2>&1 || true
+	fi
+
+	if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
+		if command -v tailscaled >/dev/null 2>&1; then
+			echo "[start] starting tailscaled"
+			tailscaled >/dev/null 2>&1 &
+			sleep 1
+		fi
+
+		# Build flags for `tailscale up`
+		TS_FLAGS="${TAILSCALE_FLAGS:-}"
+		if [ "${TAILSCALE_ACCEPT_ROUTES:-false}" = "true" ] || [ "${TAILSCALE_ACCEPT_ROUTES}" = "1" ]; then
+			TS_FLAGS="$TS_FLAGS --accept-routes"
+		fi
+
+		# Bring interface up (support non-interactive authkey)
+		if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+			tailscale up --authkey "${TAILSCALE_AUTHKEY}" $TS_FLAGS || true
+		else
+			tailscale up $TS_FLAGS || true
+		fi
+	fi
+
+	# wait for tailscale to be ready (up to ~15s)
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+		if tailscale status >/dev/null 2>&1; then
+			break
+		fi
+		sleep 1
+	done
+
+	# Advertise exit node if connected
+	if tailscale status >/dev/null 2>&1; then
+		tailscale set --advertise-exit-node || true
+	else
+		echo "[start] tailscale not connected after attempts"
+	fi
 }
 
 start_dnsmasq() {
@@ -117,20 +235,15 @@ supervise_all() {
 	attempt=0
 	while true; do
 		attempt=$((attempt+1))
-
+		setup_tailscal
 		setup_iptables
 		setup_ip6tables
-
-		# start dnsmasq and privoxy (pids set by functions)
 		start_dnsmasq
 		start_privoxy
-
-		# start openvpn wrapper
 		start_openvpn
 
 		echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
 
-		# monitor loop: check processes, privoxy port and DNS resolution
 		check_interval=10
 		fail=0
 		while true; do
