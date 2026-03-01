@@ -7,52 +7,86 @@ TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
 setup_iptables() {
-	# Simplified mode: accept all traffic (INPUT/OUTPUT/FORWARD)
-	# This makes the container permissive so services (privoxy, openvpn, tailscale)
-	# can receive incoming connections, perform outgoing connections and forward
-	# traffic without restrictive iptables rules.
 	iptables -F || true
-	iptables -t nat -F || true
-	iptables -t mangle -F || true
-	iptables -X || true
-	iptables -t nat -X || true
-	iptables -t mangle -X || true
+	iptables -P OUTPUT DROP || true
+	iptables -P FORWARD DROP || true
 	iptables -P INPUT ACCEPT || true
-	iptables -P FORWARD ACCEPT || true
-	iptables -P OUTPUT ACCEPT || true
-	# keep established/related accepted for good measure
-	iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+
+	# Allow loopback and established connections
+	iptables -A OUTPUT -o lo -j ACCEPT || true
 	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
-	# NAT: masquerade traffic going out via VPN/tailscale interfaces
+	# Allow traffic on tunnel and tailscale interfaces
+	iptables -A OUTPUT -o tun+ -j ACCEPT || true
+	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
+
+	# Forward traffic from tailscale into tun and allow return traffic
+	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
+	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+
+	# Local DNS resolver
+	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
+	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
+
+	# Allow upstream DNS servers if configured, otherwise common fallbacks
+	if [ -f /etc/dnsmasq.conf ]; then
+		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
+			case "$dns" in
+				*[.:]* )
+					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT || true
+					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT || true
+					;;
+			esac
+		done
+	else
+		iptables -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT || true
+		iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT || true
+	fi
+
+	# Allow HTTPS (tailscaled/control plane) and OpenVPN handshake to server
+	iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT || true
+	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT || true
+	if [ -f "$conf" ]; then
+		# Try to extract port and proto simply; fall back to defaults
+		port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf" || true)
+		if [ -z "$port" ]; then
+			port=$(awk '/^remote /{print $3; exit}' "$conf" || true)
+		fi
+		: ${port:=1194}
+		proto=$(awk '/^proto /{print $2; exit}' "$conf" || true)
+		: ${proto:=udp}
+		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
+	else
+		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
+	fi
+
 	iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE || true
-	iptables -t nat -A POSTROUTING -o tailscale+ -j MASQUERADE || true
+
+	# Minimal LOGDROP chain (log a few then drop)
+	if ! iptables -L LOGDROP >/dev/null 2>&1; then
+		iptables -N LOGDROP >/dev/null 2>&1 || true
+	fi
+	iptables -C LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || \
+		iptables -A LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || true
+	iptables -C LOGDROP -j DROP >/dev/null 2>&1 || iptables -A LOGDROP -j DROP >/dev/null 2>&1 || true
+	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
+	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
 }
 
-# Simplified IPv6 mode: accept all IPv6 traffic (INPUT/OUTPUT/FORWARD)
+# Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
 setup_ip6tables() {
-	# Make IPv6 permissive inside the container: flush rules and accept policy
 	ip6tables -F || true
-	ip6tables -t mangle -F 2>/dev/null || true
-	ip6tables -X || true
+	ip6tables -P OUTPUT DROP || true
+	ip6tables -P FORWARD DROP || true
 	ip6tables -P INPUT ACCEPT || true
-	ip6tables -P FORWARD ACCEPT || true
-	ip6tables -P OUTPUT ACCEPT || true
-	# keep established/related accepted for good measure
-	ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+
+	# Minimal IPv6 allowlist: loopback, established, tun/tailscale, local DNS
+	ip6tables -A OUTPUT -o lo -j ACCEPT || true
 	ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
-
-	# Ensure kernel IPv6 forwarding is enabled so container can forward traffic
-	# (may fail in restrictive runtimes; ignore errors)
-	sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
-
-	# IPv6 NAT/Masquerade is not always available on all kernels.
-	# If the nat table for ip6tables exists, add POSTROUTING MASQUERADE rules
-	# for tun+ and tailscale+; otherwise rely on routing/forwarding.
-	if ip6tables -t nat -L >/dev/null 2>&1; then
-		ip6tables -t nat -A POSTROUTING -o tun+ -j MASQUERADE || true
-		ip6tables -t nat -A POSTROUTING -o tailscale+ -j MASQUERADE || true
-	fi
+	ip6tables -A OUTPUT -o tun+ -j ACCEPT || true
+	ip6tables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT || true
+	ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT || true
 }
 
 start_dnsmasq() {
