@@ -214,7 +214,7 @@ EOF
 		fi
 
 		# Run tailscale up in background; logs available in /var/log/tailscale-up.log
-		(tailscale up --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
+		(tailscale up --accept-dns=false --authkey="$TAILSCALE_AUTHKEY" $up_flags > /var/log/tailscale-up.log 2>&1) &
 		# If advertise-exit-node is requested, ensure it's set (tailscale set is idempotent)
 		if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
 			(tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
