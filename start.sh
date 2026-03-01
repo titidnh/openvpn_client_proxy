@@ -7,115 +7,52 @@ TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
 setup_iptables() {
-	# Flush previous rules and set restrictive defaults
+	# Simplified mode: accept all traffic (INPUT/OUTPUT/FORWARD)
+	# This makes the container permissive so services (privoxy, openvpn, tailscale)
+	# can receive incoming connections, perform outgoing connections and forward
+	# traffic without restrictive iptables rules.
 	iptables -F || true
-	iptables -P OUTPUT DROP
-	iptables -P FORWARD DROP
-	iptables -P INPUT ACCEPT
-	iptables -A INPUT -i tailscale+ -j ACCEPT || true
-	
-	# Allow loopback
-	iptables -A OUTPUT -o lo -j ACCEPT
+	iptables -t nat -F || true
+	iptables -t mangle -F || true
+	iptables -X || true
+	iptables -t nat -X || true
+	iptables -t mangle -X || true
+	iptables -P INPUT ACCEPT || true
+	iptables -P FORWARD ACCEPT || true
+	iptables -P OUTPUT ACCEPT || true
+	# keep established/related accepted for good measure
+	iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
-	# Allow established/related
-	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-	# Allow traffic via tun (when tunnel is up) and tailscale interfaces
-	iptables -A OUTPUT -o tun+ -j ACCEPT
-	iptables -A OUTPUT -o tailscale+ -j ACCEPT
-	# Allow forwarding from tailscale into tun (and related return traffic)
-	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
-	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
-
-	# Local DNS resolver (dnsmasq) on 127.0.0.1
-	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
-	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
-
-	# Allow DNS upstreams listed in /etc/dnsmasq.conf (no owner-match):
-	# dnsmasq may run as root inside containers so owner-match can be unreliable.
-	if [ -f /etc/dnsmasq.conf ]; then
-		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
-			case "$dns" in
-				*[.:]* )
-					# allow upstream UDP/TCP 53 to the configured server IP/host
-					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT || true
-					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT || true
-					;;
-			esac
-		done
-	else
-		# Fallback: allow common public DNS servers so bootstrapping can resolve
-		iptables -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT || true
-		iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT || true
-	fi
-
-	# Allow outbound HTTPS (required by tailscaled to reach controlplane/DERP)
-	# Note: this opens port 443 for all processes in the container. To be
-	# stricter, run tailscaled under a dedicated UID and replace this rule
-	# with an owner-match rule for that UID.
-	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT || true
-
-	# Allow OpenVPN handshake to VPN server port (parse from config if possible).
-	if [ -f "$conf" ]; then
-		remote_line=$(awk '/^remote /{print; exit}' "$conf" || true)
-		port=""
-		proto=$(awk '/^proto /{print $2; exit}' "$conf" || true)
-		if [ -n "$remote_line" ]; then
-			set -- $remote_line
-			hostpart="$2"
-			if echo "$hostpart" | grep -q ':'; then
-				port=$(echo "$hostpart" | cut -d: -f2)
-			else
-				if [ "$#" -ge 3 ]; then port="$3"; fi
-			fi
-		fi
-		if [ -z "$port" ]; then
-			port=1194
-		fi
-		if [ -z "$proto" ]; then
-			proto=udp
-		fi
-		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
-	else
-		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
-	fi
-
-	# Create a LOGDROP chain to log then drop unmatched packets (rate-limited).
-	if ! iptables -L LOGDROP >/dev/null 2>&1; then
-		iptables -N LOGDROP >/dev/null 2>&1 || true
-	fi
-	iptables -C LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || \
-		iptables -A LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || true
-	iptables -C LOGDROP -j DROP >/dev/null 2>&1 || iptables -A LOGDROP -j DROP >/dev/null 2>&1 || true
-
-	# Ensure OUTPUT and FORWARD jump to LOGDROP at the end (idempotent)
-	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
-	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
+	# NAT: masquerade traffic going out via VPN/tailscale interfaces
+	iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE || true
+	iptables -t nat -A POSTROUTING -o tailscale+ -j MASQUERADE || true
 }
 
-# Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
+# Simplified IPv6 mode: accept all IPv6 traffic (INPUT/OUTPUT/FORWARD)
 setup_ip6tables() {
-	# If ip6tables is not available this will fail; ignore errors to keep container running
+	# Make IPv6 permissive inside the container: flush rules and accept policy
 	ip6tables -F || true
-	ip6tables -P OUTPUT DROP || true
-	ip6tables -P FORWARD DROP || true
+	ip6tables -t mangle -F 2>/dev/null || true
+	ip6tables -X || true
 	ip6tables -P INPUT ACCEPT || true
-
-	# Allow loopback
-	ip6tables -A OUTPUT -o lo -j ACCEPT || true
-
-	# Allow established/related
+	ip6tables -P FORWARD ACCEPT || true
+	ip6tables -P OUTPUT ACCEPT || true
+	# keep established/related accepted for good measure
+	ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 	ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
-	# Allow traffic via tun (when tunnel is up)
-	ip6tables -A OUTPUT -o tun+ -j ACCEPT || true
-	ip6tables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	# Ensure kernel IPv6 forwarding is enabled so container can forward traffic
+	# (may fail in restrictive runtimes; ignore errors)
+	sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
 
-	# Allow DNS to local resolver (if any) on ::1
-	ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT || true
-	ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT || true
-
-	# Do not allow any other IPv6 outbound traffic
+	# IPv6 NAT/Masquerade is not always available on all kernels.
+	# If the nat table for ip6tables exists, add POSTROUTING MASQUERADE rules
+	# for tun+ and tailscale+; otherwise rely on routing/forwarding.
+	if ip6tables -t nat -L >/dev/null 2>&1; then
+		ip6tables -t nat -A POSTROUTING -o tun+ -j MASQUERADE || true
+		ip6tables -t nat -A POSTROUTING -o tailscale+ -j MASQUERADE || true
+	fi
 }
 
 start_dnsmasq() {
