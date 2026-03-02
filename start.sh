@@ -7,88 +7,159 @@ TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
 
 setup_iptables() {
-	iptables -F || true
-	iptables -P OUTPUT DROP || true
-	iptables -P FORWARD DROP || true
-	iptables -P INPUT ACCEPT || true
+    iptables -F
+    iptables -t nat -F
+	iptables -P INPUT ACCEPT       # Incoming accepted by default (adjust if needed)
+	iptables -P OUTPUT DROP        # Outgoing dropped by default
+	iptables -P FORWARD DROP       # Forwarding dropped by default
 
-	# Allow loopback and established connections
-	iptables -A OUTPUT -o lo -j ACCEPT || true
-	iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+    # --- Interfaces ---
+    LOOPBACK_IFS=("lo")
+    TUN_IFS=("tun+" "eth0" "tailscale+")
 
-	# Allow traffic on tunnel and tailscale interfaces
-	iptables -A OUTPUT -o tun+ -j ACCEPT || true
-	iptables -A OUTPUT -o eth0 -j ACCEPT || true
-	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	# --- Allow loopback ---
+    for ifs in "${LOOPBACK_IFS[@]}"; do
+        iptables -A OUTPUT -o "$ifs" -j ACCEPT
+    done
 
-	# Forward traffic from tailscale into tun and allow return traffic
-	iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT || true
-	iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+	# --- Established/related connections ---
+    iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-	# Local DNS resolver
-	iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT || true
-	iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT || true
+	# --- Traffic on tunnel and network interfaces ---
+    for ifs in "${TUN_IFS[@]}"; do
+        iptables -A OUTPUT -o "$ifs" -j ACCEPT
+    done
 
-	# Allow upstream DNS servers if configured, otherwise common fallbacks
-	if [ -f /etc/dnsmasq.conf ]; then
-		grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//' | while read -r dns; do
-			case "$dns" in
-				*[.:]* )
-					iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT || true
-					iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT || true
-					;;
-			esac
-		done
-	else
-		iptables -A OUTPUT -p udp -d 8.8.8.8 --dport 53 -j ACCEPT || true
-		iptables -A OUTPUT -p udp -d 1.1.1.1 --dport 53 -j ACCEPT || true
-	fi
+    # --- Forwarding Tailscale <-> TUN ---
+    iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
+    iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-	# Allow HTTPS (tailscaled/control plane) and OpenVPN handshake to server
-	iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT || true
-	iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT || true
-	if [ -f "$conf" ]; then
-		# Try to extract port and proto simply; fall back to defaults
-		port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf" || true)
-		if [ -z "$port" ]; then
-			port=$(awk '/^remote /{print $3; exit}' "$conf" || true)
-		fi
-		: ${port:=1194}
-		proto=$(awk '/^proto /{print $2; exit}' "$conf" || true)
-		: ${proto:=udp}
-		iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT || true
-	else
-		iptables -A OUTPUT -p udp --dport 1194 -j ACCEPT || true
-	fi
+	# --- Local DNS ---
+    iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT
 
-	iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE || true
+    # --- DNS upstream ---
+    DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+    if [ -f /etc/dnsmasq.conf ]; then
+        while read -r dns; do
+            [[ $dns =~ [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+            DNS_SERVERS+=("$dns")
+        done < <(grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf | sed 's/^[[:space:]]*server=//')
+    fi
+    for dns in "${DNS_SERVERS[@]}"; do
+        iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
+        iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
+    done
 
-	# Minimal LOGDROP chain (log a few then drop)
-	if ! iptables -L LOGDROP >/dev/null 2>&1; then
-		iptables -N LOGDROP >/dev/null 2>&1 || true
-	fi
-	iptables -C LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || \
-		iptables -A LOGDROP -m limit --limit 5/min -j LOG --log-prefix "[iptables LOGDROP] " --log-level 6 >/dev/null 2>&1 || true
-	iptables -C LOGDROP -j DROP >/dev/null 2>&1 || iptables -A LOGDROP -j DROP >/dev/null 2>&1 || true
-	iptables -C OUTPUT -j LOGDROP >/dev/null 2>&1 || iptables -A OUTPUT -j LOGDROP >/dev/null 2>&1 || true
-	iptables -C FORWARD -j LOGDROP >/dev/null 2>&1 || iptables -A FORWARD -j LOGDROP >/dev/null 2>&1 || true
+    # --- HTTP / HTTPS ---
+    iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+    iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+
+    # --- OpenVPN ---
+    if [ -f "$conf" ]; then
+        port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf")
+        port=${port:-$(awk '/^remote /{print $3; exit}' "$conf")}
+        port=${port:-1194}
+        proto=$(awk '/^proto /{print $2; exit}' "$conf")
+        proto=${proto:-udp}
+    else
+        port=1194
+        proto=udp
+    fi
+    iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT
+
+	# --- NAT for the tunnel ---
+    iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+
+	# --- LOGDROP: log to Docker console ---
+    iptables -N LOGDROP 2>/dev/null || true
+    iptables -C LOGDROP -m limit --limit 5/min -j LOG \
+        --log-prefix "[iptables LOGDROP] " \
+        --log-level 6 2>/dev/null || \
+    iptables -A LOGDROP -m limit --limit 5/min -j LOG \
+        --log-prefix "[iptables LOGDROP] " \
+        --log-level 6
+    iptables -C LOGDROP -j DROP 2>/dev/null || iptables -A LOGDROP -j DROP
+
+    iptables -C OUTPUT -j LOGDROP 2>/dev/null || iptables -A OUTPUT -j LOGDROP
+    iptables -C FORWARD -j LOGDROP 2>/dev/null || iptables -A FORWARD -j LOGDROP
 }
 
 # Block IPv6 traffic by default and allow only necessary interfaces (tun) and loopback
 setup_ip6tables() {
-	ip6tables -F || true
-	ip6tables -P OUTPUT DROP || true
-	ip6tables -P FORWARD DROP || true
-	ip6tables -P INPUT ACCEPT || true
+	# --- Check if IPv6 is available ---
+    if ! command -v ip6tables >/dev/null 2>&1; then
+		echo "[setup_ip6tables] ip6tables not installed, skipping IPv6 setup"
+        return
+    fi
+    if [ ! -f /proc/net/if_inet6 ]; then
+		echo "[setup_ip6tables] IPv6 not supported on this system, skipping IPv6 setup"
+        return
+    fi
 
-	# Minimal IPv6 allowlist: loopback, established, tun/tailscale, local DNS
-	ip6tables -A OUTPUT -o lo -j ACCEPT || true
-	ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
-	ip6tables -A OUTPUT -o tun+ -j ACCEPT || true
-	ip6tables -A OUTPUT -o tailscale+ -j ACCEPT || true
-	ip6tables -A OUTPUT -o eth0 -j ACCEPT || true
-	ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT || true
-	ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT || true
+	# --- Default policies ---
+    ip6tables -F
+    ip6tables -t nat -F 2>/dev/null || true
+    ip6tables -P INPUT ACCEPT
+    ip6tables -P OUTPUT DROP
+    ip6tables -P FORWARD DROP
+
+    # --- Interfaces ---
+    LOOPBACK_IFS=("lo")
+    TUN_IFS=("tun+" "eth0" "tailscale+")
+
+	# --- Allow loopback ---
+    for ifs in "${LOOPBACK_IFS[@]}"; do
+        ip6tables -A OUTPUT -o "$ifs" -j ACCEPT
+    done
+
+	# --- Established/related connections ---
+    ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+	# --- Traffic on tunnel and network interfaces ---
+    for ifs in "${TUN_IFS[@]}"; do
+        ip6tables -A OUTPUT -o "$ifs" -j ACCEPT
+    done
+
+    # --- Forwarding Tailscale <-> TUN ---
+    ip6tables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
+    ip6tables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+	# --- Local DNS IPv6 ---
+    ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT
+    ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT
+
+    # --- HTTP / HTTPS IPv6 ---
+    ip6tables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+    ip6tables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+
+    # --- OpenVPN IPv6 ---
+    if [ -f "$conf" ]; then
+        port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf")
+        port=${port:-$(awk '/^remote /{print $3; exit}' "$conf")}
+        port=${port:-1194}
+        proto=$(awk '/^proto /{print $2; exit}' "$conf")
+        proto=${proto:-udp}
+    else
+        port=1194
+        proto=udp
+    fi
+    ip6tables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT
+
+	# --- LOGDROP for IPv6 ---
+    ip6tables -N LOGDROP 2>/dev/null || true
+    ip6tables -C LOGDROP -m limit --limit 5/min -j LOG \
+        --log-prefix "[ip6tables LOGDROP] " \
+        --log-level 6 2>/dev/null || \
+    ip6tables -A LOGDROP -m limit --limit 5/min -j LOG \
+        --log-prefix "[ip6tables LOGDROP] " \
+        --log-level 6
+    ip6tables -C LOGDROP -j DROP 2>/dev/null || ip6tables -A LOGDROP -j DROP
+
+    ip6tables -C OUTPUT -j LOGDROP 2>/dev/null || ip6tables -A OUTPUT -j LOGDROP
+    ip6tables -C FORWARD -j LOGDROP 2>/dev/null || ip6tables -A FORWARD -j LOGDROP
+
+	echo "[setup_ip6tables] IPv6 ip6tables configured successfully"
 }
 
 start_dnsmasq() {
