@@ -18,6 +18,7 @@ setup_iptables() {
 
 	# Allow traffic on tunnel and tailscale interfaces
 	iptables -A OUTPUT -o tun+ -j ACCEPT || true
+	iptables -A OUTPUT -o eth0 -j ACCEPT || true
 	iptables -A OUTPUT -o tailscale+ -j ACCEPT || true
 
 	# Forward traffic from tailscale into tun and allow return traffic
@@ -85,6 +86,7 @@ setup_ip6tables() {
 	ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 	ip6tables -A OUTPUT -o tun+ -j ACCEPT || true
 	ip6tables -A OUTPUT -o tailscale+ -j ACCEPT || true
+	ip6tables -A OUTPUT -o eth0 -j ACCEPT || true
 	ip6tables -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT || true
 	ip6tables -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT || true
 }
