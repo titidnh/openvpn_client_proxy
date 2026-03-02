@@ -1,10 +1,25 @@
 #!/bin/bash
 
 set -eu
+set -o pipefail
 
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 TAILSCALE_ADVERTISE_EXIT_NODE="${TAILSCALE_ADVERTISE_EXIT_NODE:-false}"
+
+# Detect OpenVPN port and protocol from $conf (sets VPN_PORT and VPN_PROTO)
+get_vpn_port_proto() {
+	if [ -f "$conf" ]; then
+		VPN_PORT=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf")
+		VPN_PORT=${VPN_PORT:-$(awk '/^remote /{print $3; exit}' "$conf")}
+		VPN_PORT=${VPN_PORT:-1194}
+		VPN_PROTO=$(awk '/^proto /{print $2; exit}' "$conf")
+		VPN_PROTO=${VPN_PROTO:-udp}
+	else
+		VPN_PORT=1194
+		VPN_PROTO=udp
+	fi
+}
 
 setup_iptables() {
     iptables -F
@@ -55,18 +70,9 @@ setup_iptables() {
     iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
     iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-    # --- OpenVPN ---
-    if [ -f "$conf" ]; then
-        port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf")
-        port=${port:-$(awk '/^remote /{print $3; exit}' "$conf")}
-        port=${port:-1194}
-        proto=$(awk '/^proto /{print $2; exit}' "$conf")
-        proto=${proto:-udp}
-    else
-        port=1194
-        proto=udp
-    fi
-    iptables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT
+	# --- OpenVPN ---
+	get_vpn_port_proto
+	iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
 
 	# --- NAT for the tunnel ---
     iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
@@ -134,17 +140,8 @@ setup_ip6tables() {
     ip6tables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
     # --- OpenVPN IPv6 ---
-    if [ -f "$conf" ]; then
-        port=$(awk '/^remote /{for(i=1;i<=NF;i++) if ($i ~ /:/){split($i,a,":"); print a[2]; exit}}' "$conf")
-        port=${port:-$(awk '/^remote /{print $3; exit}' "$conf")}
-        port=${port:-1194}
-        proto=$(awk '/^proto /{print $2; exit}' "$conf")
-        proto=${proto:-udp}
-    else
-        port=1194
-        proto=udp
-    fi
-    ip6tables -A OUTPUT -p "$proto" --dport "$port" -j ACCEPT
+	get_vpn_port_proto
+	ip6tables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
 
 	# --- LOGDROP for IPv6 ---
     ip6tables -N LOGDROP 2>/dev/null || true
@@ -203,6 +200,54 @@ start_privoxy() {
 start_openvpn() {
     /usr/local/bin/openvpn.sh &
     vpn_pid=$!
+}
+
+# Check if OpenVPN is actually routing traffic via a tun interface.
+# Returns 0 when routing looks ok, non-zero otherwise.
+check_openvpn_routing() {
+	# If `ip` isn't available, skip the check to avoid false failures
+	if ! command -v ip >/dev/null 2>&1; then
+		return 0
+	fi
+
+	# Use a well-known public IP to determine which device routes external traffic
+	out=$(ip route get 8.8.8.8 2>/dev/null || true)
+	dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+	if [ -z "$dev" ]; then
+		return 1
+	fi
+
+	# Accept if the selected device looks like a tun device
+	case "$dev" in
+		tun* ) ;;
+		* ) return 1 ;;
+	esac
+
+	# Optionally ensure the interface has an IPv4 address
+	if ! ip -4 addr show dev "$dev" >/dev/null 2>&1; then
+		return 1
+	fi
+
+	return 0
+}
+
+# Restart only OpenVPN and wait briefly for routing to come back
+restart_openvpn() {
+	echo "[supervisor] restarting openvpn (pid=${vpn_pid:-unknown})"
+	kill "${vpn_pid:-0}" 2>/dev/null || true
+	wait "${vpn_pid:-0}" 2>/dev/null || true
+	start_openvpn
+
+	# Wait a short time for the tun interface / routes to appear
+	for i in 1 2 3 4 5; do
+		sleep 1
+		if check_openvpn_routing; then
+			echo "[supervisor] openvpn routing restored (pid=$vpn_pid)"
+			return 0
+		fi
+	done
+	echo "[supervisor] openvpn routing still not functional after restart"
+	return 1
 }
 
 start_tailscale() {
@@ -290,6 +335,20 @@ supervise_all() {
 			if ! kill -0 "$vpn_pid" >/dev/null 2>&1; then
 				echo "[supervisor] openvpn process died"
 				fail=1
+			fi
+
+			# verify OpenVPN actually routes traffic via a tun device; try to restart only OpenVPN on routing failure
+			if [ "$fail" -eq 0 ]; then
+				if ! check_openvpn_routing; then
+					echo "[supervisor] openvpn routing failure detected"
+					if restart_openvpn; then
+						# routing restored, continue monitoring without triggering full restart
+						continue
+					else
+						# could not restore routing by restarting openvpn — trigger full restart
+						fail=1
+					fi
+				fi
 			fi
 
 			# check privoxy listen port

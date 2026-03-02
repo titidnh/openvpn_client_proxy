@@ -26,7 +26,7 @@ RUN apt-get update \
     ca-certificates curl gnupg \
   && curl -fsSL https://tailscale.com/install.sh | sh \
   && apt-get install -y --no-install-recommends \
-    openvpn privoxy dnsmasq iptables tini netcat-openbsd dnsutils \
+    openvpn privoxy dnsmasq iptables iproute2 tini netcat-openbsd dnsutils \
   && apt-get purge -y curl gnupg \
   && apt-get autoremove -y \
   && apt-get clean \
