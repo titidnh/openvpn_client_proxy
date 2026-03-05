@@ -50,6 +50,33 @@ get_dns_upstreams() {
         | awk -F'[#@]' '{print $1}'
 }
 
+# Vérifie et log l'IP publique via le proxy pour confirmer que le trafic
+# sort bien par le VPN. Appelé une fois après que le tunnel est monté.
+check_vpn_ip() {
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "[check_vpn_ip] curl not available, skipping public IP check"
+        return 0
+    fi
+
+    local proxy_port=3128
+    if [ -f /etc/privoxy/privoxy.config ]; then
+        local addr
+        addr=$(awk '/^[[:space:]]*listen-address/{print $2; exit}' /etc/privoxy/privoxy.config || true)
+        [ -n "$addr" ] && proxy_port=$(echo "$addr" | awk -F: '{print $NF}')
+    fi
+
+    local public_ip
+    public_ip=$(curl -fsS --max-time 10 \
+        --proxy "http://127.0.0.1:${proxy_port}" \
+        https://api.ipify.org 2>/dev/null || true)
+
+    if [ -n "$public_ip" ]; then
+        echo "[check_vpn_ip] public IP via VPN: $public_ip"
+    else
+        echo "[check_vpn_ip] could not determine public IP (tunnel may still be initializing)"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Firewall IPv4
 # ---------------------------------------------------------------------------
@@ -392,8 +419,11 @@ supervise_all() {
         done
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes
+            check_vpn_ip
+            touch /tmp/vpn_healthy
         else
             echo "[supervisor] tunnel not ready after 30s, skipping return routes"
+            rm -f /tmp/vpn_healthy
         fi
 
         echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
@@ -411,9 +441,12 @@ supervise_all() {
             # OpenVPN routing
             if [ "$fail" -eq 0 ] && ! check_openvpn_routing; then
                 echo "[supervisor] openvpn routing failure detected"
+                rm -f /tmp/vpn_healthy
                 if restart_openvpn; then
                     # Tunnel restauré — reconfigurer les routes retour au cas où
                     setup_return_routes
+                    check_vpn_ip
+                    touch /tmp/vpn_healthy
                     continue
                 else
                     fail=1
@@ -452,6 +485,7 @@ supervise_all() {
         done
 
         echo "[supervisor] failure detected - killing services to restart"
+        rm -f /tmp/vpn_healthy
         kill_if_running "$vpn_pid"
         kill_if_running "$privoxy_pid"
         kill_if_running "$dnsmasq_pid"

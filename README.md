@@ -6,100 +6,137 @@ Lightweight Docker image that runs an OpenVPN client together with a local HTTP 
 - OpenVPN client (configured with files placed in `/vpn`)
 - HTTP proxy using Privoxy for local filtering
 - Local DNS resolver (`dnsmasq`) using AdGuard Family upstream servers
+- **Network kill switch** — iptables DROP by default; all traffic is blocked if the VPN tunnel goes down
+- **DNS leak protection** — all DNS queries are forced through `dnsmasq`; no process can reach an external resolver directly
+- Automatic VPN reconnection with exponential backoff supervision
+- Optional Tailscale integration with exit-node support
 - Debian-slim based, minimal image
 
-## Build
+---
 
-Build the image from the repository root:
+## Build
 
 ```sh
 docker build -t openvpn-client-proxy:latest .
 ```
 
+---
+
 ## Run (basic example)
 
-Provide your OpenVPN client configuration as `/vpn/vpn.conf` inside the container. The simplest way is to mount a host directory containing your OpenVPN files to `/vpn`:
+Provide your OpenVPN client configuration as `vpn.conf` inside the mounted `/vpn` directory:
 
 ```sh
 docker run --cap-add=NET_ADMIN --device /dev/net/tun --rm \
-  --memory 128MB --health-interval=30s --health-timeout=5s --health-retries=3 \
+  --memory 128MB \
   -v /path/to/vpn:/vpn:ro \
   -p 3128:3128 openvpn-client-proxy:latest
 ```
 
-Make sure the mounted directory contains `vpn.conf` (or rename your `.ovpn` to `vpn.conf`). If your provider requires username/password authentication, include a `vpn.auth` file in the same folder (first line username, second line password) and reference it from your configuration with `auth-user-pass vpn.auth`.
+**Requirements:**
+- The container needs `NET_ADMIN` capability and access to `/dev/net/tun` to create the VPN tunnel.
+- The mounted directory must contain `vpn.conf` (or rename your `.ovpn` file to `vpn.conf`).
+- If your provider requires username/password authentication, include a `vpn.auth` file in the same folder (first line: username, second line: password) and reference it from your config with `auth-user-pass vpn.auth`.
+- Privoxy listens on port `3128` by default inside the container.
 
-Notes:
-- The container needs `NET_ADMIN` and access to `/dev/net/tun` to create the VPN tunnel.
-- Privoxy listens on port `3128` by default (binds inside the container; map the port as shown above).
+---
 
-## Configuration files (in repository)
-- `dnsmasq.conf`: upstream DNS servers (AdGuard Family). Change these addresses if you want another upstream.
-- `start.sh`: container entrypoint that starts `dnsmasq`, OpenVPN, and Privoxy.
-- `openvpn.sh`: simplified OpenVPN entry script (reads config from `/vpn`).
-- `privoxy.*`: Privoxy configuration files under `/etc/privoxy` inside the image.
+## Configuration files
 
-## Environment / runtime options
-- The entrypoint expects your OpenVPN configuration at `/vpn/vpn.conf` (or an .ovpn file mounted to that path).
-- If you need username/password authentication create `/vpn/vpn.auth` with two lines: username then password, and reference it from your .conf (e.g. `auth-user-pass vpn.auth`).
-- DNS is handled inside the container by `dnsmasq` (AdGuard Family upstreams). The image configures `/etc/resolv.conf` to point to the local resolver at container start.
+| File | Description |
+|------|-------------|
+| `dnsmasq.conf` | Upstream DNS servers (AdGuard Family). Edit to change resolver. |
+| `start.sh` | Container entrypoint — starts `dnsmasq`, configures iptables kill switch, then starts Privoxy, OpenVPN and optionally Tailscale. Supervises all processes and restarts on failure. |
+| `openvpn.sh` | OpenVPN entry script (reads config from `/vpn`). |
+| `privoxy.*` | Privoxy configuration files under `/etc/privoxy` inside the image. |
+
+---
+
+## Network kill switch
+
+At startup, `start.sh` configures iptables (IPv4 and IPv6) with a **DROP-by-default** policy:
+
+- All outbound traffic is blocked except through the VPN tunnel (`tun+`/`tap+`)
+- DNS is only allowed to `127.0.0.1:53` (local `dnsmasq`) and the upstream servers declared in `dnsmasq.conf`
+- If the VPN tunnel goes down, internet traffic is blocked — nothing leaks in plaintext
+- OpenVPN reconnects automatically; if it cannot recover, all services are restarted with exponential backoff (5s, 10s … capped at 60s)
+
+---
+
+## Supervision behavior
+
+The entrypoint runs a built-in supervisor that monitors all services every 10 seconds:
+
+- **OpenVPN down** → attempts a lightweight restart (without touching the firewall). If routing is restored within 5 seconds, monitoring resumes normally.
+- **Routing still broken** → full restart of all services (dnsmasq, iptables, Privoxy, OpenVPN, Tailscale).
+- **Privoxy or dnsmasq down** → full restart.
+- **Tailscale down** (if enabled) → full restart.
+
+---
+
+## Healthcheck
+
+The image declares a healthcheck interval and timeout but does not define a `test` command by default. To add a meaningful check, override it in your `docker-compose.yml`:
+
+```yaml
+healthcheck:
+  test: ["CMD", "nc", "-z", "-w", "3", "127.0.0.1", "3128"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+```
+
+---
 
 ## Tailscale integration (optional)
 
-This image can optionally install and run Tailscale when `ENABLE_TAILSCALE` is set to `true` at container runtime. The following environment variables control Tailscale behavior:
+Tailscale must be installed inside the image for this feature to work. The entrypoint checks for the presence of `tailscaled` at startup and skips silently if it is not found.
 
-- `ENABLE_TAILSCALE` (default: `false`): when `true`, the container attempts to install Tailscale and bring it up.
-- `TAILSCALE_AUTHKEY` (default: empty): a pre-authentication key to perform a non-interactive `tailscale up --authkey <key>`.
-- `TAILSCALE_FLAGS` (default: empty): additional flags to append to `tailscale up`.
-- `TAILSCALE_ACCEPT_ROUTES` (default: `false`): when `true`, `--accept-routes` is added to `tailscale up` to accept routes advertised by other nodes.
-- `TAILSCALE_HOSTNAME`: optional hostname to register for this machine in Tailscale (passed to `tailscale up --hostname`).
-- `TAILSCALE_ADVERTISE_EXIT_NODE` (default: `false`): when `true`, the container will attempt to advertise itself as an exit node.
+The following environment variables control Tailscale behavior:
 
-Behavior notes:
-- At startup the script will install Tailscale (if missing), start `tailscaled`, and run `tailscale up` (non-interactive if `TAILSCALE_AUTHKEY` is provided).
-- If `TAILSCALE_ADVERTISE_EXIT_NODE=true`, the container attempts to enable kernel IP forwarding and calls `tailscale set --advertise-exit-node=true`.
-- Enabling kernel sysctls from inside the container may be restricted by the container runtime; prefer passing `--sysctl` or enabling forwarding on the host (see examples below).
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup |
+| `TAILSCALE_AUTHKEY` | *(empty)* | Pre-auth key for non-interactive `tailscale up` |
+| `TAILSCALE_FLAGS` | *(empty)* | Extra flags appended to `tailscale up` |
+| `TAILSCALE_ACCEPT_ROUTES` | `false` | Adds `--accept-routes` to `tailscale up` |
+| `TAILSCALE_HOSTNAME` | *(empty)* | Hostname to register in Tailscale (`--hostname`) |
+| `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node |
 
-### Example run enabling Tailscale with an auth key and accepting routes:
+When `TAILSCALE_ADVERTISE_EXIT_NODE=true`, all traffic from your Tailscale devices is forwarded through the VPN tunnel — iptables FORWARD and NAT rules are already configured for this.
+
+> **Note:** enabling `TAILSCALE_ADVERTISE_EXIT_NODE` requires kernel IP forwarding. Pass the sysctls at the compose/runtime level (see example below); setting them from inside the container may be restricted by your runtime.
+
+### Example — Tailscale with auth key and exit node:
 
 ```sh
 docker run --cap-add=NET_ADMIN --device /dev/net/tun --rm \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv6.conf.all.forwarding=1 \
   -e ENABLE_TAILSCALE=true \
   -e TAILSCALE_AUTHKEY="tskey-xxx" \
-  -e TAILSCALE_ACCEPT_ROUTES=true \
+  -e TAILSCALE_ADVERTISE_EXIT_NODE=true \
   -v /path/to/vpn:/vpn:ro \
   -p 3128:3128 openvpn-client-proxy:latest
 ```
 
-## Notes & caveats
-- The image is intentionally minimal. If you need advanced debugging tools (`curl`, `iputils`, etc.) add them in a derived Dockerfile.
-- Overwriting `/etc/resolv.conf` is performed at container start to point at the local `dnsmasq`. If your Docker runtime or host locks `resolv.conf`, adapt the startup to use OpenVPN up/down hooks to update DNS.
-- The startup script configures iptables rules by default to enable Tailscale/OpenVPN operation; you can customize or remove these rules in `start.sh` if you prefer host-managed firewalling.
-
-## Where to tweak DNS blocking
-- To change or extend the blocking upstreams, edit `dnsmasq.conf` in the repo. It currently uses AdGuard Family servers (blocks adult content + ads).
+---
 
 ## Docker Compose example
 
-A minimal `docker-compose.yml` example. If you enable `TAILSCALE_ADVERTISE_EXIT_NODE=true` you will likely need to set `sysctls` on the container or enable forwarding on the host.
-
 ```yaml
-version: '3.8'
 services:
   vpnproxy:
     image: titidnh/openvpn_client_proxy:latest
     container_name: vpn_proxy
     restart: always
     mem_limit: 128M
-    # If tailscale activated
-    sysctls:
-      net.ipv4.ip_forward: "1"
-      net.ipv6.conf.all.forwarding: "1"
     cap_add:
       - NET_ADMIN
     devices:
       - "/dev/net/tun"
     healthcheck:
+      test: ["CMD", "nc", "-z", "-w", "3", "127.0.0.1", "3128"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -113,11 +150,28 @@ services:
       # TAILSCALE_ACCEPT_ROUTES: "false"
       # TAILSCALE_HOSTNAME: "my-vpn-node"
       # TAILSCALE_ADVERTISE_EXIT_NODE: "false"
-    # Example sysctls for exit-node (prefer to set on host/compose):
+    # Required if TAILSCALE_ADVERTISE_EXIT_NODE=true
     # sysctls:
     #   net.ipv4.ip_forward: "1"
     #   net.ipv6.conf.all.forwarding: "1"
 ```
 
+---
+
+## Where to tweak DNS blocking
+
+Edit `dnsmasq.conf` in the repository. It currently uses AdGuard Family servers (blocks ads + adult content). Replace the `server=` entries with any resolver of your choice.
+
+---
+
+## Notes & caveats
+
+- `/etc/resolv.conf` is overwritten at container start to point at local `dnsmasq`. If your Docker runtime mounts it read-only, the entrypoint falls back to a `mount --bind` from `/tmp`.
+- The image is intentionally minimal. Add debugging tools (`curl`, `iputils`, etc.) in a derived Dockerfile if needed.
+- iptables rules are configured by `start.sh` on every startup (including after a supervised restart). Do not rely on host-level rules surviving a container restart.
+
+---
+
 ## License
+
 See repository LICENSE file.
