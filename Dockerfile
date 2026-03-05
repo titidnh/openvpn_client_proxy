@@ -19,7 +19,7 @@ ENV ENABLE_TAILSCALE=false \
 RUN groupadd -r vpn && useradd -r -g vpn -M -s /usr/sbin/nologin vpn
 
 # Install all packages in a single layer.
-# curl and gnupg are needed only to bootstrap Tailscale's apt repo; they are
+# gnupg is needed only to bootstrap Tailscale's apt repo; they are
 # purged at the end of the same RUN so they do not inflate the final image.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -27,7 +27,7 @@ RUN apt-get update \
   && curl -fsSL https://tailscale.com/install.sh | sh \
   && apt-get install -y --no-install-recommends \
     openvpn privoxy dnsmasq iptables iproute2 tini netcat-openbsd dnsutils \
-  && apt-get purge -y curl gnupg \
+  && apt-get purge -y gnupg \
   && apt-get autoremove -y \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
