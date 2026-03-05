@@ -138,11 +138,9 @@ setup_iptables() {
     iptables -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
     iptables -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
 
-    # NAT — tunnel + Tailscale exit-node
-    iptables -t nat -A POSTROUTING -o tun+       -j MASQUERADE
-    iptables -t nat -A POSTROUTING -o tap+       -j MASQUERADE
-    iptables -t nat -A POSTROUTING -i tailscale+ -o tun+ -j MASQUERADE
-    iptables -t nat -A POSTROUTING -i tailscale+ -o tap+ -j MASQUERADE
+    # NAT — tout ce qui sort par le tunnel est masqué (couvre OpenVPN + Tailscale exit-node)
+    iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+    iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
     echo "[setup_iptables] IPv4 configured — kill switch active, VPN on $VPN_PROTO/$VPN_PORT"
 }
@@ -211,11 +209,9 @@ setup_ip6tables() {
     ipt6 -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT
     ipt6 -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT
 
-    # NAT — tunnel + Tailscale exit-node
-    ipt6 -t nat -A POSTROUTING -o tun+       -j MASQUERADE
-    ipt6 -t nat -A POSTROUTING -o tap+       -j MASQUERADE
-    ipt6 -t nat -A POSTROUTING -i tailscale+ -o tun+ -j MASQUERADE
-    ipt6 -t nat -A POSTROUTING -i tailscale+ -o tap+ -j MASQUERADE
+    # NAT — tout ce qui sort par le tunnel est masqué (couvre OpenVPN + Tailscale exit-node)
+    ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+    ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
     echo "[setup_ip6tables] IPv6 configured — kill switch active"
 }
