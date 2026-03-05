@@ -347,7 +347,8 @@ check_openvpn_routing() {
 restart_openvpn() {
     echo "[supervisor] restarting openvpn (pid=${vpn_pid:-unknown})"
     kill_if_running "$vpn_pid"
-    wait "$vpn_pid" 2>/dev/null || true
+    wait 2>/dev/null || true   # attend sans pid — évite "wait: pid vide" avec set -eu
+    vpn_pid=""
     start_openvpn
     local i
     for i in 1 2 3 4 5; do
@@ -380,13 +381,14 @@ supervise_all() {
 
         # Attendre que le tunnel tun soit monté avant d'ajouter les routes retour
         echo "[supervisor] waiting for OpenVPN tunnel..."
-        local tun_ready=0 i
-        for i in $(seq 1 30); do
+        local tun_ready=0 tun_wait=0
+        while [ "$tun_wait" -lt 30 ]; do
             if check_openvpn_routing; then
                 tun_ready=1
                 break
             fi
             sleep 1
+            tun_wait=$((tun_wait + 1))
         done
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes
@@ -410,6 +412,8 @@ supervise_all() {
             if [ "$fail" -eq 0 ] && ! check_openvpn_routing; then
                 echo "[supervisor] openvpn routing failure detected"
                 if restart_openvpn; then
+                    # Tunnel restauré — reconfigurer les routes retour au cas où
+                    setup_return_routes
                     continue
                 else
                     fail=1
