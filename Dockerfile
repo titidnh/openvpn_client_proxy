@@ -8,24 +8,23 @@ FROM alpine:3.20 AS tailscale-dl
 
 ARG TARGETARCH
 # TAILSCALE_VERSION can be pinned at build time: --build-arg TAILSCALE_VERSION=1.80.3
-# If left empty, the latest stable release is resolved automatically from the API.
+# If left empty, the latest stable release is fetched automatically.
 ARG TAILSCALE_VERSION=""
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
- && VERSION="${TAILSCALE_VERSION}" \
- && if [ -z "$VERSION" ]; then \
-      VERSION=$(curl -fsSL "https://pkgs.tailscale.com/stable/?mode=json" \
-        | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4); \
+ && if [ -n "${TAILSCALE_VERSION}" ]; then \
+      URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz"; \
+    else \
+      URL="https://pkgs.tailscale.com/stable/tailscale_latest_${ARCH}.tgz"; \
     fi \
- && echo "Tailscale version: ${VERSION}" \
- && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${VERSION}_${ARCH}.tgz" \
-    -o tailscale.tgz \
- && tar -xz --strip-components=1 \
-         -f tailscale.tgz \
-         "tailscale_${VERSION}_${ARCH}/tailscale" \
-         "tailscale_${VERSION}_${ARCH}/tailscaled" \
- && rm tailscale.tgz \
+ && echo "Downloading: ${URL}" \
+ && curl -fsSL "${URL}" -o tailscale.tgz \
+ && PREFIX=$(tar -tz -f tailscale.tgz | head -1 | cut -d/ -f1) \
+ && echo "Tailscale version: ${PREFIX}" \
+ && tar -xz -f tailscale.tgz "${PREFIX}/tailscale" "${PREFIX}/tailscaled" \
+ && mv "${PREFIX}/tailscale" "${PREFIX}/tailscaled" . \
+ && rm -rf tailscale.tgz "${PREFIX}" \
  && chmod 755 tailscale tailscaled
 
 # =============================================================================
