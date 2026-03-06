@@ -1,6 +1,6 @@
 # OpenVPN Client Proxy
 
-> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) with AdGuard Family DNS — featuring a network **kill switch**, **DNS leak protection**, and optional **Tailscale** integration.
+> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) with configurable upstream DNS — featuring a network **kill switch**, **DNS leak protection**, and optional **Tailscale** integration.
 
 ---
 
@@ -38,10 +38,10 @@
 | 🛡️ **DNS Leak Protection** | All DNS queries are forced through local `dnsmasq` — no external resolver bypass possible |
 | 🔁 **Auto-Reconnect** | Built-in supervisor with exponential backoff (5s → 60s cap) restarts services on failure |
 | 🌐 **HTTP Proxy** | Privoxy on port `3128` — usable by any app or container that supports HTTP proxies |
-| 🧹 **Ad/Content Filtering** | AdGuard Family DNS blocks ads and adult content at the DNS level |
+| 🧹 **Ad/Content Filtering** | DNS-level filtering — configurable via `DNS_SERVER_1` / `DNS_SERVER_2` env vars (default: AdGuard Default, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
-| 📦 **Minimal Image** | Based on `debian:trixie-slim` — small footprint, no unnecessary tools |
+| 📦 **Minimal Image** | Based on `debian:stable-slim` — production-grade base, small footprint |
 
 ---
 
@@ -69,7 +69,7 @@
                    Internet
 ```
 
-- **dnsmasq** listens on `127.0.0.1:53` and forwards queries to AdGuard Family DNS (`94.140.14.15`, `94.140.15.16`). No app inside or outside the container can reach another resolver.
+- **dnsmasq** listens on `127.0.0.1:53` and forwards queries to the upstream DNS servers configured via `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard Default `94.140.14.14` / `94.140.15.15`). No app inside or outside the container can reach another resolver.
 - **Privoxy** listens on `0.0.0.0:3128` and routes all HTTP/HTTPS traffic through the VPN tunnel.
 - **iptables** enforces a DROP-everything-by-default policy. Only traffic going out via `tun+` / `tap+` is allowed.
 - **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure.
@@ -226,50 +226,32 @@ mypassword
 
 ### `dnsmasq.conf` — DNS Resolver
 
-Located at `/etc/dnsmasq.conf` inside the container (mapped from `dnsmasq.conf` in the repository root).
+Located at `/etc/dnsmasq.conf` inside the container. **This file is generated at container startup** from the `DNS_SERVER_1` and `DNS_SERVER_2` environment variables — editing the repository file has no effect at runtime.
 
-**Default configuration (AdGuard Family DNS):**
-
-```ini
-# Listen only on localhost
-listen-address=127.0.0.1
-bind-interfaces
-
-# Do not read /etc/resolv.conf — only use the servers listed below
-no-resolv
-
-# AdGuard Family DNS — blocks ads + adult content
-server=94.140.14.15
-server=94.140.15.16
-
-# DNS cache
-cache-size=1000
-
-# Silence dnsmasq logs (redirect to /dev/null for Docker)
-log-facility=/dev/null
-```
-
-**Swap to a different DNS provider — examples:**
+**Default upstream resolvers (AdGuard Default — blocks ads only, no adult content filter):**
 
 ```ini
-# Cloudflare (1.1.1.1) — no filtering
-server=1.1.1.1
-server=1.0.0.1
-
-# Quad9 — security filtering (blocks malware/phishing, no adult filter)
-server=9.9.9.9
-server=149.112.112.112
-
-# AdGuard Default DNS — blocks ads only (no adult content filter)
 server=94.140.14.14
 server=94.140.15.15
-
-# Google DNS — no filtering
-server=8.8.8.8
-server=8.8.4.4
 ```
 
-> Any `server=` IP declared here is automatically whitelisted in iptables by `start.sh` — no manual firewall changes needed.
+**Change DNS provider via environment variables:**
+
+```bash
+# Cloudflare — no filtering
+-e DNS_SERVER_1=1.1.1.1 -e DNS_SERVER_2=1.0.0.1
+
+# Quad9 — blocks malware/phishing, no adult filter
+-e DNS_SERVER_1=9.9.9.9 -e DNS_SERVER_2=149.112.112.112
+
+# AdGuard Family — blocks ads AND adult content
+-e DNS_SERVER_1=94.140.14.15 -e DNS_SERVER_2=94.140.15.16
+
+# Google DNS — no filtering
+-e DNS_SERVER_1=8.8.8.8 -e DNS_SERVER_2=8.8.4.4
+```
+
+> The declared IPs are automatically whitelisted in iptables by `start.sh` — no manual firewall changes needed.
 
 ---
 
@@ -306,6 +288,13 @@ buffer-limit 10240
 
 To change the listening port, edit `listen-address` and update the `-p` flag in `docker run` (or `ports:` in compose) accordingly.
 
+> ⚠️ **Security notice — Privoxy has no authentication.** The proxy listens on `0.0.0.0:3128` and accepts connections from any client that can reach port 3128, without any credential check. If you expose this port on a network interface accessible to other machines, **anyone on that network can use it as an anonymous VPN proxy**.
+>
+> Mitigations:
+> - **Bind to localhost only** on the host: `-p 127.0.0.1:3128:3128` — only processes on the same machine can connect.
+> - **Use Docker networks**: place `vpnproxy` and consumer containers on a dedicated bridge network and do not publish port 3128 on the host at all.
+> - **Firewall** the host port with `iptables` / `ufw` if you need to expose it to a specific IP range only.
+
 ---
 
 ## Environment Variables
@@ -314,6 +303,8 @@ All variables are optional. Defaults match a plain OpenVPN-only setup with no Ta
 
 | Variable | Default | Description |
 |---|---|---|
+| `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
+| `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver. |
 | `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup |
 | `TAILSCALE_AUTHKEY` | *(empty)* | Pre-auth key for non-interactive `tailscale up` |
 | `TAILSCALE_FLAGS` | *(empty)* | Extra flags appended verbatim to `tailscale up` |
@@ -460,7 +451,14 @@ services:
     volumes:
       - ./vpn-config:/vpn:ro
     ports:
-      - "3128:3128"
+      # Bind to localhost only — prevents other machines from using the proxy
+      - "127.0.0.1:3128:3128"
+    environment:
+      # DNS resolver — change to suit your needs (default: AdGuard Default, ads only)
+      DNS_SERVER_1: "94.140.14.14"
+      DNS_SERVER_2: "94.140.15.15"
+      # DNS_SERVER_1: "1.1.1.1"      # Cloudflare — no filtering
+      # DNS_SERVER_1: "94.140.14.15" # AdGuard Family — ads + adult content
 ```
 
 ### Full — OpenVPN + Proxy + Tailscale exit node
@@ -660,7 +658,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid `TAILSCALE_AUTHKEY` is provided. T
 | `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
 | `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
 | `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
-| `Dockerfile` | — | Image build definition (debian:trixie-slim base) |
+| `Dockerfile` | — | Image build definition (`debian:stable-slim` base) |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
 
 **Volume mounts:**

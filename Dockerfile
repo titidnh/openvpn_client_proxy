@@ -1,4 +1,4 @@
-FROM debian:trixie-slim
+FROM debian:stable-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -13,7 +13,9 @@ ENV ENABLE_TAILSCALE=false \
   TAILSCALE_FLAGS="" \
   TAILSCALE_ACCEPT_ROUTES=false \
   TAILSCALE_HOSTNAME="openvpn-client-proxy" \
-  TAILSCALE_ADVERTISE_EXIT_NODE=false
+  TAILSCALE_ADVERTISE_EXIT_NODE=false \
+  DNS_SERVER_1="94.140.14.14" \
+  DNS_SERVER_2="94.140.15.15"
 
 RUN groupadd -r vpn && useradd -r -g vpn -M -s /usr/sbin/nologin vpn
 
@@ -36,7 +38,6 @@ COPY --chmod=0755 healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh /start.sh
 
 COPY --chown=vpn:vpn privoxy.config default.action default.filter user.action user.filter /etc/privoxy/
-COPY --chown=vpn:vpn dnsmasq.conf /etc/dnsmasq.conf
 
 # /vpn        → mount your OpenVPN config (vpn.conf, certs, credentials)
 # /var/lib/tailscale → persist Tailscale identity across container recreations

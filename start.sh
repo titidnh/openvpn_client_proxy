@@ -264,8 +264,25 @@ setup_return_routes() {
 # Démarrage des services
 # ---------------------------------------------------------------------------
 
+configure_dnsmasq() {
+    local dns1="${DNS_SERVER_1:-94.140.14.14}"
+    local dns2="${DNS_SERVER_2:-94.140.15.15}"
+
+    cat > /etc/dnsmasq.conf <<EOF
+# Generated at container startup from DNS_SERVER_1 / DNS_SERVER_2 env vars
+listen-address=127.0.0.1
+bind-interfaces
+no-resolv
+server=${dns1}
+server=${dns2}
+cache-size=1000
+log-facility=/dev/null
+EOF
+    echo "[configure_dnsmasq] upstream resolvers: ${dns1}, ${dns2}"
+}
+
 start_dnsmasq() {
-    [ -f /etc/dnsmasq.conf ] || return 0
+    configure_dnsmasq
 
     echo "nameserver 127.0.0.1" > /etc/resolv.conf || {
         echo "nameserver 127.0.0.1" > /tmp/resolv.conf
