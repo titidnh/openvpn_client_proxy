@@ -41,7 +41,7 @@
 | 🧹 **Ad/Content Filtering** | DNS-level filtering — configurable via `DNS_SERVER_1` / `DNS_SERVER_2` env vars (default: AdGuard Default, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
-| 📦 **Minimal Image** | Based on `debian:stable-slim` — production-grade base, small footprint |
+| 📦 **Minimal Image** | Based on `alpine:3.20` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
 
 ---
 
@@ -658,7 +658,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid `TAILSCALE_AUTHKEY` is provided. T
 | `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
 | `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
 | `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
-| `Dockerfile` | — | Image build definition (`debian:stable-slim` base) |
+| `Dockerfile` | — | Image build definition (multi-stage: `alpine:3.20` base + Tailscale binary stage) |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
 
 **Volume mounts:**

@@ -54,15 +54,20 @@ fi
 # Vérifie que le trafic sort effectivement par le tunnel VPN.
 # C'est le test principal pour UDP (cas le plus courant) et le fallback pour TCP.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Test 2 : connectivité HTTP via Privoxy (ou nginx auth proxy)
+# Le port public est toujours 3128. Si PROXY_USER/PROXY_PASS sont définis,
+# les credentials sont passés au proxy.
+# ---------------------------------------------------------------------------
 proxy_port=3128
-if [ -f /etc/privoxy/privoxy.config ]; then
-    addr=$(awk '/^[[:space:]]*listen-address/{print $2; exit}' /etc/privoxy/privoxy.config || true)
-    [ -n "$addr" ] && proxy_port=$(echo "$addr" | awk -F: '{print $NF}')
+proxy_url="http://127.0.0.1:${proxy_port}"
+if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
+    proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
 fi
 
 if pidof openvpn >/dev/null 2>&1; then
     curl -fsS --max-time 5 \
-        --proxy "http://127.0.0.1:${proxy_port}" \
+        --proxy "$proxy_url" \
         http://example.com >/dev/null 2>&1 && exit 0
 fi
 

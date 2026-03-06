@@ -9,6 +9,7 @@ TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 # PID variables — initialisées à vide pour éviter les erreurs avec set -eu
 vpn_pid=""
 privoxy_pid=""
+nginx_pid=""
 dnsmasq_pid=""
 tailscaled_pid=""
 
@@ -66,8 +67,12 @@ check_vpn_ip() {
     fi
 
     local public_ip
+    local proxy_url="http://127.0.0.1:${proxy_port}"
+    if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
+        proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
+    fi
     public_ip=$(curl -fsS --max-time 10 \
-        --proxy "http://127.0.0.1:${proxy_port}" \
+        --proxy "$proxy_url" \
         https://api.ipify.org 2>/dev/null || true)
 
     if [ -n "$public_ip" ]; then
@@ -311,9 +316,105 @@ start_dnsmasq() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Proxy auth (nginx Basic Auth devant Privoxy)
+# ---------------------------------------------------------------------------
+# Si PROXY_USER et PROXY_PASS sont définis :
+#   - Privoxy écoute sur 127.0.0.1:3129 (interne, non exposé)
+#   - nginx écoute sur 0.0.0.0:3128, exige Basic Auth, proxifie vers :3129
+# Sinon :
+#   - Privoxy écoute directement sur 0.0.0.0:3128 (mode anonyme, comportement par défaut)
+# ---------------------------------------------------------------------------
+
+configure_privoxy_auth() {
+    local user="${PROXY_USER:-}"
+    local pass="${PROXY_PASS:-}"
+
+    if [ -n "$user" ] && [ -n "$pass" ]; then
+        # Privoxy sur port interne uniquement
+        sed -i 's|^listen-address .*|listen-address 127.0.0.1:3129|' /etc/privoxy/privoxy.config
+        echo "[configure_privoxy_auth] auth enabled — privoxy bound to 127.0.0.1:3129"
+    else
+        # Privoxy sur port public (pas d'auth)
+        sed -i 's|^listen-address .*|listen-address 0.0.0.0:3128|' /etc/privoxy/privoxy.config
+        echo "[configure_privoxy_auth] no auth — privoxy bound to 0.0.0.0:3128"
+    fi
+}
+
 start_privoxy() {
+    configure_privoxy_auth
     /usr/sbin/privoxy --no-daemon /etc/privoxy/privoxy.config &
     privoxy_pid=$!
+}
+
+start_nginx_auth() {
+    local user="${PROXY_USER:-}"
+    local pass="${PROXY_PASS:-}"
+
+    # Si pas d'auth configurée, nginx n'est pas démarré
+    [ -n "$user" ] && [ -n "$pass" ] || return 0
+
+    if ! command -v nginx >/dev/null 2>&1; then
+        echo "[start_nginx_auth] nginx not found — auth unavailable, falling back to no-auth mode"
+        sed -i 's|^listen-address .*|listen-address 0.0.0.0:3128|' /etc/privoxy/privoxy.config
+        return 0
+    fi
+
+    # Génération du fichier htpasswd (hash bcrypt via htpasswd d'apache2-utils)
+    local htpasswd_file="/etc/nginx/.proxy_htpasswd"
+    mkdir -p /etc/nginx
+    htpasswd -cbB "$htpasswd_file" "$user" "$pass"
+    chmod 600 "$htpasswd_file"
+
+    # Attendre que privoxy soit prêt sur :3129
+    local i
+    for i in 1 2 3 4 5; do
+        nc -z -w 1 127.0.0.1 3129 >/dev/null 2>&1 && break
+        sleep 1
+    done
+
+    # Génération de la config nginx à la volée
+    mkdir -p /run/nginx /var/log/nginx
+    cat > /etc/nginx/nginx_proxy_auth.conf <<'NGINXCONF'
+worker_processes 1;
+error_log /dev/null crit;
+pid /run/nginx/nginx_proxy_auth.pid;
+
+events { worker_connections 64; }
+
+http {
+    access_log off;
+
+    # Timeout généreux pour les connexions proxy longues
+    proxy_connect_timeout 60s;
+    proxy_read_timeout    300s;
+    proxy_send_timeout    60s;
+
+    server {
+        listen 0.0.0.0:3128;
+
+        auth_basic           "Proxy Authentication Required";
+        auth_basic_user_file /etc/nginx/.proxy_htpasswd;
+
+        location / {
+            proxy_pass http://127.0.0.1:3129;
+
+            # Transmettre les headers CONNECT pour le tunneling HTTPS
+            proxy_http_version 1.1;
+            proxy_set_header   Host            $host;
+            proxy_set_header   X-Real-IP       $remote_addr;
+            proxy_set_header   Connection      "";
+
+            # Ne pas transmettre le header Authorization à Privoxy
+            proxy_set_header   Authorization   "";
+        }
+    }
+}
+NGINXCONF
+
+    nginx -c /etc/nginx/nginx_proxy_auth.conf -g 'daemon off;' &
+    nginx_pid=$!
+    echo "[start_nginx_auth] started nginx auth proxy (pid=$nginx_pid) on 0.0.0.0:3128 → 127.0.0.1:3129"
 }
 
 start_openvpn() {
@@ -416,6 +517,7 @@ supervise_all() {
         setup_iptables
         setup_ip6tables
         start_privoxy
+        start_nginx_auth
         start_openvpn
         start_tailscale
 
@@ -439,7 +541,7 @@ supervise_all() {
             rm -f /tmp/vpn_healthy
         fi
 
-        echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
+        echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown} nginx_auth=${nginx_pid:-disabled}"
 
         local fail=0 proxy_port addr stable_cycles=0
         while true; do
@@ -466,7 +568,7 @@ supervise_all() {
                 fi
             fi
 
-            # Privoxy
+            # Privoxy — port interne si auth activée, public sinon
             proxy_port=3128
             if [ -f /etc/privoxy/privoxy.config ]; then
                 addr=$(awk '/^[[:space:]]*listen-address/{print $2; exit}' /etc/privoxy/privoxy.config || true)
@@ -475,6 +577,17 @@ supervise_all() {
             if ! nc -z -w 3 127.0.0.1 "$proxy_port" >/dev/null 2>&1; then
                 echo "[supervisor] privoxy not listening on 127.0.0.1:$proxy_port"
                 fail=1
+            fi
+
+            # nginx auth proxy (si activé)
+            if [ -n "$nginx_pid" ]; then
+                if ! kill -0 "$nginx_pid" >/dev/null 2>&1; then
+                    echo "[supervisor] nginx auth proxy died"
+                    fail=1
+                elif ! nc -z -w 3 127.0.0.1 3128 >/dev/null 2>&1; then
+                    echo "[supervisor] nginx auth proxy not listening on 127.0.0.1:3128"
+                    fail=1
+                fi
             fi
 
             # dnsmasq
@@ -509,10 +622,11 @@ supervise_all() {
         rm -f /tmp/vpn_healthy
         kill_if_running "$vpn_pid"
         kill_if_running "$privoxy_pid"
+        kill_if_running "$nginx_pid"
         kill_if_running "$dnsmasq_pid"
         kill_if_running "$tailscaled_pid"
         wait 2>/dev/null || true
-        vpn_pid="" privoxy_pid="" dnsmasq_pid="" tailscaled_pid=""
+        vpn_pid="" privoxy_pid="" nginx_pid="" dnsmasq_pid="" tailscaled_pid=""
 
         local sleep_s=$((5 * attempt))
         [ "$sleep_s" -gt 60 ] && sleep_s=60
