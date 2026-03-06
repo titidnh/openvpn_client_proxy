@@ -1,30 +1,19 @@
-FILTER remove_proxy_headers
-s/^(X-Forwarded-For:.*)$/X-Forwarded-For: removed/Ig
-s/^(Via:.*)$/Via: removed/Ig
-s/^(Forwarded:.*)$/Forwarded: removed/Ig
-s/^(Proxy-Connection:.*)$/Proxy-Connection: removed/Ig
-s/^(Client-IP:.*)$/Client-IP: removed/Ig
+###############################################################################
+# user.filter — Filtres personnels supplémentaires
+# Chargé APRÈS default.filter. Ajouter ici tes filtres custom.
+###############################################################################
 
-# Additional header removals to improve privacy
-s/^(Referer:.*)$/Referer: removed/Ig
-s/^(Referrer-Policy:.*)$/Referrer-Policy: removed/Ig
+##
+## FILTER: strip-cookie-consent
+## Supprime les bandeaux de cookie consent (cosmétique, best-effort)
+##
+FILTER: strip-cookie-consent Suppression bandeaux cookie consent
 
-FILTER strip_utm
-# Remove common UTM/tracking query parameters in URLs and Location headers
-s/([?&])utm_[^=]+=[^&]*//ig
-# Clean trailing ? or & left after removals
-s/[?&]$//g
-# Try to remove utm params in Location response header lines
-s/^(Location: [^\n\r?]*)([?&]utm_[^\n\r]*)/\1/Ig
+s/<div[^>]+(cookie-banner|cookie-consent|cookiebar|cookie-notice|gdpr-banner|cc-window)[^>]*>.*?<\/div>//igs
+s/<div[^>]+id=["\']?(CybotCookiebotDialog|onetrust-banner-sdk|sp-cc|truste-consent)[^"\']*["\']?[^>]*>.*?<\/div>//igs
 
-FILTER block_js_trackers
-# Remove external script tags that match common tracker keywords/domains
-s@<script[^>]*src=["']?[^"'>]*(googletagmanager|google-analytics|analytics\.js|analytics-min|gtag|ga\.js|doubleclick|adsservice|adservice|adsystem|fingerprint|fingerprintjs|fingerprint2|cdn\.ampproject|adservice)[^"'>]*["']?[^>]*>\s*</script>@@ig
-# Remove generic script tags loading from known tracking domains
-s@<script[^>]*src=["']?[^"'>]*(analytics|tracker|track)\.[^"'>]*["']?[^>]*>\s*</script>@@ig
-# Remove inline scripts that contain fingerprinting API usage (best-effort)
-s@<script[^>]*>[^<]*(CanvasRenderingContext2D|getImageData|toDataURL|WebGLRenderingContext|getContext\(|AudioContext|OfflineAudioContext)[^<]*</script>@@ig
-
-# Inject a small defensive script to override common fingerprinting APIs (may break some sites)
-# Insert before closing </head>
-s@</head>@<script>try{HTMLCanvasElement.prototype.toDataURL=function(){return ""};HTMLCanvasElement.prototype.getContext=function(){return null};if(window.WebGLRenderingContext){window.WebGLRenderingContext=function(){};}if(window.AudioContext){window.AudioContext=function(){throw new Error('blocked');}}navigator.__defineGetter__('plugins',function(){return []});navigator.__defineGetter__('languages',function(){return ['en-US']});}catch(e){};</script></head>@ig
+##
+## Ajouter tes filtres custom ici
+##
+# FILTER: mon-filtre Description
+# s/pattern/replacement/ig

@@ -40,21 +40,19 @@ fi
 : "${proto:=udp}"
 
 # ---------------------------------------------------------------------------
-# Test 1 : connectivité directe vers le serveur VPN
+# Test 1 : connectivité TCP directe vers le serveur VPN
+# Uniquement pour les configs TCP — nc -u (UDP) retourne toujours 0
+# même si le port est fermé, donc inutilisable comme indicateur réel.
+# Pour UDP on passe directement au test Privoxy (Test 2) qui est fiable.
 # ---------------------------------------------------------------------------
-if [ -n "$host" ]; then
-    if [ "$proto" = "tcp" ]; then
-        nc -z -w 3 "$host" "$port" >/dev/null 2>&1 && exit 0
-    else
-        # UDP : nc -u retourne toujours 0 même si le port est fermé,
-        # on l'utilise juste comme indicateur que le réseau est joignable
-        nc -z -u -w 3 "$host" "$port" >/dev/null 2>&1 && exit 0 || true
-    fi
+if [ -n "$host" ] && [ "$proto" = "tcp" ]; then
+    nc -z -w 3 "$host" "$port" >/dev/null 2>&1 && exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# Test 2 (fallback) : connectivité HTTP via Privoxy
-# Confirme que le trafic sort bien par le tunnel
+# Test 2 : connectivité HTTP via Privoxy
+# Vérifie que le trafic sort effectivement par le tunnel VPN.
+# C'est le test principal pour UDP (cas le plus courant) et le fallback pour TCP.
 # ---------------------------------------------------------------------------
 proxy_port=3128
 if [ -f /etc/privoxy/privoxy.config ]; then

@@ -1,0 +1,307 @@
+###############################################################################
+# default.filter — Filtres de nettoyage headers, URLs et HTML
+###############################################################################
+
+##
+## FILTER: remove-proxy-headers
+## Supprime les headers révélateurs dans les requêtes et réponses
+##
+FILTER: remove-proxy-headers Suppression headers proxy et tracking
+
+# Headers de forwarding IP
+s/^X-Forwarded-For:.*\n//im
+s/^Forwarded:.*\n//im
+s/^Forwarded-For:.*\n//im
+s/^Client-IP:.*\n//im
+s/^True-Client-IP:.*\n//im
+s/^CF-Connecting-IP:.*\n//im
+s/^X-Real-IP:.*\n//im
+s/^Via:.*\n//im
+s/^Proxy-Connection:.*\n//im
+
+# Headers de tracing distribué (OpenTelemetry / W3C)
+s/^traceparent:.*\n//im
+s/^tracestate:.*\n//im
+s/^baggage:.*\n//im
+s/^b3:.*\n//im
+s/^X-B3-TraceId:.*\n//im
+s/^X-B3-SpanId:.*\n//im
+s/^X-B3-ParentSpanId:.*\n//im
+s/^X-B3-Sampled:.*\n//im
+s/^X-Amzn-Trace-Id:.*\n//im
+s/^X-Request-Id:.*\n//im
+
+# Headers navigateur fingerprint
+s/^Referer:.*\n//im
+s/^Sec-CH-UA[^:]*:.*\n//img
+s/^Sec-Fetch-[^:]+:.*\n//img
+s/^Sec-Purpose:.*\n//im
+s/^Purpose:.*\n//im
+s/^Device-Memory:.*\n//im
+s/^Downlink:.*\n//im
+s/^RTT:.*\n//im
+s/^ECT:.*\n//im
+s/^Viewport-Width:.*\n//im
+s/^DPR:.*\n//im
+s/^Priority:.*\n//im
+
+# Privacy Sandbox / Topics API
+s/^Sec-Browsing-Topics:.*\n//im
+s/^Observe-Browsing-Topics:.*\n//im
+s/^Attribution-Reporting-Eligible:.*\n//im
+s/^Attribution-Reporting-Support:.*\n//im
+
+
+##
+## FILTER: strip-utm-params
+## Supprime les paramètres de tracking dans les URLs et redirections
+##
+FILTER: strip-utm-params Nettoyage paramètres UTM et tracking dans les URLs
+
+# UTM Google Analytics
+s/[?&]utm_source=[^&\s"']*//ig
+s/[?&]utm_medium=[^&\s"']*//ig
+s/[?&]utm_campaign=[^&\s"']*//ig
+s/[?&]utm_term=[^&\s"']*//ig
+s/[?&]utm_content=[^&\s"']*//ig
+s/[?&]utm_id=[^&\s"']*//ig
+s/[?&]utm_reader=[^&\s"']*//ig
+
+# Facebook / Meta
+s/[?&]fbclid=[^&\s"']*//ig
+s/[?&]fb_action_ids=[^&\s"']*//ig
+s/[?&]fb_action_types=[^&\s"']*//ig
+s/[?&]fb_source=[^&\s"']*//ig
+
+# Microsoft / Bing
+s/[?&]msclkid=[^&\s"']*//ig
+
+# Google Click ID
+s/[?&]gclid=[^&\s"']*//ig
+s/[?&]gclsrc=[^&\s"']*//ig
+s/[?&]dclid=[^&\s"']*//ig
+s/[?&]gbraid=[^&\s"']*//ig
+s/[?&]wbraid=[^&\s"']*//ig
+
+# Twitter / X
+s/[?&]twclid=[^&\s"']*//ig
+
+# LinkedIn
+s/[?&]li_fat_id=[^&\s"']*//ig
+
+# TikTok
+s/[?&]ttclid=[^&\s"']*//ig
+
+# Outbrain
+s/[?&]obOrigUrl=[^&\s"']*//ig
+
+# Divers
+s/[?&]mc_eid=[^&\s"']*//ig
+s/[?&]mc_cid=[^&\s"']*//ig
+s/[?&]_ga=[^&\s"']*//ig
+s/[?&]_gl=[^&\s"']*//ig
+s/[?&]_hsenc=[^&\s"']*//ig
+s/[?&]_hsmi=[^&\s"']*//ig
+s/[?&]yclid=[^&\s"']*//ig
+s/[?&]wickedid=[^&\s"']*//ig
+s/[?&]vero_id=[^&\s"']*//ig
+s/[?&]ref=[^&\s"']*//ig
+
+# Nettoyage résiduel : ? ou & orphelin en fin d'URL
+s/\?&/\?/g
+s/[?&]+$//g
+
+
+##
+## FILTER: strip-tracking-params
+## Supprime les pixels de tracking 1x1 et beacons dans le HTML
+##
+FILTER: strip-tracking-params Suppression pixels tracking et beacons HTML
+
+# Pixels 1x1 (img tracking)
+s/<img[^>]+(width|height)=["\']?1["\']?[^>]+(height|width)=["\']?1["\']?[^>]*>//ig
+s/<img[^>]+src=["\'][^"\']*\/(pixel|beacon|track|collect|ping|1x1|spacer)\.[^"\']*["\'][^>]*>//ig
+
+# Iframes de tracking
+s/<iframe[^>]+src=["\'][^"\']*\/(pixel|beacon|track|collect)[^"\']*["\'][^>]*>.*?<\/iframe>//igs
+
+
+##
+## FILTER: remove-js-trackers
+## Supprime les balises <script> chargeant des trackers externes connus
+##
+FILTER: remove-js-trackers Suppression scripts de tracking et analytics connus
+
+# Google Analytics / GTM / Ads
+s/<script[^>]*src=["\'][^"\']*googletagmanager\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*google-analytics\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*googletagservices\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*googlesyndication\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*doubleclick\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
+
+# Meta Pixel
+s/<script[^>]*src=["\'][^"\']*connect\.facebook\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*>\s*!function\(f,b,e,v,n,t,s\).*?fbq\s*=.*?<\/script>//igs
+
+# Analytics tiers
+s/<script[^>]*src=["\'][^"\']*hotjar\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*mouseflow\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*fullstory\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*segment\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*segment\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*amplitude\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*mixpanel\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*heap\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*heapanalytics\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*newrelic\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*nr-data\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*clarity\.ms[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*criteo\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*adnxs\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*fingerprintjs\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*fingerprint\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["\'][^"\']*fpjs\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
+
+# Inline dataLayer GTM
+s/<script[^>]*>\s*window\.dataLayer\s*=\s*window\.dataLayer[^<]*<\/script>//ig
+s/<script[^>]*>\s*\(function\(w,d,s,l,i\)\{[^<]*googletagmanager[^<]*<\/script>//ig
+
+# Inline fbq (Meta Pixel)
+s/<script[^>]*>[^<]*fbq\s*\([^<]*<\/script>//ig
+
+# Inline gtag
+s/<script[^>]*>[^<]*gtag\s*\([^<]*<\/script>//ig
+
+
+##
+## FILTER: anti-fingerprint
+## Injecte un script de protection contre le fingerprinting canvas/audio/webgl
+##
+FILTER: anti-fingerprint Injection protection anti-fingerprinting
+
+s|</head>|<script>(function(){try{
+  // Canvas fingerprint
+  var _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function(type){
+    if(type === 'image/png' && this.width === 16 && this.height === 16) return '';
+    return _toDataURL.apply(this, arguments);
+  };
+  // WebGL renderer info
+  var _getParameter = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function(param){
+    if(param === 37445 || param === 37446) return 'Generic GPU';
+    return _getParameter.call(this, param);
+  };
+  // AudioContext fingerprint
+  var _AC = window.AudioContext || window.webkitAudioContext;
+  if(_AC){ window.AudioContext = window.webkitAudioContext = function(){return new _AC({sampleRate:44100});}; }
+  // Navigator overrides
+  Object.defineProperty(navigator,'hardwareConcurrency',{get:function(){return 4;}});
+  Object.defineProperty(navigator,'deviceMemory',{get:function(){return 8;}});
+  Object.defineProperty(navigator,'languages',{get:function(){return['en-US','en'];}});
+  Object.defineProperty(navigator,'plugins',{get:function(){return[];}});
+  // Timezone normalization (lecture seule, on ne peut que masquer via intl)
+  var _DateTimeFormat = Intl.DateTimeFormat;
+  Intl.DateTimeFormat = function(locale, options){
+    if(options && options.timeZone === undefined) options = Object.assign({}, options, {timeZone:'UTC'});
+    return new _DateTimeFormat(locale, options);
+  };
+}catch(e){}})();</script></head>|igs
+
+
+##
+## FILTER: strip-named-tracking-cookies
+## Supprime les cookies de tracking connus par leur nom dans les headers
+## Set-Cookie (réponse serveur) et Cookie (requête client)
+## Couvre : Google Analytics, Meta Pixel, Microsoft Clarity,
+##          Hotjar, Criteo, LinkedIn, TikTok, et divers
+##
+FILTER: strip-named-tracking-cookies Suppression cookies de tracking par nom
+
+# --- Google Analytics & Ads ---
+# _ga, _ga_XXXXXX, _gid, _gat, _gat_UA-XXXXX, __utma..z, _gcl_au, _gcl_aw
+s/(?:^|(?<=;)\s*)_ga(?:_[A-Z0-9]+)?=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_gid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_gat(?:_[^=]+)?=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__utm[a-z]=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_gcl_(?:au|aw|dc|gs|gf)=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_gac_(?:[^=]+)=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__gads=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__gpi=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)ANID=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)IDE=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)NID=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)1P_JAR=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)CONSENT=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)SOCS=[^;,\n]*(?:;\s*)?//ig
+
+# --- Meta / Facebook ---
+# _fbp, _fbc, fr, datr, sb, wd, xs, c_user
+s/(?:^|(?<=;)\s*)_fbp=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_fbc=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)fr=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)datr=[^;,\n]*(?:;\s*)?//ig
+
+# --- Microsoft Clarity & Ads ---
+# _clck, _clsk, MUID, MC1, MSFPC, MR, SRM_B
+s/(?:^|(?<=;)\s*)_clck=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_clsk=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)MUID=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)MSFPC=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)MR=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)SRM_B=[^;,\n]*(?:;\s*)?//ig
+
+# --- Hotjar ---
+# _hjSessionUser_XXXXX, _hjSession_XXXXX, _hjid, _hjAbsoluteSessionInProgress
+s/(?:^|(?<=;)\s*)_hj[A-Za-z_]+(?:_\d+)?=[^;,\n]*(?:;\s*)?//ig
+
+# --- Criteo ---
+# uid, optout, cto_bundle, cto_lwid
+s/(?:^|(?<=;)\s*)cto_(?:bundle|lwid|optout)=[^;,\n]*(?:;\s*)?//ig
+
+# --- LinkedIn ---
+# li_gc, li_fat_id, AnalyticsSyncHistory, UserMatchHistory, bcookie, bscookie
+s/(?:^|(?<=;)\s*)li_gc=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)li_fat_id=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)AnalyticsSyncHistory=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)UserMatchHistory=[^;,\n]*(?:;\s*)?//ig
+
+# --- TikTok ---
+# _ttp, tt_webid_v2
+s/(?:^|(?<=;)\s*)_ttp=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)tt_webid_v2=[^;,\n]*(?:;\s*)?//ig
+
+# --- Twitter / X ---
+# _twitter_sess, eu_cn, personalization_id, guest_id_marketing
+s/(?:^|(?<=;)\s*)personalization_id=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)guest_id_marketing=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)guest_id_ads=[^;,\n]*(?:;\s*)?//ig
+
+# --- Segment ---
+# ajs_user_id, ajs_anonymous_id, ajs_group_id
+s/(?:^|(?<=;)\s*)ajs_(?:user|anonymous|group)_id=[^;,\n]*(?:;\s*)?//ig
+
+# --- Amplitude ---
+s/(?:^|(?<=;)\s*)amplitude_id[^=]*=[^;,\n]*(?:;\s*)?//ig
+
+# --- Mixpanel ---
+s/(?:^|(?<=;)\s*)mp_[a-f0-9]+_mixpanel=[^;,\n]*(?:;\s*)?//ig
+
+# --- Divers trackers ---
+# __cfduid (Cloudflare legacy), _pin_unauth, __hssc, __hssrc, __hstc (HubSpot)
+s/(?:^|(?<=;)\s*)__cfduid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__hs(?:sc|src|tc)=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)hubspotutk=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_pin_unauth=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_uetsid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_uetvid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)_hjTLDTest=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)uuid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)uid=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__qca=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__atuvc=[^;,\n]*(?:;\s*)?//ig
+s/(?:^|(?<=;)\s*)__atuvs=[^;,\n]*(?:;\s*)?//ig
+
+# Nettoyage d'un éventuel header Set-Cookie/Cookie vide après suppression
+s/^Set-Cookie:\s*;\s*$/Set-Cookie: /im
+s/^Cookie:\s*;\s*$/Cookie: /im

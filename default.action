@@ -1,0 +1,288 @@
+###############################################################################
+# default.action — Règles de blocage publicités & tracking
+# Appliquées globalement, surchargées par user.action si besoin
+###############################################################################
+
+##
+## 1. Activation des filtres sur tout le trafic
+##
+{ \
+  +filter{remove-proxy-headers} \
+  +filter{strip-utm-params} \
+  +filter{strip-tracking-params} \
+  +filter{remove-js-trackers} \
+  +filter{anti-fingerprint} \
+}
+/
+
+##
+## 2. Blocage des domaines publicitaires et de tracking connus
+##    Format : { +block{raison} } .domaine.com
+##
+
+## === Google Ads & Tracking ===
+{ +block{Google Ads/Tracking} }
+.doubleclick.net
+.googlesyndication.com
+.googleadservices.com
+.google-analytics.com
+.googletagmanager.com
+.googletagservices.com
+.googlevideo.com/videoplayback?.*ctier
+.adservice.google.com
+.adservice.google.be
+.adservice.google.fr
+.adservice.google.ch
+.adservice.google.de
+.pagead2.googlesyndication.com
+stats.g.doubleclick.net
+cm.g.doubleclick.net
+ad.doubleclick.net
+
+## === Meta / Facebook ===
+{ +block{Meta Tracking} }
+.facebook.com/tr
+.connect.facebook.net
+pixel.facebook.com
+an.facebook.com
+.atlassolutions.com
+
+## === Microsoft / LinkedIn ===
+{ +block{Microsoft Tracking} }
+.bat.bing.com
+.c.bing.com
+.ads.linkedin.com
+.snap.licdn.com
+.analytics.yahoo.com
+dc.services.visualstudio.com
+.clarity.ms
+browser.events.data.microsoft.com
+v10.events.data.microsoft.com
+self.events.data.microsoft.com
+
+## === Trackers tiers ===
+{ +block{Third-party Trackers} }
+.scorecardresearch.com
+.quantserve.com
+.comscore.com
+.omtrdc.net
+.2mdn.net
+.advertising.com
+.adnxs.com
+.criteo.com
+.criteo.net
+.criteo.fr
+.outbrain.com
+.taboola.com
+.revcontent.com
+.mgid.com
+.contentad.net
+.zemanta.com
+.openx.net
+.openx.com
+.rubiconproject.com
+.pubmatic.com
+.casalemedia.com
+.indexexchange.com
+.appnexus.com
+.tradedesk.com
+.adsrvr.org
+.bidswitch.net
+.lijit.com
+.sovrn.com
+.spotxchange.com
+.spotx.tv
+.contextweb.com
+.yieldmo.com
+.sharethrough.com
+.undertone.com
+.yieldbot.com
+.turn.com
+.mopub.com
+.smartadserver.com
+.smartclip.net
+.lotame.com
+.bluekai.com
+.kruxdigital.com
+.demdex.net
+.exelate.com
+.eyeota.net
+.addthis.com
+.sharethis.com
+
+## === Analytics & session replay ===
+{ +block{Analytics & Session Replay} }
+.hotjar.com
+.mouseflow.com
+.fullstory.com
+.logrocket.com
+.segment.com
+.segment.io
+.amplitude.com
+.mixpanel.com
+.heap.io
+.heapanalytics.com
+.kissmetrics.com
+.clicky.com
+.chartbeat.com
+.parsely.com
+.newrelic.com
+.nr-data.net
+.datadog-browser-agent.com
+.datadoghq.com
+.sentry.io
+.bugsnag.com
+.trackjs.com
+.rollbar.com
+.raygun.io
+.crazyegg.com
+.luckyorange.com
+.inspectlet.com
+.smartlook.com
+.clicktale.net
+.sessioncam.com
+.userzoom.com
+.qualtrics.com
+.userreport.com
+
+## === Privacy Sandbox / Fingerprinting as a Service ===
+{ +block{Fingerprinting Services} }
+.fingerprintjs.com
+.fingerprint.com
+.fpjs.io
+.castle.io
+.threatmetrix.com
+.iovation.com
+.tiqcdn.com
+.tealiumiq.com
+.ensighten.com
+.tagcommander.com
+.commanders1.com
+
+## === Télémétrie OS / apps ===
+{ +block{Telemetry} }
+.telemetry.microsoft.com
+vortex.data.microsoft.com
+settings-win.data.microsoft.com
+.telemetry.apple.com
+.crashlytics.com
+.firebase.io
+.firebaseapp.com
+app-measurement.com
+.appsflyer.com
+.adjust.com
+.adjust.io
+.branch.io
+.kochava.com
+.singular.net
+.tenjin.io
+
+## === Régies pub belges / européennes (pertinent pour ton réseau BE) ===
+{ +block{BE/EU Ad Networks} }
+.rossel.be
+.regie.be
+.dpgmedia.net
+.persgroep.net
+.adpepper.com
+.zanox.com
+.awin.com
+.tradedoubler.com
+.affilinet.com
+.webgains.com
+
+##
+## 3. Exceptions — domaines à ne PAS filtrer
+##    (décommenter ou ajouter selon tes besoins)
+##
+# { -block -filter }
+# .lelibre.local
+
+##
+## 4. Cookies tiers — suppression sur tous les domaines tiers
+##    +crunch-incoming-cookies : supprime Set-Cookie reçus du serveur
+##    +crunch-outgoing-cookies : supprime Cookie envoyés par le client
+##
+
+# Suppression complète cookies sur tous les domaines de tracking/pub déjà bloqués
+# (cohérent : si le domaine est bloqué, ses cookies ne passent pas non plus)
+
+## Google Ads & Tracking
+{ +crunch-incoming-cookies +crunch-outgoing-cookies }
+.doubleclick.net
+.googlesyndication.com
+.googleadservices.com
+.google-analytics.com
+.googletagmanager.com
+.googletagservices.com
+.adservice.google.com
+.adservice.google.be
+.adservice.google.fr
+.adservice.google.ch
+.adservice.google.de
+
+## Meta
+{ +crunch-incoming-cookies +crunch-outgoing-cookies }
+.connect.facebook.net
+pixel.facebook.com
+an.facebook.com
+.atlassolutions.com
+
+## Microsoft Tracking
+{ +crunch-incoming-cookies +crunch-outgoing-cookies }
+.bat.bing.com
+.clarity.ms
+browser.events.data.microsoft.com
+v10.events.data.microsoft.com
+self.events.data.microsoft.com
+.scorecardresearch.com
+.quantserve.com
+.comscore.com
+.omtrdc.net
+.demdex.net
+.exelate.com
+.bluekai.com
+.lotame.com
+
+## Analytics & session replay
+{ +crunch-incoming-cookies +crunch-outgoing-cookies }
+.hotjar.com
+.mouseflow.com
+.fullstory.com
+.logrocket.com
+.segment.com
+.segment.io
+.amplitude.com
+.mixpanel.com
+.heap.io
+.heapanalytics.com
+.kissmetrics.com
+.crazyegg.com
+.luckyorange.com
+.smartlook.com
+.clicktale.net
+.sessioncam.com
+
+## Régies pub
+{ +crunch-incoming-cookies +crunch-outgoing-cookies }
+.criteo.com
+.criteo.net
+.adnxs.com
+.rubiconproject.com
+.pubmatic.com
+.openx.net
+.openx.com
+.casalemedia.com
+.indexexchange.com
+.tradedesk.com
+.adsrvr.org
+.taboola.com
+.outbrain.com
+
+##
+## 5. Suppression des cookies de tracking par nom (sur TOUS les domaines)
+##    Utilise le filtre session-cookies-only pour les cookies à durée de vie longue
+##    et crunch-if-https-or-domain pour les cookies cross-site suspects
+##
+
+{ +filter{strip-named-tracking-cookies} }
+/

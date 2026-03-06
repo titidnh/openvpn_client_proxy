@@ -1,2 +1,32 @@
-{ +filter{remove_proxy_headers} +filter{strip_utm} +filter{block_js_trackers} }
+###############################################################################
+# user.action — Surcharges personnelles
+# Ce fichier est chargé APRÈS default.action : il peut activer, désactiver
+# ou remplacer n'importe quelle règle de default.action.
+###############################################################################
+
+##
+## Activer tous les filtres sur tout le trafic (redondant avec default mais explicite)
+##
+{ \
+  +filter{remove-proxy-headers} \
+  +filter{strip-utm-params} \
+  +filter{strip-tracking-params} \
+  +filter{remove-js-trackers} \
+  +filter{anti-fingerprint} \
+}
 /
+
+##
+## Exceptions : désactiver le filtrage HTML sur ces domaines
+## (évite de casser des apps qui dépendent de leur propre JS)
+## Décommenter selon tes besoins :
+##
+# { -filter{remove-js-trackers} -filter{anti-fingerprint} }
+# .lelibre.local
+# .monapp.interne
+
+##
+## Blocage personnel supplémentaire (ajouter tes domaines ici)
+##
+# { +block{Perso} }
+# .domaine-a-bloquer.com

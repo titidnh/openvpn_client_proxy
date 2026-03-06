@@ -162,7 +162,7 @@ setup_ip6tables() {
     local docker6_network
     docker6_network="$(ip -o addr show dev eth0 2>/dev/null | awk '$3=="inet6"{print $4; exit}' || true)"
 
-    get_vpn_port_proto
+    # VPN_PORT and VPN_PROTO already set by setup_iptables
 
     ipt6 -F; ipt6 -X
     ipt6 -t nat -F
@@ -363,14 +363,14 @@ check_openvpn_routing() {
     out=$(ip route get 8.8.8.8 2>/dev/null || true)
     dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
     [ -z "$dev" ] && return 1
-    case "$dev" in tun*) ;; *) return 1 ;; esac
+    case "$dev" in tun*|tap*) ;; *) return 1 ;; esac
     ip -4 addr show dev "$dev" >/dev/null 2>&1
 }
 
 restart_openvpn() {
     echo "[supervisor] restarting openvpn (pid=${vpn_pid:-unknown})"
     kill_if_running "$vpn_pid"
-    wait 2>/dev/null || true   # attend sans pid — évite "wait: pid vide" avec set -eu
+    wait "$vpn_pid" 2>/dev/null || true
     vpn_pid=""
     start_openvpn
     local i
@@ -424,7 +424,7 @@ supervise_all() {
 
         echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown}"
 
-        local fail=0 proxy_port addr
+        local fail=0 proxy_port addr stable_cycles=0
         while true; do
             sleep 10
 
@@ -478,6 +478,14 @@ supervise_all() {
             fi
 
             [ "$fail" -eq 1 ] && break
+
+            # Reset backoff counter after 6 consecutive stable cycles (~1 min)
+            stable_cycles=$((stable_cycles + 1))
+            if [ "$stable_cycles" -ge 6 ] && [ "$attempt" -gt 1 ]; then
+                attempt=1
+                stable_cycles=0
+                echo "[supervisor] services stable — backoff counter reset"
+            fi
         done
 
         echo "[supervisor] failure detected - killing services to restart"
