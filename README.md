@@ -1,6 +1,6 @@
 # OpenVPN Client Proxy
 
-> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) with configurable upstream DNS — featuring a network **kill switch**, **DNS leak protection**, and optional **Tailscale** integration.
+> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
 
 ---
 
@@ -18,6 +18,7 @@
 - [Environment Variables](#environment-variables)
 - [Network Kill Switch](#network-kill-switch)
 - [DNS Leak Protection](#dns-leak-protection)
+- [Proxy Authentication (Optional)](#proxy-authentication-optional)
 - [Supervision & Auto-Restart](#supervision--auto-restart)
 - [Healthcheck](#healthcheck)
 - [Tailscale Integration (Optional)](#tailscale-integration-optional)
@@ -38,6 +39,7 @@
 | 🛡️ **DNS Leak Protection** | All DNS queries are forced through local `dnsmasq` — no external resolver bypass possible |
 | 🔁 **Auto-Reconnect** | Built-in supervisor with exponential backoff (5s → 60s cap) restarts services on failure |
 | 🌐 **HTTP Proxy** | Privoxy on port `3128` — usable by any app or container that supports HTTP proxies |
+| 🔑 **Optional Proxy Auth** | Set `PROXY_USER` + `PROXY_PASS` to require HTTP Basic Auth on the proxy (nginx fronts Privoxy) |
 | 🧹 **Ad/Content Filtering** | DNS-level filtering — configurable via `DNS_SERVER_1` / `DNS_SERVER_2` env vars (default: AdGuard Default, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
@@ -288,12 +290,7 @@ buffer-limit 10240
 
 To change the listening port, edit `listen-address` and update the `-p` flag in `docker run` (or `ports:` in compose) accordingly.
 
-> ⚠️ **Security notice — Privoxy has no authentication.** The proxy listens on `0.0.0.0:3128` and accepts connections from any client that can reach port 3128, without any credential check. If you expose this port on a network interface accessible to other machines, **anyone on that network can use it as an anonymous VPN proxy**.
->
-> Mitigations:
-> - **Bind to localhost only** on the host: `-p 127.0.0.1:3128:3128` — only processes on the same machine can connect.
-> - **Use Docker networks**: place `vpnproxy` and consumer containers on a dedicated bridge network and do not publish port 3128 on the host at all.
-> - **Firewall** the host port with `iptables` / `ufw` if you need to expose it to a specific IP range only.
+> ⚠️ **Security notice — by default, Privoxy has no authentication.** The proxy accepts connections from any client that can reach port 3128. See the [Proxy Authentication](#proxy-authentication-optional) section below to enable Basic Auth, or at minimum bind the port to `127.0.0.1` only.
 
 ---
 
@@ -305,6 +302,8 @@ All variables are optional. Defaults match a plain OpenVPN-only setup with no Ta
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
 | `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver. |
+| `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
+| `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth. Uses bcrypt hashing via `htpasswd`. |
 | `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup |
 | `TAILSCALE_AUTHKEY` | *(empty)* | Pre-auth key for non-interactive `tailscale up` |
 | `TAILSCALE_FLAGS` | *(empty)* | Extra flags appended verbatim to `tailscale up` |
@@ -343,6 +342,68 @@ If the Docker runtime mounts `/etc/resolv.conf` as read-only, the entrypoint fal
 
 ---
 
+## Proxy Authentication (Optional)
+
+By default, Privoxy listens on `0.0.0.0:3128` with **no authentication** — any client that can reach the port can use it as a VPN proxy. This is fine for isolated Docker networks or localhost-only setups.
+
+When you set both `PROXY_USER` and `PROXY_PASS`, the container automatically activates **HTTP Basic Authentication**:
+
+```
+Client → nginx :3128 (Basic Auth check) → Privoxy 127.0.0.1:3129 → VPN tunnel
+```
+
+- **nginx** acts as an authenticating reverse proxy on port `3128` (the only publicly exposed port).
+- **Privoxy** is moved to `127.0.0.1:3129` — unreachable from outside the container.
+- Passwords are hashed with **bcrypt** via `htpasswd` at container startup.
+- The `Authorization` header is stripped before forwarding to Privoxy.
+
+### Enabling authentication
+
+```bash
+docker run \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -e PROXY_USER="alice" \
+  -e PROXY_PASS="s3cr3t!" \
+  -v ./vpn-config:/vpn:ro \
+  -p 3128:3128 \
+  titidnh/openvpn_client_proxy:latest
+```
+
+Or in Docker Compose:
+
+```yaml
+environment:
+  PROXY_USER: "alice"
+  PROXY_PASS: "s3cr3t!"
+```
+
+### Using the authenticated proxy
+
+```bash
+# curl
+curl --proxy http://alice:s3cr3t!@127.0.0.1:3128 https://api.ipify.org
+
+# wget
+http_proxy=http://alice:s3cr3t!@127.0.0.1:3128 wget -qO- https://api.ipify.org
+
+# Environment variables
+export HTTP_PROXY="http://alice:s3cr3t!@127.0.0.1:3128"
+export HTTPS_PROXY="http://alice:s3cr3t!@127.0.0.1:3128"
+```
+
+> ⚠️ **HTTP Basic Auth transmits credentials in base64** (not encrypted). Always combine with a network-level control (localhost binding, Docker internal network) in production. Use a strong, unique password.
+
+### Without authentication — hardening options
+
+If you choose not to enable `PROXY_USER`/`PROXY_PASS`, apply at least one of the following:
+
+| Mitigation | How |
+|---|---|
+| **Localhost only** | `-p 127.0.0.1:3128:3128` — only local processes can connect |
+| **Internal Docker network** | Place containers on a named bridge, do not publish port 3128 on the host |
+| **Host firewall** | Allow port 3128 only from trusted IPs via `iptables` / `ufw` |
+
 ## Supervision & Auto-Restart
 
 The container runs a built-in supervisor loop (`start.sh`) that polls all services every **10 seconds**:
@@ -350,8 +411,9 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 | Condition | Action |
 |---|---|
 | OpenVPN process died | Lightweight OpenVPN restart. If routing is restored within 5s → continue normally |
-| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + OpenVPN + Tailscale) |
-| Privoxy not listening on port `3128` | Full service restart |
+| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + nginx + OpenVPN + Tailscale) |
+| Privoxy not listening on its port | Full service restart |
+| nginx auth proxy died or not listening (if enabled) | Full service restart |
 | dnsmasq process died | Full service restart |
 | DNS resolution via `127.0.0.1` fails | Full service restart |
 | Tailscale process died (if enabled) | Full service restart |
@@ -459,9 +521,36 @@ services:
       DNS_SERVER_2: "94.140.15.15"
       # DNS_SERVER_1: "1.1.1.1"      # Cloudflare — no filtering
       # DNS_SERVER_1: "94.140.14.15" # AdGuard Family — ads + adult content
+      # Optional: enable proxy authentication
+      # PROXY_USER: "alice"
+      # PROXY_PASS: "s3cr3t!"
 ```
 
-### Full — OpenVPN + Proxy + Tailscale exit node
+### With proxy authentication
+
+```yaml
+services:
+  vpnproxy:
+    image: titidnh/openvpn_client_proxy:latest
+    container_name: vpn_proxy
+    restart: always
+    mem_limit: 192M
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    volumes:
+      - ./vpn-config:/vpn:ro
+    ports:
+      - "3128:3128"   # safe to expose publicly — auth required
+    environment:
+      PROXY_USER: "alice"
+      PROXY_PASS: "s3cr3t!"
+      DNS_SERVER_1: "94.140.14.14"
+      DNS_SERVER_2: "94.140.15.15"
+```
+
+### Full — OpenVPN + Proxy auth + Tailscale exit node
 
 ```yaml
 services:
@@ -520,8 +609,12 @@ services:
       vpnproxy:
         condition: service_healthy
     environment:
+      # Without auth:
       HTTP_PROXY: "http://vpn_proxy:3128"
       HTTPS_PROXY: "http://vpn_proxy:3128"
+      # With auth:
+      # HTTP_PROXY: "http://alice:s3cr3t!@vpn_proxy:3128"
+      # HTTPS_PROXY: "http://alice:s3cr3t!@vpn_proxy:3128"
     command: ["curl", "-s", "https://api.ipify.org"]
 ```
 
@@ -550,26 +643,44 @@ The CI/CD pipeline (`.github/workflows/docker-publish.yml`) automatically builds
 
 ## Using the Proxy
 
-Once the container is running and healthy, configure any HTTP-proxy-aware client to use `http://127.0.0.1:3128` (or `http://<host-ip>:3128` from another machine/container).
+Once the container is running and healthy, configure any HTTP-proxy-aware client to use `http://127.0.0.1:3128`.
+
+If authentication is enabled (`PROXY_USER` + `PROXY_PASS`), include the credentials in the proxy URL: `http://user:pass@127.0.0.1:3128`.
 
 ### curl
 
 ```sh
+# Without auth
 curl --proxy http://127.0.0.1:3128 https://api.ipify.org
+
+# With auth
+curl --proxy http://alice:s3cr3t!@127.0.0.1:3128 https://api.ipify.org
 ```
 
 ### wget
 
 ```sh
+# Without auth
 http_proxy=http://127.0.0.1:3128 https_proxy=http://127.0.0.1:3128 \
+  wget -qO- https://api.ipify.org
+
+# With auth
+http_proxy=http://alice:s3cr3t!@127.0.0.1:3128 \
+https_proxy=http://alice:s3cr3t!@127.0.0.1:3128 \
   wget -qO- https://api.ipify.org
 ```
 
 ### Environment variables (Linux/macOS)
 
 ```sh
+# Without auth
 export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
+export NO_PROXY="localhost,127.0.0.1"
+
+# With auth
+export HTTP_PROXY="http://alice:s3cr3t!@127.0.0.1:3128"
+export HTTPS_PROXY="http://alice:s3cr3t!@127.0.0.1:3128"
 export NO_PROXY="localhost,127.0.0.1"
 ```
 
@@ -579,15 +690,25 @@ Go to **Settings → Network Settings → Manual proxy configuration**:
 - HTTP Proxy: `127.0.0.1` — Port: `3128`
 - Check "Also use this proxy for HTTPS"
 
+If auth is enabled, Firefox will prompt for credentials on first use.
+
 ### Python (requests)
 
 ```python
 import requests
 
+# Without auth
 proxies = {
     "http":  "http://127.0.0.1:3128",
     "https": "http://127.0.0.1:3128",
 }
+
+# With auth
+proxies = {
+    "http":  "http://alice:s3cr3t!@127.0.0.1:3128",
+    "https": "http://alice:s3cr3t!@127.0.0.1:3128",
+}
+
 r = requests.get("https://api.ipify.org", proxies=proxies)
 print(r.text)  # → your VPN exit IP
 ```
@@ -600,7 +721,22 @@ print(r.text)  # → your VPN exit IP
 
 1. Check that the VPN tunnel is up: `docker logs vpn_proxy | grep "public IP via VPN"`
 2. Verify the sentinel file exists: `docker exec vpn_proxy ls /tmp/vpn_healthy`
-3. Confirm Privoxy is listening: `docker exec vpn_proxy nc -z 127.0.0.1 3128 && echo OK`
+3. Confirm the proxy is listening: `docker exec vpn_proxy nc -z 127.0.0.1 3128 && echo OK`
+
+### `407 Proxy Authentication Required`
+
+Auth is enabled but credentials are missing from the proxy URL. Add `user:pass@`:
+
+```sh
+curl --proxy http://alice:s3cr3t!@127.0.0.1:3128 https://api.ipify.org
+```
+
+Check that nginx started correctly:
+
+```sh
+docker logs vpn_proxy | grep nginx
+docker exec vpn_proxy nginx -t -c /etc/nginx/nginx_proxy_auth.conf
+```
 
 ### `tun: Operation not permitted`
 
