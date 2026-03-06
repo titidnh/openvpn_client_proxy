@@ -13,15 +13,19 @@ ARG TAILSCALE_VERSION=""
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
- && if [ -z "${TAILSCALE_VERSION}" ]; then \
-      TAILSCALE_VERSION=$(curl -fsSL "https://pkgs.tailscale.com/stable/?mode=json" \
+ && VERSION="${TAILSCALE_VERSION}" \
+ && if [ -z "$VERSION" ]; then \
+      VERSION=$(curl -fsSL "https://pkgs.tailscale.com/stable/?mode=json" \
         | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4); \
     fi \
- && echo "Tailscale version: ${TAILSCALE_VERSION}" \
- && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" \
-    | tar -xz --strip-components=1 \
-         "tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscale" \
-         "tailscale_${TAILSCALE_VERSION}_${ARCH}/tailscaled" \
+ && echo "Tailscale version: ${VERSION}" \
+ && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${VERSION}_${ARCH}.tgz" \
+    -o tailscale.tgz \
+ && tar -xz --strip-components=1 \
+         -f tailscale.tgz \
+         "tailscale_${VERSION}_${ARCH}/tailscale" \
+         "tailscale_${VERSION}_${ARCH}/tailscaled" \
+ && rm tailscale.tgz \
  && chmod 755 tailscale tailscaled
 
 # =============================================================================
