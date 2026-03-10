@@ -367,6 +367,25 @@ parse_dot_servers() {
         [ -z "$ip" ] && ip=$(nslookup "$host" 2>/dev/null | \
             awk '/^Address: /{print $2; exit}' || true)
 
+        # --- FALLBACK : IPs hardcodées si la résolution échoue au boot ---
+        # Utile quand le DNS du container n'est pas encore opérationnel
+        # au moment où parse_dot_servers() est appelé (avant dnsmasq).
+        if [ -z "$ip" ]; then
+            case "$host" in
+                dns.adguard-dns.com)       ip="94.140.14.14" ;;
+                dns-unfiltered.adguard.com) ip="94.140.14.140" ;;
+                cloudflare-dns.com|1dot1dot1dot1.cloudflare-dns.com) ip="1.1.1.1" ;;
+                dns.google)                ip="8.8.8.8" ;;
+                dns.quad9.net)             ip="9.9.9.9" ;;
+            esac
+            if [ -n "$ip" ]; then
+                log_json WARN parse_dot_servers \
+                    "DNS resolution failed — using hardcoded fallback IP" \
+                    "host=${host}" "ip=${ip}" >&2
+            fi
+        fi
+        # ------------------------------------------------------------------
+
         if [ -n "$ip" ]; then
             DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
             dot_ip_map_set "$host" "$ip"
