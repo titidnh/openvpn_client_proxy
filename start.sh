@@ -162,6 +162,16 @@ setup_iptables() {
     iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5053 -j ACCEPT
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5053 -j ACCEPT
 
+    # Port 53 toujours autorisé uniquement vers DNS_SERVER_1/2 (DOT actif ou non)
+    # Nécessaire au boot pour que parse_dot_servers() puisse résoudre les hostnames DoT
+    # et pour que dnsmasq puisse contacter les upstreams.
+    for _dns in "${DNS_SERVER_1:-}" "${DNS_SERVER_2:-}"; do
+        [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
+        iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
+        log_json INFO setup_iptables "allowing port 53" "ip=${_dns}"
+    done
+
     if [ "${ENABLE_DOT:-false}" = "true" ]; then
         if [ -n "$DOT_RESOLVED_IPS" ]; then
             for dot_ip in $DOT_RESOLVED_IPS; do
@@ -171,11 +181,12 @@ setup_iptables() {
         else
             log_json WARN setup_iptables "DoT: no resolved IPs — TCP 853 not explicitly allowed"
         fi
-        # Kill switch DNS : bloquer toute sortie UDP/TCP 53 externe
+        # Kill switch : bloquer tout DNS 53 externe sauf DNS_SERVER_1/2 déjà autorisés ci-dessus
         iptables -A OUTPUT -p udp ! -d 127.0.0.0/8 --dport 53 -j DROP
         iptables -A OUTPUT -p tcp ! -d 127.0.0.0/8 --dport 53 -j DROP
-        log_json INFO setup_iptables "DoT DNS leak prevention: external port 53 blocked"
+        log_json INFO setup_iptables "DoT DNS leak prevention: external port 53 blocked except DNS_SERVER_1/2"
     else
+        # Mode non-DoT : autoriser aussi les upstreams dnsmasq (si différents de DNS_SERVER_1/2)
         while read -r dns; do
             [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
             iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
@@ -367,24 +378,26 @@ parse_dot_servers() {
         [ -z "$ip" ] && ip=$(nslookup "$host" 2>/dev/null | \
             awk '/^Address: /{print $2; exit}' || true)
 
-        # --- FALLBACK : IPs hardcodées si la résolution échoue au boot ---
-        # Utile quand le DNS du container n'est pas encore opérationnel
-        # au moment où parse_dot_servers() est appelé (avant dnsmasq).
+        # --- FALLBACK : résolution via DNS_SERVER_1/2 fournis par l'utilisateur ---
+        # Au boot, dnsmasq n'est pas encore lancé donc getent/nslookup peut échouer.
+        # On réessaie explicitement via les serveurs DNS configurés (DNS_SERVER_1/2).
         if [ -z "$ip" ]; then
-            case "$host" in
-                dns.adguard-dns.com)       ip="94.140.14.14" ;;
-                dns-unfiltered.adguard.com) ip="94.140.14.140" ;;
-                cloudflare-dns.com|1dot1dot1dot1.cloudflare-dns.com) ip="1.1.1.1" ;;
-                dns.google)                ip="8.8.8.8" ;;
-                dns.quad9.net)             ip="9.9.9.9" ;;
-            esac
-            if [ -n "$ip" ]; then
-                log_json WARN parse_dot_servers \
-                    "DNS resolution failed — using hardcoded fallback IP" \
-                    "host=${host}" "ip=${ip}" >&2
-            fi
+            local dns1 dns2
+            dns1="${DNS_SERVER_1:-}"
+            dns2="${DNS_SERVER_2:-}"
+            for _dns in $dns1 $dns2; do
+                [ -z "$_dns" ] && continue
+                ip=$(nslookup "$host" "$_dns" 2>/dev/null | \
+                    awk '/^Address: /{print $2; exit}' || true)
+                if [ -n "$ip" ]; then
+                    log_json WARN parse_dot_servers \
+                        "resolved via fallback DNS_SERVER" \
+                        "host=${host}" "ip=${ip}" "via=${_dns}" >&2
+                    break
+                fi
+            done
         fi
-        # ------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         if [ -n "$ip" ]; then
             DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
