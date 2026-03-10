@@ -60,6 +60,25 @@ log_json() {
 
 ipt6() { ip6tables "$@" 2>/dev/null || true; }
 
+# ipt_add_853 / ipt_del_853 — ajoute/supprime une règle port 853
+# en choisissant iptables (IPv4) ou ip6tables (IPv6) selon l'adresse
+ipt_add_853() {
+    local ip="$1"
+    if [[ "$ip" =~ : ]]; then
+        ipt6 -A OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT
+    else
+        iptables -A OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT
+    fi
+}
+ipt_del_853() {
+    local ip="$1"
+    if [[ "$ip" =~ : ]]; then
+        ipt6 -D OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT 2>/dev/null || true
+    else
+        iptables -D OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT 2>/dev/null || true
+    fi
+}
+
 kill_if_running() {
     local pid="$1"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -175,7 +194,7 @@ setup_iptables() {
     if [ "${ENABLE_DOT:-false}" = "true" ]; then
         if [ -n "$DOT_RESOLVED_IPS" ]; then
             for dot_ip in $DOT_RESOLVED_IPS; do
-                iptables -A OUTPUT -p tcp -d "$dot_ip" --dport 853 -j ACCEPT
+                ipt_add_853 "$dot_ip"
                 log_json INFO setup_iptables "DoT: allowing TCP 853" "ip=${dot_ip}"
             done
         else
@@ -360,12 +379,16 @@ dot_ip_map_get() {
     fi
 }
 
+# Fichier pour les forward-addr unbound (évite le subshell dans configure_unbound)
+DOT_FORWARD_ADDRS_FILE="/tmp/dot_forward_addrs"
+
 parse_dot_servers() {
     local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
     servers=$(echo "$servers" | tr ',' ' ')
-    # Réinitialiser IPs et fichier de map à chaque appel (nouveau cycle de démarrage)
+    # Réinitialiser IPs, fichier de map et forward-addr à chaque appel
     DOT_RESOLVED_IPS=""
     : > "$DOT_IP_MAP_FILE"
+    : > "$DOT_FORWARD_ADDRS_FILE"
 
     for entry in $servers; do
         local proto host
@@ -373,12 +396,14 @@ parse_dot_servers() {
         host=$(echo "$entry"  | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
         [ -z "$host" ] && continue
 
+        # Forcer IPv4 uniquement — unbound a do-ip6:no, les adresses IPv6
+        # comme forwarders seraient silencieusement ignorées.
         local ip
-        ip=$(getent hosts "$host" 2>/dev/null | awk 'NR==1{print $1}' || true)
+        ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '/STREAM/{print $1; exit}' || true)
         [ -z "$ip" ] && ip=$(nslookup "$host" 2>/dev/null | \
-            awk '/^Address: /{print $2; exit}' || true)
+            awk '/^Address: /{ if ($2 !~ /:/) {print $2; exit} }' || true)
 
-        # --- FALLBACK : résolution via DNS_SERVER_1/2 fournis par l'utilisateur ---
+        # --- FALLBACK : résolution IPv4 via DNS_SERVER_1/2 fournis par l'utilisateur ---
         # Au boot, dnsmasq n'est pas encore lancé donc getent/nslookup peut échouer.
         # On réessaie explicitement via les serveurs DNS configurés (DNS_SERVER_1/2).
         if [ -z "$ip" ]; then
@@ -388,10 +413,10 @@ parse_dot_servers() {
             for _dns in $dns1 $dns2; do
                 [ -z "$_dns" ] && continue
                 ip=$(nslookup "$host" "$_dns" 2>/dev/null | \
-                    awk '/^Address: /{print $2; exit}' || true)
+                    awk '/^Address: /{ if ($2 !~ /:/) {print $2; exit} }' || true)
                 if [ -n "$ip" ]; then
                     log_json WARN parse_dot_servers \
-                        "resolved via fallback DNS_SERVER" \
+                        "resolved via fallback DNS_SERVER (IPv4)" \
                         "host=${host}" "ip=${ip}" "via=${_dns}" >&2
                     break
                 fi
@@ -402,10 +427,11 @@ parse_dot_servers() {
         if [ -n "$ip" ]; then
             DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
             dot_ip_map_set "$host" "$ip"
+            # Écriture dans le fichier (pas stdout) pour survivre hors subshell
             if [ "$proto" = "https" ]; then
-                echo "        forward-addr: ${ip}@443#${host}"
+                echo "        forward-addr: ${ip}@443#${host}" >> "$DOT_FORWARD_ADDRS_FILE"
             else
-                echo "        forward-addr: ${ip}@853#${host}"
+                echo "        forward-addr: ${ip}@853#${host}" >> "$DOT_FORWARD_ADDRS_FILE"
             fi
             log_json INFO parse_dot_servers "resolved" \
                 "host=${host}" "ip=${ip}" "proto=${proto}" >&2
@@ -432,13 +458,15 @@ configure_unbound() {
         return 1
     fi
 
-    local forward_addrs
-    forward_addrs=$(parse_dot_servers)
+    # Appel direct (pas subshell) pour que DOT_RESOLVED_IPS soit peuplé dans le process parent
+    parse_dot_servers
 
-    if [ -z "$forward_addrs" ]; then
+    if [ ! -s "$DOT_FORWARD_ADDRS_FILE" ]; then
         log_json ERROR configure_unbound "no valid DoT servers parsed — DoT disabled"
         return 1
     fi
+    local forward_addrs
+    forward_addrs=$(cat "$DOT_FORWARD_ADDRS_FILE")
 
     # DNSSEC : permissive par défaut, strict si ENABLE_DNSSEC=true
     local dnssec_mode="val-permissive-mode: yes"
@@ -593,7 +621,8 @@ _dot_refresh_loop() {
             host=$(echo "$entry" | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
             [ -z "$host" ] && continue
 
-            new_ip=$(getent hosts "$host" 2>/dev/null | awk 'NR==1{print $1}' || true)
+            # IPv4 uniquement (cohérent avec parse_dot_servers)
+            new_ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '/STREAM/{print $1; exit}' || true)
             old_ip=$(dot_ip_map_get "$host")
 
             if [ -z "$new_ip" ]; then
@@ -609,8 +638,8 @@ _dot_refresh_loop() {
             log_json INFO dot_refresh "IP changed — updating iptables"                 "host=${host}" "old=${old_ip:-none}" "new=${new_ip}"
 
             # Ajout avant suppression = zéro interruption de connectivité DoT
-            iptables -A OUTPUT -p tcp -d "$new_ip" --dport 853 -j ACCEPT 2>/dev/null || true
-            [ -n "$old_ip" ] &&                 iptables -D OUTPUT -p tcp -d "$old_ip" --dport 853 -j ACCEPT 2>/dev/null || true
+            ipt_add_853 "$new_ip"
+            [ -n "$old_ip" ] && ipt_del_853 "$old_ip"
 
             # Mise à jour du fichier partagé et du tableau associatif
             dot_ip_map_set "$host" "$new_ip"

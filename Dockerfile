@@ -99,7 +99,7 @@ COPY --from=tailscale-dl /tailscaled /usr/local/bin/tailscaled
 COPY --chmod=0755 openvpn.sh      /usr/local/bin/openvpn.sh
 COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh        /start.sh
-
+RUN sed -i 's/\r//' /start.sh
 COPY --chown=vpn:vpn \
      privoxy.config default.action default.filter user.action user.filter \
      /etc/privoxy/
