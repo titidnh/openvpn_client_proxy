@@ -378,9 +378,9 @@ parse_dot_servers() {
             log_json INFO parse_dot_servers "resolved" \
                 "host=${host}" "ip=${ip}" "proto=${proto}" >&2
         else
-            echo "        forward-addr: ${host}@853#${host}"
             log_json WARN parse_dot_servers \
-                "could not resolve, using hostname directly" "host=${host}" >&2
+                "could not resolve, skipping unresolved DoT server" "host=${host}" >&2
+            continue
         fi
     done
 }
