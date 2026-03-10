@@ -473,6 +473,7 @@ configure_unbound() {
     if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
         dnssec_mode="val-permissive-mode: no"
         mkdir -p /var/lib/unbound
+        chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
         unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || true
         log_json INFO configure_unbound "DNSSEC strict validation enabled"
     fi
@@ -508,6 +509,7 @@ forward-zone:
     fi
 
     mkdir -p /etc/unbound /var/lib/unbound
+    chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
 
     cat > /etc/unbound/unbound.conf <<EOF
 server:

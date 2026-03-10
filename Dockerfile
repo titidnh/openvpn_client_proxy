@@ -87,6 +87,10 @@ RUN apk add --no-cache \
       python3 \
       socat
 
+# Ensure unbound runtime directories exist and are owned by the unbound user
+RUN mkdir -p /var/lib/unbound /etc/unbound \
+ && chown -R unbound:unbound /var/lib/unbound /etc/unbound 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Tailscale binaries from stage 1
 # ---------------------------------------------------------------------------
