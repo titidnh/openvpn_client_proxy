@@ -6,27 +6,65 @@ set -o pipefail
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 
-# PID variables — initialisées à vide pour éviter les erreurs avec set -eu
+# PID variables
 vpn_pid=""
 privoxy_pid=""
 nginx_pid=""
 dnsmasq_pid=""
 tailscaled_pid=""
+unbound_pid=""
+metrics_pid=""
+dot_refresh_pid=""
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Compteurs de métriques
+METRIC_RESTART_COUNT=0
+METRIC_VPN_UP=0
+METRIC_DOT_ACTIVE=0
+METRIC_LAST_RESTART_TS=0
+METRIC_START_TS=$(date +%s)
 
-# Wrapper ip6tables : absorbe les erreurs (module absent, IPv6 indisponible)
+# IPs DoT résolues avant que resolv.conf soit modifié par dnsmasq
+DOT_RESOLVED_IPS=""
+declare -A DOT_HOST_IP_MAP
+
+# ===========================================================================
+# Logging JSON structuré
+# ===========================================================================
+# Usage : log_json LEVEL component "message" [key=val ...]
+log_json() {
+    local level="$1"
+    local component="$2"
+    local message="$3"
+    shift 3
+
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    local extra=""
+    for kv in "$@"; do
+        local k v
+        k="${kv%%=*}"
+        v="${kv#*=}"
+        v="${v//\\/\\\\}"
+        v="${v//\"/\\\"}"
+        extra="${extra}, \"${k}\": \"${v}\""
+    done
+
+    printf '{"ts":"%s","level":"%s","component":"%s","msg":"%s"%s}\n' \
+        "$ts" "$level" "$component" "$message" "$extra"
+}
+
+# ===========================================================================
+# Helpers généraux
+# ===========================================================================
+
 ipt6() { ip6tables "$@" 2>/dev/null || true; }
 
-# Tue un processus seulement si son PID est non vide
 kill_if_running() {
     local pid="$1"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
 }
 
-# Lit le port et protocole OpenVPN depuis $conf (défauts : 1194/udp)
 get_vpn_port_proto() {
     VPN_PORT="1194"
     VPN_PROTO="udp"
@@ -43,7 +81,6 @@ get_vpn_port_proto() {
     fi
 }
 
-# Émet les IPs upstream déclarées dans dnsmasq.conf (une par ligne)
 get_dns_upstreams() {
     [ -f /etc/dnsmasq.conf ] || return 0
     grep -E '^[[:space:]]*server=' /etc/dnsmasq.conf \
@@ -51,11 +88,9 @@ get_dns_upstreams() {
         | awk -F'[#@]' '{print $1}'
 }
 
-# Vérifie et log l'IP publique via le proxy pour confirmer que le trafic
-# sort bien par le VPN. Appelé une fois après que le tunnel est monté.
 check_vpn_ip() {
     if ! command -v curl >/dev/null 2>&1; then
-        echo "[check_vpn_ip] curl not available, skipping public IP check"
+        log_json WARN check_vpn_ip "curl not available, skipping public IP check"
         return 0
     fi
 
@@ -71,20 +106,20 @@ check_vpn_ip() {
     if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
         proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
     fi
-    public_ip=$(curl -fsS --max-time 10 \
-        --proxy "$proxy_url" \
+    public_ip=$(curl -fsS --max-time 10 --proxy "$proxy_url" \
         https://api.ipify.org 2>/dev/null || true)
 
     if [ -n "$public_ip" ]; then
-        echo "[check_vpn_ip] public IP via VPN: $public_ip"
+        log_json INFO check_vpn_ip "public IP via VPN confirmed" "ip=${public_ip}"
+        METRIC_VPN_UP=1
     else
-        echo "[check_vpn_ip] could not determine public IP (tunnel may still be initializing)"
+        log_json WARN check_vpn_ip "could not determine public IP (tunnel may still be initializing)"
     fi
 }
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Firewall IPv4
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 setup_iptables() {
     local docker_network
@@ -92,19 +127,15 @@ setup_iptables() {
 
     get_vpn_port_proto
 
-    iptables -F
-    iptables -X
-    iptables -t nat -F
-    iptables -P INPUT   DROP
-    iptables -P FORWARD DROP
-    iptables -P OUTPUT  DROP
+    iptables -F; iptables -X; iptables -t nat -F
+    iptables -P INPUT DROP; iptables -P FORWARD DROP; iptables -P OUTPUT DROP
 
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A INPUT -i lo -j ACCEPT
     [ -n "$docker_network" ] && iptables -A INPUT -s "$docker_network" -j ACCEPT
 
-    # FORWARD — Docker + Tailscale exit-node vers tunnel VPN
+    # FORWARD
     iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A FORWARD -i lo -j ACCEPT
     [ -n "$docker_network" ] && iptables -A FORWARD -s "$docker_network" -j ACCEPT
@@ -114,7 +145,7 @@ setup_iptables() {
     iptables -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A FORWARD -i tap+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    # OUTPUT — interfaces autorisées
+    # OUTPUT — interfaces
     iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A OUTPUT -o lo         -j ACCEPT
     iptables -A OUTPUT -o tun+       -j ACCEPT
@@ -122,14 +153,35 @@ setup_iptables() {
     iptables -A OUTPUT -o tailscale+ -j ACCEPT
     [ -n "$docker_network" ] && iptables -A OUTPUT -d "$docker_network" -j ACCEPT
 
-    # OUTPUT — DNS local (dnsmasq) + upstreams
-    iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT
-    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53 -j ACCEPT
-    while read -r dns; do
-        [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-        iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-    done < <(get_dns_upstreams)
+    # OUTPUT — métriques locales (loopback uniquement)
+    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 9100 -j ACCEPT
+
+    # OUTPUT — DNS local
+    iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53   -j ACCEPT
+    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 53   -j ACCEPT
+    iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5053 -j ACCEPT
+    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5053 -j ACCEPT
+
+    if [ "${ENABLE_DOT:-false}" = "true" ]; then
+        if [ -n "$DOT_RESOLVED_IPS" ]; then
+            for dot_ip in $DOT_RESOLVED_IPS; do
+                iptables -A OUTPUT -p tcp -d "$dot_ip" --dport 853 -j ACCEPT
+                log_json INFO setup_iptables "DoT: allowing TCP 853" "ip=${dot_ip}"
+            done
+        else
+            log_json WARN setup_iptables "DoT: no resolved IPs — TCP 853 not explicitly allowed"
+        fi
+        # Kill switch DNS : bloquer toute sortie UDP/TCP 53 externe
+        iptables -A OUTPUT -p udp ! -d 127.0.0.0/8 --dport 53 -j DROP
+        iptables -A OUTPUT -p tcp ! -d 127.0.0.0/8 --dport 53 -j DROP
+        log_json INFO setup_iptables "DoT DNS leak prevention: external port 53 blocked"
+    else
+        while read -r dns; do
+            [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
+            iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
+        done < <(get_dns_upstreams)
+    fi
 
     # OUTPUT — DNS Docker interne
     if grep -Fq "127.0.0.11" /etc/resolv.conf 2>/dev/null; then
@@ -138,50 +190,42 @@ setup_iptables() {
         iptables -A OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
     fi
 
-    # OUTPUT — trafic OpenVPN (port explicite + gid-owner en bonus)
+    # OUTPUT — OpenVPN
     iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
     iptables -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
     iptables -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
 
-    # NAT — tout ce qui sort par le tunnel est masqué (couvre OpenVPN + Tailscale exit-node)
+    # NAT
     iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
-    echo "[setup_iptables] IPv4 configured — kill switch active, VPN on $VPN_PROTO/$VPN_PORT"
+    log_json INFO setup_iptables "IPv4 configured — kill switch active" \
+        "vpn_proto=${VPN_PROTO}" "vpn_port=${VPN_PORT}"
 }
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Firewall IPv6
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 setup_ip6tables() {
     if ! command -v ip6tables >/dev/null 2>&1; then
-        echo "[setup_ip6tables] ip6tables not installed, skipping"
-        return 0
+        log_json WARN setup_ip6tables "ip6tables not installed, skipping"; return 0
     fi
     if [ ! -f /proc/net/if_inet6 ]; then
-        echo "[setup_ip6tables] IPv6 not available, skipping"
-        return 0
+        log_json WARN setup_ip6tables "IPv6 not available, skipping"; return 0
     fi
 
     local docker6_network
     docker6_network="$(ip -o addr show dev eth0 2>/dev/null | awk '$3=="inet6"{print $4; exit}' || true)"
 
-    # VPN_PORT and VPN_PROTO already set by setup_iptables
+    ipt6 -F; ipt6 -X; ipt6 -t nat -F
+    ipt6 -P INPUT DROP; ipt6 -P FORWARD DROP; ipt6 -P OUTPUT DROP
 
-    ipt6 -F; ipt6 -X
-    ipt6 -t nat -F
-    ipt6 -P INPUT   DROP
-    ipt6 -P FORWARD DROP
-    ipt6 -P OUTPUT  DROP
-
-    # INPUT
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    ipt6 -A INPUT -p icmpv6 -j ACCEPT   # NDP indispensable
+    ipt6 -A INPUT -p icmpv6 -j ACCEPT
     ipt6 -A INPUT -i lo -j ACCEPT
     [ -n "$docker6_network" ] && ipt6 -A INPUT -s "$docker6_network" -j ACCEPT
 
-    # FORWARD — Docker + Tailscale exit-node vers tunnel VPN
     ipt6 -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -p icmpv6 -j ACCEPT
     ipt6 -A FORWARD -i lo -j ACCEPT
@@ -192,7 +236,6 @@ setup_ip6tables() {
     ipt6 -A FORWARD -i tun+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -i tap+ -o tailscale+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    # OUTPUT — interfaces autorisées
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A OUTPUT -o lo         -j ACCEPT
     ipt6 -A OUTPUT -o tun+       -j ACCEPT
@@ -200,38 +243,46 @@ setup_ip6tables() {
     ipt6 -A OUTPUT -o tailscale+ -j ACCEPT
     [ -n "$docker6_network" ] && ipt6 -A OUTPUT -d "$docker6_network" -j ACCEPT
 
-    # OUTPUT — DNS local (dnsmasq) + upstreams IPv6
-    ipt6 -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT
-    ipt6 -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT
-    while read -r dns; do
-        [[ "$dns" =~ : ]] || continue   # IPv6 contient toujours ':'
-        ipt6 -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-        ipt6 -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-    done < <(get_dns_upstreams)
+    # OUTPUT — métriques locales (loopback IPv6)
+    ipt6 -A OUTPUT -p tcp -d ::1 --dport 9100 -j ACCEPT
 
-    # OUTPUT — trafic OpenVPN (port explicite + gid-owner en bonus)
+    ipt6 -A OUTPUT -p udp -d ::1 --dport 53   -j ACCEPT
+    ipt6 -A OUTPUT -p tcp -d ::1 --dport 53   -j ACCEPT
+    ipt6 -A OUTPUT -p udp -d ::1 --dport 5053 -j ACCEPT
+    ipt6 -A OUTPUT -p tcp -d ::1 --dport 5053 -j ACCEPT
+
+    if [ "${ENABLE_DOT:-false}" = "true" ]; then
+        ipt6 -A OUTPUT -p udp ! -d ::1 --dport 53 -j DROP 2>/dev/null || true
+        ipt6 -A OUTPUT -p tcp ! -d ::1 --dport 53 -j DROP 2>/dev/null || true
+        log_json INFO setup_ip6tables "DoT DNS leak prevention: IPv6 port 53 blocked"
+    else
+        while read -r dns; do
+            [[ "$dns" =~ : ]] || continue
+            ipt6 -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
+            ipt6 -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
+        done < <(get_dns_upstreams)
+    fi
+
     ipt6 -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
     ipt6 -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT
     ipt6 -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT
 
-    # NAT — tout ce qui sort par le tunnel est masqué (couvre OpenVPN + Tailscale exit-node)
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
-    echo "[setup_ip6tables] IPv6 configured — kill switch active"
+    log_json INFO setup_ip6tables "IPv6 configured — kill switch active"
 }
 
-# ---------------------------------------------------------------------------
-# Routes retour (appelé après que le tunnel tun est monté)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Routes retour
+# ===========================================================================
 
 setup_return_routes() {
     local iface gw gw6 ips ip6s
 
     iface=$(ip route 2>/dev/null | awk '/^default/{print $5; exit}')
     if [ -z "$iface" ]; then
-        echo "[setup_return_routes] no default interface found, skipping"
-        return 0
+        log_json WARN setup_return_routes "no default interface found, skipping"; return 0
     fi
 
     gw=$(ip -4 route show dev "$iface" 2>/dev/null | awk '/default/{print $3; exit}')
@@ -239,7 +290,6 @@ setup_return_routes() {
     ips=$(ip -4 addr show dev "$iface" 2>/dev/null | awk -F'[ /]+' '/inet /{print $3}')
     ip6s=$(ip -6 addr show dev "$iface" 2>/dev/null | awk -F'[ /]+' '/inet6.*global/{print $3}')
 
-    # Table 10 IPv4
     for ip in $ips; do
         ip -4 rule show table 10 2>/dev/null | grep -q "$ip" || \
             ip rule add from "$ip" lookup 10 2>/dev/null || true
@@ -251,7 +301,6 @@ setup_return_routes() {
             ip route add default via "$gw" table 10 2>/dev/null || true
     }
 
-    # Table 10 IPv6
     for ip6 in $ip6s; do
         ip -6 rule show table 10 2>/dev/null | grep -q "$ip6" || \
             ip -6 rule add from "$ip6" lookup 10 2>/dev/null || true
@@ -262,19 +311,467 @@ setup_return_routes() {
             ip -6 route add default via "$gw6" table 10 2>/dev/null || true
     }
 
-    echo "[setup_return_routes] return routes configured via $iface"
+    log_json INFO setup_return_routes "return routes configured" "iface=${iface}"
+}
+
+# ===========================================================================
+# DNS-over-TLS via Unbound
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# parse_dot_servers — résout les hostnames DoT AVANT que dnsmasq prenne la
+# main sur resolv.conf. Peuple DOT_RESOLVED_IPS et DOT_HOST_IP_MAP.
+# Retourne les lignes forward-addr pour unbound.conf.
+# ---------------------------------------------------------------------------
+# Fichier persistant pour les IPs DoT — lisible depuis les subshells (dot_refresh)
+DOT_IP_MAP_FILE="/tmp/dot_ip_map"
+
+# dot_ip_map_set HOST IP — écrit dans le fichier et met à jour le tableau associatif
+dot_ip_map_set() {
+    local host="$1" ip="$2"
+    DOT_HOST_IP_MAP["$host"]="$ip"
+    # Écriture atomique via tmp + mv
+    local tmp; tmp=$(mktemp /tmp/dot_ip_map.XXXXXX)
+    # Recopie les entrées existantes en excluant cet host
+    [ -f "$DOT_IP_MAP_FILE" ] && grep -v "^${host}=" "$DOT_IP_MAP_FILE" > "$tmp" || true
+    echo "${host}=${ip}" >> "$tmp"
+    mv -f "$tmp" "$DOT_IP_MAP_FILE"
+}
+
+# dot_ip_map_get HOST — retourne l'IP ou vide
+dot_ip_map_get() {
+    local host="$1"
+    # Priorité : tableau en mémoire (process courant), sinon fichier (subshells)
+    if [ -n "${DOT_HOST_IP_MAP[$host]:-}" ]; then
+        echo "${DOT_HOST_IP_MAP[$host]}"
+    elif [ -f "$DOT_IP_MAP_FILE" ]; then
+        grep "^${host}=" "$DOT_IP_MAP_FILE" | cut -d= -f2- | tail -1
+    fi
+}
+
+parse_dot_servers() {
+    local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
+    servers=$(echo "$servers" | tr ',' ' ')
+    # Réinitialiser IPs et fichier de map à chaque appel (nouveau cycle de démarrage)
+    DOT_RESOLVED_IPS=""
+    : > "$DOT_IP_MAP_FILE"
+
+    for entry in $servers; do
+        local proto host
+        proto=$(echo "$entry" | awk -F'://' '{print $1}')
+        host=$(echo "$entry"  | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
+        [ -z "$host" ] && continue
+
+        local ip
+        ip=$(getent hosts "$host" 2>/dev/null | awk 'NR==1{print $1}' || true)
+        [ -z "$ip" ] && ip=$(nslookup "$host" 2>/dev/null | \
+            awk '/^Address: /{print $2; exit}' || true)
+
+        if [ -n "$ip" ]; then
+            DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
+            dot_ip_map_set "$host" "$ip"
+            if [ "$proto" = "https" ]; then
+                echo "        forward-addr: ${ip}@443#${host}"
+            else
+                echo "        forward-addr: ${ip}@853#${host}"
+            fi
+            log_json INFO parse_dot_servers "resolved" \
+                "host=${host}" "ip=${ip}" "proto=${proto}" >&2
+        else
+            echo "        forward-addr: ${host}@853#${host}"
+            log_json WARN parse_dot_servers \
+                "could not resolve, using hostname directly" "host=${host}" >&2
+        fi
+    done
 }
 
 # ---------------------------------------------------------------------------
-# Démarrage des services
+# configure_unbound — génère /etc/unbound/unbound.conf avec :
+#   - DNSSEC (optionnel, ENABLE_DNSSEC=true)
+#   - TLS cert bundle / pinning (DOT_TLS_CERT_BUNDLE)
+#   - Split DNS (DNS_SPLIT="corp.local=10.0.0.53,internal.net=10.0.1.53")
+#   - Support DoH via https:// prefix dans DOT_DNS_SERVERS
 # ---------------------------------------------------------------------------
+configure_unbound() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    if ! command -v unbound >/dev/null 2>&1; then
+        log_json ERROR configure_unbound "unbound binary not found — DoT disabled"
+        return 1
+    fi
+
+    local forward_addrs
+    forward_addrs=$(parse_dot_servers)
+
+    if [ -z "$forward_addrs" ]; then
+        log_json ERROR configure_unbound "no valid DoT servers parsed — DoT disabled"
+        return 1
+    fi
+
+    # DNSSEC : permissive par défaut, strict si ENABLE_DNSSEC=true
+    local dnssec_mode="val-permissive-mode: yes"
+    if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
+        dnssec_mode="val-permissive-mode: no"
+        mkdir -p /var/lib/unbound
+        unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || true
+        log_json INFO configure_unbound "DNSSEC strict validation enabled"
+    fi
+
+    # TLS cert bundle — système par défaut, overridable pour pinning
+    local tls_cert_bundle="/etc/ssl/certs/ca-certificates.crt"
+    if [ -n "${DOT_TLS_CERT_BUNDLE:-}" ] && [ -f "${DOT_TLS_CERT_BUNDLE}" ]; then
+        tls_cert_bundle="${DOT_TLS_CERT_BUNDLE}"
+        log_json INFO configure_unbound "TLS cert bundle (pinning)" "bundle=${tls_cert_bundle}"
+    fi
+
+    # Split DNS : zones forwardées vers un resolver interne, sans TLS
+    local split_zones=""
+    if [ -n "${DNS_SPLIT:-}" ]; then
+        local split_entries
+        split_entries=$(echo "${DNS_SPLIT}" | tr ',' ' ')
+        for entry in $split_entries; do
+            local domain resolver res_ip res_port
+            domain="${entry%%=*}"
+            resolver="${entry#*=}"
+            res_ip="${resolver%%:*}"
+            res_port="${resolver##*:}"
+            [ "$res_port" = "$res_ip" ] && res_port="53"
+            [ -z "$domain" ] || [ -z "$res_ip" ] && continue
+            split_zones="${split_zones}
+forward-zone:
+    name: \"${domain}\"
+    forward-tls-upstream: no
+    forward-addr: ${res_ip}@${res_port}"
+            log_json INFO configure_unbound "split DNS zone" \
+                "domain=${domain}" "resolver=${res_ip}:${res_port}"
+        done
+    fi
+
+    mkdir -p /etc/unbound /var/lib/unbound
+
+    cat > /etc/unbound/unbound.conf <<EOF
+server:
+    interface: 127.0.0.1
+    port: 5053
+    do-ip4: yes
+    do-ip6: no
+    do-udp: yes
+    do-tcp: yes
+    do-not-query-localhost: no
+
+    verbosity: 1
+    logfile: ""
+
+    # Masquage d'identité
+    hide-identity: yes
+    hide-version: yes
+
+    # Durcissement
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    harden-referral-path: yes
+    use-caps-for-id: yes
+    unwanted-reply-threshold: 10000000
+
+    # Cache
+    cache-min-ttl: 60
+    cache-max-ttl: 86400
+    prefetch: yes
+    prefetch-key: yes
+    serve-expired: yes
+    serve-expired-ttl: 86400
+
+    # TLS — vérification du certificat serveur DoT (chain complète)
+    tls-cert-bundle: ${tls_cert_bundle}
+
+    # DNSSEC
+    ${dnssec_mode}
+EOF
+
+    if [ "${ENABLE_DNSSEC:-false}" = "true" ] && [ -f /var/lib/unbound/root.key ]; then
+        echo "    auto-trust-anchor-file: /var/lib/unbound/root.key" \
+            >> /etc/unbound/unbound.conf
+    fi
+
+    # Zone principale → DoT
+    cat >> /etc/unbound/unbound.conf <<EOF
+
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+${forward_addrs}
+EOF
+
+    # Zones split DNS (override, sans TLS)
+    [ -n "$split_zones" ] && echo "$split_zones" >> /etc/unbound/unbound.conf
+
+    log_json INFO configure_unbound "config written" \
+        "dnssec=${ENABLE_DNSSEC:-false}" \
+        "tls_bundle=${tls_cert_bundle}" \
+        "split_dns=${DNS_SPLIT:-none}"
+}
+
+# ---------------------------------------------------------------------------
+# start_unbound
+# ---------------------------------------------------------------------------
+start_unbound() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    configure_unbound || return 0
+
+    if ! unbound-checkconf /etc/unbound/unbound.conf >/tmp/unbound.test 2>&1; then
+        log_json ERROR start_unbound "config test failed"
+        cat /tmp/unbound.test >&2 || true
+        return 1
+    fi
+
+    unbound -d -c /etc/unbound/unbound.conf &
+    unbound_pid=$!
+
+    local bound=0 i
+    for i in 1 2 3 4 5 6; do
+        nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 && { bound=1; break; }
+        sleep 1
+    done
+
+    if [ "$bound" -eq 1 ]; then
+        METRIC_DOT_ACTIVE=1
+        log_json INFO start_unbound "started — DoT active" "pid=${unbound_pid}" "port=5053"
+    else
+        log_json ERROR start_unbound "unbound did not bind to 127.0.0.1:5053"
+        unbound_pid=""
+        METRIC_DOT_ACTIVE=0
+    fi
+}
+
+# _dot_refresh_loop — boucle de re-résolution périodique des IPs DoT.
+# Définie ici (scope global bash) et lancée en background par start_dot_ip_refresh.
+# La communication avec le superviseur parent se fait via DOT_IP_MAP_FILE.
+_dot_refresh_loop() {
+    local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
+    while true; do
+        sleep "$interval"
+
+        local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
+        servers=$(echo "$servers" | tr ',' ' ')
+
+        for entry in $servers; do
+            local host new_ip old_ip
+            host=$(echo "$entry" | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
+            [ -z "$host" ] && continue
+
+            new_ip=$(getent hosts "$host" 2>/dev/null | awk 'NR==1{print $1}' || true)
+            old_ip=$(dot_ip_map_get "$host")
+
+            if [ -z "$new_ip" ]; then
+                log_json WARN dot_refresh "re-resolve failed" "host=${host}"
+                continue
+            fi
+
+            if [ "$new_ip" = "$old_ip" ]; then
+                log_json INFO dot_refresh "IP unchanged" "host=${host}" "ip=${new_ip}"
+                continue
+            fi
+
+            log_json INFO dot_refresh "IP changed — updating iptables"                 "host=${host}" "old=${old_ip:-none}" "new=${new_ip}"
+
+            # Ajout avant suppression = zéro interruption de connectivité DoT
+            iptables -A OUTPUT -p tcp -d "$new_ip" --dport 853 -j ACCEPT 2>/dev/null || true
+            [ -n "$old_ip" ] &&                 iptables -D OUTPUT -p tcp -d "$old_ip" --dport 853 -j ACCEPT 2>/dev/null || true
+
+            # Mise à jour du fichier partagé et du tableau associatif
+            dot_ip_map_set "$host" "$new_ip"
+        done
+    done
+}
+
+# ===========================================================================
+# Refresh dynamique des IPs DoT
+# ===========================================================================
+# Re-résout les hostnames DoT périodiquement (DOT_IP_REFRESH_INTERVAL, défaut 3600s).
+# Si une IP change : ajoute la nouvelle règle iptables AVANT de supprimer l'ancienne
+# (zéro interruption de connectivité DoT).
+# Ce sous-processus survit aux cycles de restart du superviseur principal.
+# ===========================================================================
+start_dot_ip_refresh() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
+    log_json INFO dot_refresh "starting periodic IP refresh" "interval=${interval}s"
+
+    # Lance la boucle de refresh (fonction définie avant start_dot_ip_refresh,
+    # visible globalement — les fonctions bash ne sont jamais vraiment "locales").
+    _dot_refresh_loop &
+    dot_refresh_pid=$!
+    log_json INFO dot_refresh "refresh loop started" "pid=${dot_refresh_pid}"
+}
+
+# ===========================================================================
+# Endpoint métriques Prometheus (127.0.0.1:9100)
+# ===========================================================================
+# Format text/plain compatible Prometheus (exposition via nc en boucle).
+# Activé par ENABLE_METRICS=true. Loopback uniquement (iptables le garantit).
+#
+# Métriques :
+#   vpn_up                          1=tunnel actif
+#   vpn_restart_total               cycles de restart superviseur
+#   dot_active                      1=DoT actif
+#   process_uptime_seconds          uptime du conteneur
+#   last_restart_timestamp_seconds  epoch du dernier restart
+# ===========================================================================
+start_metrics() {
+    [ "${ENABLE_METRICS:-false}" = "true" ] || return 0
+
+    if ! command -v nc >/dev/null 2>&1; then
+        log_json WARN start_metrics "nc not available — metrics disabled"; return 0
+    fi
+
+    # Script de réponse HTTP — lu à chaque requête depuis les fichiers d'état
+    cat > /tmp/metrics_handler.sh <<'HANDLER'
+#!/bin/sh
+vpn_up=$(cat /tmp/metric_vpn_up 2>/dev/null || echo 0)
+restart_total=$(cat /tmp/metric_restart_count 2>/dev/null || echo 0)
+dot_active=$(cat /tmp/metric_dot_active 2>/dev/null || echo 0)
+start_ts=$(cat /tmp/metric_start_ts 2>/dev/null || echo 0)
+last_restart=$(cat /tmp/metric_last_restart_ts 2>/dev/null || echo 0)
+now=$(date +%s)
+uptime_s=$((now - start_ts))
+
+body="# HELP vpn_up VPN tunnel status (1=up 0=down)
+# TYPE vpn_up gauge
+vpn_up ${vpn_up}
+# HELP vpn_restart_total Total supervisor restart cycles
+# TYPE vpn_restart_total counter
+vpn_restart_total ${restart_total}
+# HELP dot_active DNS-over-TLS active
+# TYPE dot_active gauge
+dot_active ${dot_active}
+# HELP process_uptime_seconds Container uptime in seconds
+# TYPE process_uptime_seconds gauge
+process_uptime_seconds ${uptime_s}
+# HELP last_restart_timestamp_seconds Epoch of last supervisor restart
+# TYPE last_restart_timestamp_seconds gauge
+last_restart_timestamp_seconds ${last_restart}
+"
+len=${#body}
+printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+    "$len" "$body"
+HANDLER
+    chmod +x /tmp/metrics_handler.sh
+
+    update_metrics
+
+    # socat fork : chaque connexion sur :9100 exécute metrics_handler.sh
+    # socat est utilisé car netcat-openbsd (Alpine) ne supporte pas -e.
+    if command -v socat >/dev/null 2>&1; then
+        socat TCP-LISTEN:9100,bind=127.0.0.1,reuseaddr,fork EXEC:/tmp/metrics_handler.sh &
+        metrics_pid=$!
+    else
+        # Fallback : boucle nc sans -e (netcat-openbsd)
+        # Content-Length calculé à chaque requête, réponse via pipe
+        (
+            while true; do
+                nc -l 127.0.0.1 9100 < <(/tmp/metrics_handler.sh) 2>/dev/null || sleep 1
+            done
+        ) &
+        metrics_pid=$!
+        log_json WARN start_metrics "socat not found, using nc fallback (one request at a time)"
+    fi
+    log_json INFO start_metrics "metrics endpoint started" \
+        "pid=${metrics_pid}" "addr=127.0.0.1:9100"
+}
+
+update_metrics() {
+    printf '%s\n' "${METRIC_VPN_UP}"          > /tmp/metric_vpn_up          2>/dev/null || true
+    printf '%s\n' "${METRIC_RESTART_COUNT}"   > /tmp/metric_restart_count   2>/dev/null || true
+    printf '%s\n' "${METRIC_DOT_ACTIVE}"      > /tmp/metric_dot_active      2>/dev/null || true
+    printf '%s\n' "${METRIC_START_TS}"        > /tmp/metric_start_ts        2>/dev/null || true
+    printf '%s\n' "${METRIC_LAST_RESTART_TS}" > /tmp/metric_last_restart_ts 2>/dev/null || true
+}
+
+# ===========================================================================
+# Drop capabilities post-démarrage
+# ===========================================================================
+# Après démarrage de tous les services, supprime les capacités Linux
+# non nécessaires du superviseur. NET_ADMIN + NET_RAW sont conservées.
+# Activé par DROP_CAPS=true. Nécessite libcap2 (capsh) dans l'image.
+# ===========================================================================
+drop_capabilities() {
+    [ "${DROP_CAPS:-false}" = "true" ] || return 0
+
+    # capsh --drop=... -- -c "cmd" modifie seulement le child process, pas le bash courant.
+    # La seule façon de modifier les capabilities du processus bash courant est via
+    # prctl(PR_CAPBSET_DROP, cap) appelé directement en Python3 (ctypes → libc).
+    #
+    # Capabilities conservées : CAP_NET_ADMIN (12) = iptables/routes
+    #                            CAP_NET_RAW   (13) = ping, healthcheck
+    # Toutes les autres sont supprimées du bounding set.
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_json WARN drop_caps "python3 not found — capability drop skipped"
+        return 0
+    fi
+
+    log_json INFO drop_caps "dropping capabilities via prctl" \
+        "retaining=cap_net_admin(12),cap_net_raw(13)"
+
+    python3 - <<'PYCAPS'
+import ctypes, sys, os
+
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+PR_CAPBSET_DROP = 24
+CAP_NET_RAW     = 13
+CAP_NET_ADMIN   = 12  # Linux CAP_NET_ADMIN
+CAP_NET_RAW     = 13  # Linux CAP_NET_RAW
+KEEP = {CAP_NET_ADMIN, CAP_NET_RAW}
+
+errors = []
+for cap in range(40):  # Linux defines caps 0-39
+    if cap in KEEP:
+        continue
+    ret = libc.prctl(PR_CAPBSET_DROP, ctypes.c_ulong(cap), 0, 0, 0)
+    if ret != 0:
+        err = ctypes.get_errno()
+        # EINVAL (22) = cap not supported on this kernel — not an error
+        if err != 22:
+            errors.append(f"cap {cap}: errno {err}")
+
+if errors:
+    print(f"[drop_caps] some caps could not be dropped: {errors}", file=sys.stderr)
+    sys.exit(1)
+else:
+    print(f"[drop_caps] bounding set reduced — kept CAP_NET_ADMIN(12) CAP_NET_RAW(13)")
+PYCAPS
+
+    local rc=$?
+    if [ $rc -eq 0 ]; then
+        log_json INFO drop_caps "capabilities dropped successfully"             "retained=cap_net_admin,cap_net_raw"
+    else
+        log_json WARN drop_caps "capability drop had errors — check stderr above"
+    fi
+}
+
+# ===========================================================================
+# Démarrage des services DNS
+# ===========================================================================
 
 configure_dnsmasq() {
-    local dns1="${DNS_SERVER_1:-94.140.14.14}"
-    local dns2="${DNS_SERVER_2:-94.140.15.15}"
-
-    cat > /etc/dnsmasq.conf <<EOF
-# Generated at container startup from DNS_SERVER_1 / DNS_SERVER_2 env vars
+    if [ "${ENABLE_DOT:-false}" = "true" ]; then
+        cat > /etc/dnsmasq.conf <<EOF
+# Generated at startup — DNS-over-TLS mode via local unbound
+listen-address=127.0.0.1
+bind-interfaces
+no-resolv
+server=127.0.0.1#5053
+cache-size=1000
+log-facility=/dev/null
+EOF
+        log_json INFO configure_dnsmasq "DoT mode — upstream: 127.0.0.1#5053"
+    else
+        local dns1="${DNS_SERVER_1:-94.140.14.14}"
+        local dns2="${DNS_SERVER_2:-94.140.15.15}"
+        cat > /etc/dnsmasq.conf <<EOF
+# Generated at startup from DNS_SERVER_1 / DNS_SERVER_2
 listen-address=127.0.0.1
 bind-interfaces
 no-resolv
@@ -283,7 +780,23 @@ server=${dns2}
 cache-size=1000
 log-facility=/dev/null
 EOF
-    echo "[configure_dnsmasq] upstream resolvers: ${dns1}, ${dns2}"
+        # Split DNS en mode classique via dnsmasq (server=/domain/resolver)
+        if [ -n "${DNS_SPLIT:-}" ]; then
+            local entries
+            entries=$(echo "${DNS_SPLIT}" | tr ',' ' ')
+            for entry in $entries; do
+                local domain resolver res_ip res_port
+                domain="${entry%%=*}"; resolver="${entry#*=}"
+                res_ip="${resolver%%:*}"; res_port="${resolver##*:}"
+                [ "$res_port" = "$res_ip" ] && res_port="53"
+                [ -z "$domain" ] || [ -z "$res_ip" ] && continue
+                echo "server=/${domain}/${res_ip}#${res_port}" >> /etc/dnsmasq.conf
+                log_json INFO configure_dnsmasq "split DNS" \
+                    "domain=${domain}" "resolver=${res_ip}:${res_port}"
+            done
+        fi
+        log_json INFO configure_dnsmasq "upstream: ${dns1}, ${dns2}"
+    fi
 }
 
 start_dnsmasq() {
@@ -295,8 +808,8 @@ start_dnsmasq() {
     }
 
     if ! dnsmasq --test --conf-file=/etc/dnsmasq.conf >/tmp/dnsmasq.test 2>&1; then
-        echo "[start_dnsmasq] config test failed:"
-        sed -n '1,200p' /tmp/dnsmasq.test || true
+        log_json ERROR start_dnsmasq "config test failed"
+        sed -n '1,200p' /tmp/dnsmasq.test >&2 || true
         return 0
     fi
 
@@ -310,34 +823,24 @@ start_dnsmasq() {
     done
 
     if [ "$bound" -eq 1 ]; then
-        echo "[start_dnsmasq] started (pid=$dnsmasq_pid) listening on 127.0.0.1:53"
+        log_json INFO start_dnsmasq "started" "pid=${dnsmasq_pid}" "port=53"
     else
-        echo "[start_dnsmasq] dnsmasq did not bind to 127.0.0.1:53"
+        log_json ERROR start_dnsmasq "dnsmasq did not bind to 127.0.0.1:53"
     fi
 }
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Proxy auth (nginx Basic Auth devant Privoxy)
-# ---------------------------------------------------------------------------
-# Si PROXY_USER et PROXY_PASS sont définis :
-#   - Privoxy écoute sur 127.0.0.1:3129 (interne, non exposé)
-#   - nginx écoute sur 0.0.0.0:3128, exige Basic Auth, proxifie vers :3129
-# Sinon :
-#   - Privoxy écoute directement sur 0.0.0.0:3128 (mode anonyme, comportement par défaut)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 configure_privoxy_auth() {
-    local user="${PROXY_USER:-}"
-    local pass="${PROXY_PASS:-}"
-
+    local user="${PROXY_USER:-}" pass="${PROXY_PASS:-}"
     if [ -n "$user" ] && [ -n "$pass" ]; then
-        # Privoxy sur port interne uniquement
         sed -i 's|^listen-address .*|listen-address 127.0.0.1:3129|' /etc/privoxy/privoxy.config
-        echo "[configure_privoxy_auth] auth enabled — privoxy bound to 127.0.0.1:3129"
+        log_json INFO configure_privoxy_auth "auth enabled — privoxy on 127.0.0.1:3129"
     else
-        # Privoxy sur port public (pas d'auth)
         sed -i 's|^listen-address .*|listen-address 0.0.0.0:3128|' /etc/privoxy/privoxy.config
-        echo "[configure_privoxy_auth] no auth — privoxy bound to 0.0.0.0:3128"
+        log_json INFO configure_privoxy_auth "no auth — privoxy on 0.0.0.0:3128"
     fi
 }
 
@@ -348,65 +851,48 @@ start_privoxy() {
 }
 
 start_nginx_auth() {
-    local user="${PROXY_USER:-}"
-    local pass="${PROXY_PASS:-}"
-
-    # Si pas d'auth configurée, nginx n'est pas démarré
+    local user="${PROXY_USER:-}" pass="${PROXY_PASS:-}"
     [ -n "$user" ] && [ -n "$pass" ] || return 0
 
     if ! command -v nginx >/dev/null 2>&1; then
-        echo "[start_nginx_auth] nginx not found — auth unavailable, falling back to no-auth mode"
+        log_json WARN start_nginx_auth "nginx not found — falling back to no-auth"
         sed -i 's|^listen-address .*|listen-address 0.0.0.0:3128|' /etc/privoxy/privoxy.config
         return 0
     fi
 
-    # Génération du fichier htpasswd (hash bcrypt via htpasswd d'apache2-utils)
     local htpasswd_file="/etc/nginx/.proxy_htpasswd"
     mkdir -p /etc/nginx
     htpasswd -cbB "$htpasswd_file" "$user" "$pass"
     chmod 600 "$htpasswd_file"
 
-    # Attendre que privoxy soit prêt sur :3129
     local i
     for i in 1 2 3 4 5; do
         nc -z -w 1 127.0.0.1 3129 >/dev/null 2>&1 && break
         sleep 1
     done
 
-    # Génération de la config nginx à la volée
     mkdir -p /run/nginx /var/log/nginx
     cat > /etc/nginx/nginx_proxy_auth.conf <<'NGINXCONF'
 worker_processes 1;
 error_log /dev/null crit;
 pid /run/nginx/nginx_proxy_auth.pid;
-
 events { worker_connections 64; }
-
 http {
     access_log off;
-
-    # Timeout généreux pour les connexions proxy longues
     proxy_connect_timeout 60s;
     proxy_read_timeout    300s;
     proxy_send_timeout    60s;
-
     server {
         listen 0.0.0.0:3128;
-
         auth_basic           "Proxy Authentication Required";
         auth_basic_user_file /etc/nginx/.proxy_htpasswd;
-
         location / {
-            proxy_pass http://127.0.0.1:3129;
-
-            # Transmettre les headers CONNECT pour le tunneling HTTPS
+            proxy_pass         http://127.0.0.1:3129;
             proxy_http_version 1.1;
-            proxy_set_header   Host            $host;
-            proxy_set_header   X-Real-IP       $remote_addr;
-            proxy_set_header   Connection      "";
-
-            # Ne pas transmettre le header Authorization à Privoxy
-            proxy_set_header   Authorization   "";
+            proxy_set_header   Host          $host;
+            proxy_set_header   X-Real-IP     $remote_addr;
+            proxy_set_header   Connection    "";
+            proxy_set_header   Authorization "";
         }
     }
 }
@@ -414,7 +900,8 @@ NGINXCONF
 
     nginx -c /etc/nginx/nginx_proxy_auth.conf -g 'daemon off;' &
     nginx_pid=$!
-    echo "[start_nginx_auth] started nginx auth proxy (pid=$nginx_pid) on 0.0.0.0:3128 → 127.0.0.1:3129"
+    log_json INFO start_nginx_auth "started" \
+        "pid=${nginx_pid}" "frontend=0.0.0.0:3128" "backend=127.0.0.1:3129"
 }
 
 start_openvpn() {
@@ -426,13 +913,12 @@ start_tailscale() {
     [ "${ENABLE_TAILSCALE:-false}" = "true" ] || return 0
 
     if ! command -v tailscaled >/dev/null 2>&1; then
-        echo "[start_tailscale] tailscaled not installed; skipping"
-        return 0
+        log_json WARN start_tailscale "tailscaled not installed — skipping"; return 0
     fi
 
     mkdir -p /var/lib/tailscale "$TAILSCALE_RUN_DIR" || true
+    log_json INFO start_tailscale "starting tailscaled"
 
-    echo "[start_tailscale] starting tailscaled"
     tailscaled \
         --state="/var/lib/tailscale/tailscaled.state" \
         --socket="$TAILSCALE_RUN_DIR/tailscaled.sock" \
@@ -442,14 +928,12 @@ start_tailscale() {
 
     local waited=0
     until tailscale status >/dev/null 2>&1 || [ "$waited" -ge 20 ]; do
-        sleep 1
-        waited=$((waited + 1))
+        sleep 1; waited=$((waited + 1))
     done
 
-    if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
-        echo "[start_tailscale] no authkey provided; skipping 'tailscale up'"
-        return 0
-    fi
+    [ -z "${TAILSCALE_AUTHKEY:-}" ] && {
+        log_json WARN start_tailscale "no authkey — skipping 'tailscale up'"; return 0
+    }
 
     local up_flags="${TAILSCALE_FLAGS:-}"
     [ "${TAILSCALE_ACCEPT_ROUTES:-false}"       = "true" ] && up_flags="$up_flags --accept-routes"
@@ -465,15 +949,15 @@ EOF
         (tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
     }
 
-    echo "[start_tailscale] running 'tailscale up'"
+    log_json INFO start_tailscale "running 'tailscale up'"
     # shellcheck disable=SC2086
     (tailscale up --accept-dns=false --authkey="$TAILSCALE_AUTHKEY" $up_flags \
         > /var/log/tailscale-up.log 2>&1) &
 }
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Monitoring OpenVPN
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 check_openvpn_routing() {
     command -v ip >/dev/null 2>&1 || return 0
@@ -486,33 +970,38 @@ check_openvpn_routing() {
 }
 
 restart_openvpn() {
-    echo "[supervisor] restarting openvpn (pid=${vpn_pid:-unknown})"
+    log_json WARN supervisor "restarting openvpn" "pid=${vpn_pid:-unknown}"
     kill_if_running "$vpn_pid"
-    wait "$vpn_pid" 2>/dev/null || true
+    [ -n "$vpn_pid" ] && wait "$vpn_pid" 2>/dev/null || true
     vpn_pid=""
     start_openvpn
     local i
     for i in 1 2 3 4 5; do
         sleep 1
         if check_openvpn_routing; then
-            echo "[supervisor] openvpn routing restored (pid=$vpn_pid)"
+            log_json INFO supervisor "openvpn routing restored" "pid=${vpn_pid}"
             return 0
         fi
     done
-    echo "[supervisor] openvpn routing still not functional after restart"
+    log_json ERROR supervisor "openvpn routing still not functional after restart"
     return 1
 }
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Superviseur principal
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 supervise_all() {
     local attempt=0
 
     while true; do
         attempt=$((attempt + 1))
+        METRIC_RESTART_COUNT=$((attempt - 1))
+        METRIC_LAST_RESTART_TS=$(date +%s)
 
+        # Ordre préservé — start_unbound en tête pour résoudre les IPs DoT
+        # avant que start_dnsmasq ne remplace /etc/resolv.conf
+        start_unbound
         start_dnsmasq
         setup_iptables
         setup_ip6tables
@@ -521,27 +1010,43 @@ supervise_all() {
         start_openvpn
         start_tailscale
 
-        # Attendre que le tunnel tun soit monté avant d'ajouter les routes retour
-        echo "[supervisor] waiting for OpenVPN tunnel..."
+        # Services auxiliaires : démarrés une seule fois, survivent aux restarts
+        if [ "$attempt" -eq 1 ]; then
+            start_metrics
+            start_dot_ip_refresh
+        fi
+
+        log_json INFO supervisor "waiting for OpenVPN tunnel..."
         local tun_ready=0 tun_wait=0
         while [ "$tun_wait" -lt 30 ]; do
-            if check_openvpn_routing; then
-                tun_ready=1
-                break
-            fi
-            sleep 1
-            tun_wait=$((tun_wait + 1))
+            if check_openvpn_routing; then tun_ready=1; break; fi
+            sleep 1; tun_wait=$((tun_wait + 1))
         done
+
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes
             check_vpn_ip
             touch /tmp/vpn_healthy
+            METRIC_VPN_UP=1
         else
-            echo "[supervisor] tunnel not ready after 30s, skipping return routes"
+            log_json WARN supervisor "tunnel not ready after 30s — skipping return routes"
             rm -f /tmp/vpn_healthy
+            METRIC_VPN_UP=0
         fi
 
-        echo "[supervisor] started: vpn=$vpn_pid dnsmasq=${dnsmasq_pid:-unknown} privoxy=${privoxy_pid:-unknown} nginx_auth=${nginx_pid:-disabled}"
+        # Drop capabilities après le 1er démarrage complet
+        [ "$attempt" -eq 1 ] && drop_capabilities
+
+        update_metrics
+
+        log_json INFO supervisor "all services running" \
+            "vpn=${vpn_pid}" \
+            "dnsmasq=${dnsmasq_pid:-unknown}" \
+            "privoxy=${privoxy_pid:-unknown}" \
+            "nginx_auth=${nginx_pid:-disabled}" \
+            "unbound=${unbound_pid:-disabled}" \
+            "metrics=${metrics_pid:-disabled}" \
+            "dot_refresh=${dot_refresh_pid:-disabled}"
 
         local fail=0 proxy_port addr stable_cycles=0
         while true; do
@@ -549,88 +1054,109 @@ supervise_all() {
 
             # OpenVPN process
             if ! kill -0 "$vpn_pid" >/dev/null 2>&1; then
-                echo "[supervisor] openvpn process died"
-                fail=1
+                log_json ERROR supervisor "openvpn process died"; fail=1
             fi
 
             # OpenVPN routing
             if [ "$fail" -eq 0 ] && ! check_openvpn_routing; then
-                echo "[supervisor] openvpn routing failure detected"
-                rm -f /tmp/vpn_healthy
+                log_json WARN supervisor "openvpn routing failure"
+                rm -f /tmp/vpn_healthy; METRIC_VPN_UP=0
                 if restart_openvpn; then
-                    # Tunnel restauré — reconfigurer les routes retour au cas où
-                    setup_return_routes
-                    check_vpn_ip
-                    touch /tmp/vpn_healthy
-                    continue
+                    setup_return_routes; check_vpn_ip
+                    touch /tmp/vpn_healthy; METRIC_VPN_UP=1
+                    update_metrics; continue
                 else
                     fail=1
                 fi
             fi
 
-            # Privoxy — port interne si auth activée, public sinon
+            # Privoxy
             proxy_port=3128
             if [ -f /etc/privoxy/privoxy.config ]; then
-                addr=$(awk '/^[[:space:]]*listen-address/{print $2; exit}' /etc/privoxy/privoxy.config || true)
+                addr=$(awk '/^[[:space:]]*listen-address/{print $2; exit}' \
+                    /etc/privoxy/privoxy.config || true)
                 [ -n "$addr" ] && proxy_port=$(echo "$addr" | awk -F: '{print $NF}')
             fi
             if ! nc -z -w 3 127.0.0.1 "$proxy_port" >/dev/null 2>&1; then
-                echo "[supervisor] privoxy not listening on 127.0.0.1:$proxy_port"
-                fail=1
+                log_json ERROR supervisor "privoxy not listening" "port=${proxy_port}"; fail=1
             fi
 
-            # nginx auth proxy (si activé)
+            # nginx auth proxy
             if [ -n "$nginx_pid" ]; then
                 if ! kill -0 "$nginx_pid" >/dev/null 2>&1; then
-                    echo "[supervisor] nginx auth proxy died"
-                    fail=1
+                    log_json ERROR supervisor "nginx auth proxy died"; fail=1
                 elif ! nc -z -w 3 127.0.0.1 3128 >/dev/null 2>&1; then
-                    echo "[supervisor] nginx auth proxy not listening on 127.0.0.1:3128"
-                    fail=1
+                    log_json ERROR supervisor "nginx auth proxy not listening"; fail=1
+                fi
+            fi
+
+            # unbound
+            if [ "${ENABLE_DOT:-false}" = "true" ] && [ -n "$unbound_pid" ]; then
+                if ! kill -0 "$unbound_pid" >/dev/null 2>&1; then
+                    log_json ERROR supervisor "unbound process died"
+                    fail=1; METRIC_DOT_ACTIVE=0
+                elif ! nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1; then
+                    log_json ERROR supervisor "unbound not listening on 5053"
+                    fail=1; METRIC_DOT_ACTIVE=0
                 fi
             fi
 
             # dnsmasq
             if [ -n "$dnsmasq_pid" ]; then
                 if ! kill -0 "$dnsmasq_pid" >/dev/null 2>&1; then
-                    echo "[supervisor] dnsmasq process died"
-                    fail=1
+                    log_json ERROR supervisor "dnsmasq process died"; fail=1
                 elif ! nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
-                    echo "[supervisor] DNS resolution via 127.0.0.1 failed"
-                    fail=1
+                    log_json ERROR supervisor "DNS resolution via 127.0.0.1 failed"; fail=1
                 fi
             fi
 
             # Tailscale
             if [ -n "$tailscaled_pid" ] && ! kill -0 "$tailscaled_pid" >/dev/null 2>&1; then
-                echo "[supervisor] tailscaled process died"
-                fail=1
+                log_json ERROR supervisor "tailscaled process died"; fail=1
             fi
 
             [ "$fail" -eq 1 ] && break
 
-            # Reset backoff counter after 6 consecutive stable cycles (~1 min)
+            update_metrics
+
             stable_cycles=$((stable_cycles + 1))
             if [ "$stable_cycles" -ge 6 ] && [ "$attempt" -gt 1 ]; then
-                attempt=1
-                stable_cycles=0
-                echo "[supervisor] services stable — backoff counter reset"
+                attempt=1; stable_cycles=0
+                log_json INFO supervisor "services stable — backoff counter reset"
             fi
         done
 
-        echo "[supervisor] failure detected - killing services to restart"
+        log_json ERROR supervisor "failure detected — restarting services" \
+            "attempt=${attempt}"
         rm -f /tmp/vpn_healthy
+        METRIC_VPN_UP=0; METRIC_LAST_RESTART_TS=$(date +%s)
+        update_metrics
+
         kill_if_running "$vpn_pid"
         kill_if_running "$privoxy_pid"
         kill_if_running "$nginx_pid"
         kill_if_running "$dnsmasq_pid"
         kill_if_running "$tailscaled_pid"
-        wait 2>/dev/null || true
-        vpn_pid="" privoxy_pid="" nginx_pid="" dnsmasq_pid="" tailscaled_pid=""
+        kill_if_running "$unbound_pid"
+        # metrics_pid et dot_refresh_pid ne sont pas tués :
+        # ils survivent aux cycles de restart
+        # Attendre uniquement les PIDs non-vides (wait avec PID vide = erreur sous set -eu)
+        local pids_to_wait=""
+        for _pid in "$vpn_pid" "$privoxy_pid" "$nginx_pid"                     "$dnsmasq_pid" "$tailscaled_pid" "$unbound_pid"; do
+            [ -n "$_pid" ] && pids_to_wait="$pids_to_wait $_pid"
+        done
+        # shellcheck disable=SC2086
+        [ -n "$pids_to_wait" ] && wait $pids_to_wait 2>/dev/null || true
+
+        vpn_pid="" privoxy_pid="" nginx_pid="" dnsmasq_pid="" \
+            tailscaled_pid="" unbound_pid=""
+        DOT_RESOLVED_IPS=""
+        # Réinitialiser la map des IPs DoT pour le prochain cycle de démarrage
+        unset DOT_HOST_IP_MAP; declare -A DOT_HOST_IP_MAP
 
         local sleep_s=$((5 * attempt))
         [ "$sleep_s" -gt 60 ] && sleep_s=60
-        echo "[supervisor] restarting all services in ${sleep_s}s (attempt ${attempt})"
+        log_json INFO supervisor "restarting in ${sleep_s}s" "attempt=${attempt}"
         sleep "$sleep_s"
     done
 }

@@ -44,7 +44,15 @@ ENV ENABLE_TAILSCALE=false \
     DNS_SERVER_1="94.140.14.14" \
     DNS_SERVER_2="94.140.15.15" \
     PROXY_USER="" \
-    PROXY_PASS=""
+    PROXY_PASS="" \
+    ENABLE_DOT=false \
+    DOT_DNS_SERVERS="tls://dns.adguard-dns.com" \
+    ENABLE_DNSSEC=false \
+    DOT_TLS_CERT_BUNDLE="" \
+    DOT_IP_REFRESH_INTERVAL=3600 \
+    DNS_SPLIT="" \
+    ENABLE_METRICS=false \
+    DROP_CAPS=false
 
 # ---------------------------------------------------------------------------
 # System user
@@ -73,7 +81,11 @@ RUN apk add --no-cache \
       apache2-utils \
       openvpn \
       privoxy \
-      tini
+      tini \
+      unbound \
+      libcap \
+      python3 \
+      socat
 
 # ---------------------------------------------------------------------------
 # Tailscale binaries from stage 1

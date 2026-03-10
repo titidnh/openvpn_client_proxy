@@ -18,6 +18,11 @@
 - [Environment Variables](#environment-variables)
 - [Network Kill Switch](#network-kill-switch)
 - [DNS Leak Protection](#dns-leak-protection)
+- [DNS-over-TLS (Optional)](#dns-over-tls-optional)
+- [Split DNS (Optional)](#split-dns-optional)
+- [Prometheus Metrics (Optional)](#prometheus-metrics-optional)
+- [Structured JSON Logs](#structured-json-logs)
+- [Capability Drop (Optional)](#capability-drop-optional)
 - [Proxy Authentication (Optional)](#proxy-authentication-optional)
 - [Supervision & Auto-Restart](#supervision--auto-restart)
 - [Healthcheck](#healthcheck)
@@ -27,6 +32,7 @@
 - [Using the Proxy](#using-the-proxy)
 - [Troubleshooting](#troubleshooting)
 - [Project File Reference](#project-file-reference)
+- [Roadmap & Ideas for Improvement](#roadmap--ideas-for-improvement)
 - [License](#license)
 
 ---
@@ -44,37 +50,53 @@
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
 | 📦 **Minimal Image** | Based on `alpine:3.20` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
+| 🔐 **DNS-over-TLS** | Optional — all DNS queries encrypted via `unbound` → DoT upstream (port 853). Prevents ISP/network snooping on DNS. Kill switch blocks plain DNS port 53 leaks when enabled. |
+| 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor. |
+| 📌 **DoT Cert Pinning** | Mount a custom CA bundle (`DOT_TLS_CERT_BUNDLE`) to restrict which TLS certificates are accepted for DoT connections. |
+| 🌍 **DoH Support** | Use `https://` prefix in `DOT_DNS_SERVERS` for DNS-over-HTTPS upstreams. |
+| 🔀 **Split DNS** | Route specific domains to an internal resolver (`DNS_SPLIT="corp.local=10.0.0.53"`). Works in both plain and DoT modes. |
+| 🔄 **Dynamic DoT IP Refresh** | Periodically re-resolves DoT server hostnames and updates iptables rules atomically (zero connectivity interruption). |
+| 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint on `127.0.0.1:9100` with VPN status, restart count, DoT state, and uptime. |
+| 🛡️ **Capability Drop** | Optional (`DROP_CAPS=true`) — drops all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after startup, reducing attack surface. |
+| 📋 **Structured JSON Logs** | All log output is JSON (`{"ts":"...","level":"INFO","component":"...","msg":"..."}`), ready for Loki/Splunk/any log aggregator. |
 
 ---
 
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                  Docker Container                    │
-│                                                      │
-│  ┌─────────┐   ┌──────────┐   ┌──────────────────┐   │
-│  │ dnsmasq │   │ Privoxy  │   │    OpenVPN       │   │
-│  │  :53    │   │  :3128   │   │  (tun0 / tap0)   │   │
-│  └────┬────┘   └────┬─────┘   └────────┬─────────┘   │
-│       │             │                  │             │
-│       └─────────────┴──────────────────┘             │
-│                    iptables                          │
-│          (DROP default — VPN-only egress)            │
-│                       │                              │
-└───────────────────────┼──────────────────────────────┘
-                        │ VPN Tunnel
-                        ▼
-                  VPN Server (remote)
-                        │
-                        ▼
-                   Internet
+┌─────────────────────────────────────────────────────────────────┐
+│                       Docker Container                          │
+│                                                                 │
+│  ┌──────────┐  ┌─────────┐  ┌──────────┐  ┌─────────────────┐  │
+│  │ dnsmasq  │  │ unbound │  │ Privoxy  │  │    OpenVPN      │  │
+│  │  :53     │→ │  :5053  │  │  :3128   │  │  (tun0 / tap0)  │  │
+│  └──────────┘  └────┬────┘  └────┬─────┘  └───────┬─────────┘  │
+│  (DoT mode only)    │TLS853      │                │             │
+│                     │            │                │             │
+│  ┌──────────────────┴────────────┴────────────────┘             │
+│  │               iptables / ip6tables                           │
+│  │     DROP default — DNS 53 leak blocked if DoT active         │
+│  └───────────────────────────┬───────────────────────────────── │
+│                               │ VPN Tunnel                      │
+│  ┌─────────────────────────── │ ──────────────────────────────┐ │
+│  │ Supervisor (start.sh)      │                               │ │
+│  │  • JSON structured logs    │  • Prometheus metrics :9100   │ │
+│  │  • Dynamic DoT IP refresh  │  • Capability drop (optional) │ │
+│  └────────────────────────────┴───────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │ VPN Tunnel
+                              ▼
+                        VPN Server (remote)
+                              │
+                              ▼
+                           Internet
 ```
 
-- **dnsmasq** listens on `127.0.0.1:53` and forwards queries to the upstream DNS servers configured via `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard Default `94.140.14.14` / `94.140.15.15`). No app inside or outside the container can reach another resolver.
+- **dnsmasq** listens on `127.0.0.1:53` and forwards queries either directly to `DNS_SERVER_1` / `DNS_SERVER_2` (plain DNS mode) or to `unbound` on `127.0.0.1:5053` (DoT mode) (default: AdGuard Default `94.140.14.14` / `94.140.15.15`). No app inside or outside the container can reach another resolver.
 - **Privoxy** listens on `0.0.0.0:3128` and routes all HTTP/HTTPS traffic through the VPN tunnel.
 - **iptables** enforces a DROP-everything-by-default policy. Only traffic going out via `tun+` / `tap+` is allowed.
-- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure.
+- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure. It also runs optional services: `socat` metrics endpoint on `:9100`, dynamic DoT IP refresh, and post-startup capability drop.
 
 ---
 
@@ -84,6 +106,7 @@
 - A valid OpenVPN configuration file (`.ovpn` or `.conf`)
 - The host kernel must have the `tun` module loaded: `modprobe tun`
 - `NET_ADMIN` capability and access to `/dev/net/tun`
+- `python3` and `socat` are bundled in the image — no host-side installation needed
 
 ---
 
@@ -310,6 +333,14 @@ All variables are optional. Defaults match a plain OpenVPN-only setup with no Ta
 | `TAILSCALE_ACCEPT_ROUTES` | `false` | Pass `--accept-routes` to `tailscale up` |
 | `TAILSCALE_HOSTNAME` | `openvpn-client-proxy` | Hostname registered in Tailscale (`--hostname`) |
 | `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node — all Tailscale clients can route traffic through the VPN |
+| `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
+| `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
+| `ENABLE_DNSSEC` | `false` | Set to `true` to enable strict DNSSEC validation in unbound. Initialises the root trust anchor via `unbound-anchor`. Leave `false` for zones that are not DNSSEC-signed. |
+| `DOT_TLS_CERT_BUNDLE` | *(system CA)* | Path to a PEM bundle for TLS certificate verification of DoT servers. Defaults to Alpine's `/etc/ssl/certs/ca-certificates.crt`. Mount a restricted bundle for certificate pinning (e.g. `-v ./my-ca.pem:/vpn/dot-ca.pem:ro` then `DOT_TLS_CERT_BUNDLE=/vpn/dot-ca.pem`). |
+| `DOT_IP_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of DoT server hostnames. If an IP changes, iptables rules are updated atomically (new rule added before old one removed). Set to `0` to disable. |
+| `DNS_SPLIT` | *(empty)* | Comma-separated list of `domain=resolver[:port]` entries for split DNS. Routes those domains to an internal resolver instead of the default upstream. Works in both DoT mode (via unbound `forward-zone`) and plain mode (via dnsmasq `server=/domain/ip`). Example: `corp.local=10.0.0.53,internal.net=10.0.1.53:5353` |
+| `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint on `127.0.0.1:9100`. The port is loopback-only (iptables enforced). |
+| `DROP_CAPS` | `false` | Set to `true` to drop all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after all services have started. Uses Python3 `ctypes` → `prctl(PR_CAPBSET_DROP)` to modify the supervisor process's own bounding set. Requires `python3` in the image (included by default in the Alpine image). |
 
 ---
 
@@ -341,6 +372,249 @@ This forces every process inside the container (including OpenVPN itself) to use
 If the Docker runtime mounts `/etc/resolv.conf` as read-only, the entrypoint falls back to a `mount --bind` from `/tmp` to achieve the same result.
 
 ---
+
+## DNS-over-TLS (Optional)
+
+By default, DNS queries are forwarded in plaintext to `DNS_SERVER_1` / `DNS_SERVER_2`. This means your ISP or anyone on the network path between the container and the DNS server can observe which domains you resolve (even though traffic itself goes through the VPN).
+
+**DNS-over-TLS (DoT)** encrypts DNS queries using TLS on port **853**, eliminating this metadata leak.
+
+### Architecture with DoT enabled
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        Docker Container                          │
+│                                                                  │
+│  App → dnsmasq :53 → unbound :5053 ──TLS 853──→ DoT Server      │
+│                                        (via VPN tunnel tun0)     │
+│                                                                  │
+│  iptables: UDP/TCP 53 external → DROP  (DNS leak kill switch)    │
+│            TCP 853 → DoT server IPs → ACCEPT                     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **dnsmasq** continues to listen on `127.0.0.1:53` — no app changes needed
+- **unbound** listens on `127.0.0.1:5053` and forwards all queries via TLS to the DoT upstream(s)
+- The firewall **blocks all external UDP/TCP 53** (plain DNS leak prevention) and **allows TCP 853** only to the resolved IPs of the configured DoT servers
+- DoT server IPs are resolved **once at startup** using the original system `resolv.conf` — before dnsmasq takes over — to avoid any circular dependency
+
+### Enabling DNS-over-TLS
+
+```bash
+docker run \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -e ENABLE_DOT=true \
+  -e DOT_DNS_SERVERS="tls://dns.adguard-dns.com" \
+  -v ./vpn-config:/vpn:ro \
+  -p 3128:3128 \
+  titidnh/openvpn_client_proxy:latest
+```
+
+Or in Docker Compose (see the provided `docker-compose.yml` for a fully commented example):
+
+```yaml
+environment:
+  ENABLE_DOT: "true"
+  DOT_DNS_SERVERS: "tls://dns.adguard-dns.com"
+```
+
+### Multiple DoT servers (failover)
+
+Pass multiple servers separated by spaces or commas:
+
+```yaml
+DOT_DNS_SERVERS: "tls://dns.adguard-dns.com tls://cloudflare-dns.com"
+```
+
+unbound will use them in round-robin / failover order.
+
+### Popular DoT providers
+
+| Provider | `DOT_DNS_SERVERS` value | Filtering |
+|---|---|---|
+| AdGuard Default | `tls://dns.adguard-dns.com` | Ads only |
+| AdGuard Family | `tls://family.adguard-dns.com` | Ads + adult content |
+| Cloudflare | `tls://cloudflare-dns.com` | None |
+| Cloudflare Malware | `tls://security.cloudflare-dns.com` | Malware/phishing |
+| Quad9 | `tls://dns.quad9.net` | Malware/phishing |
+| Google | `tls://dns.google` | None |
+| NextDNS | `tls://dns.nextdns.io` | Configurable |
+
+> **Note:** When `ENABLE_DOT=true`, the `DNS_SERVER_1` / `DNS_SERVER_2` variables are ignored — DoT servers defined in `DOT_DNS_SERVERS` take over.
+
+### DNS-over-HTTPS (DoH)
+
+Use the `https://` prefix to forward to a DoH upstream instead of DoT. Unbound will connect on port 443 with TLS and SNI:
+
+```yaml
+DOT_DNS_SERVERS: "https://cloudflare-dns.com"
+# or mix DoT and DoH:
+DOT_DNS_SERVERS: "tls://dns.adguard-dns.com https://cloudflare-dns.com"
+```
+
+### DNSSEC validation
+
+Enable strict DNSSEC signature verification for all resolved domains:
+
+```yaml
+ENABLE_DNSSEC: "true"
+```
+
+On first start, `unbound-anchor` downloads the IANA root trust anchor into `/var/lib/unbound/root.key`. Zones that are not DNSSEC-signed will fail to resolve. Leave at `false` (default) if your VPN provider or upstreams use unsigned zones.
+
+### Certificate pinning
+
+By default unbound verifies DoT server certificates against Alpine's system CA bundle. For stricter pinning, mount your own bundle:
+
+```yaml
+volumes:
+  - ./my-dot-ca.pem:/vpn/dot-ca.pem:ro
+environment:
+  DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
+```
+
+Create a minimal bundle containing only the CA(s) that signed your DoT server's certificate:
+```sh
+# Example: extract AdGuard DNS CA from the system bundle
+openssl s_client -connect dns.adguard-dns.com:853 -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -out my-dot-ca.pem
+```
+
+### Dynamic IP refresh
+
+DoT server hostnames (e.g. `dns.adguard-dns.com`) are resolved at startup. The refresh loop re-resolves them every `DOT_IP_REFRESH_INTERVAL` seconds (default: 1 hour). If an IP changes, the new iptables rule is added **before** the old one is removed — zero connectivity interruption:
+
+```yaml
+DOT_IP_REFRESH_INTERVAL: "3600"   # 1 hour (default)
+DOT_IP_REFRESH_INTERVAL: "300"    # 5 minutes (aggressive)
+```
+
+### Verifying DoT is active
+
+Check that unbound started and bound to port 5053:
+
+```sh
+docker logs <container> | grep unbound
+# → [start_unbound] started (pid=XX) — listening on 127.0.0.1:5053 (DoT active)
+```
+
+Confirm no plain DNS queries escape:
+
+```sh
+# Should return EMPTY (all external 53 blocked)
+docker exec <container> nslookup example.com 8.8.8.8
+# Should work (via local chain: dnsmasq → unbound → DoT)
+docker exec <container> nslookup example.com 127.0.0.1
+```
+
+
+---
+
+## Split DNS (Optional)
+
+Split DNS routes specific domains to a designated internal resolver while all other queries follow the default path (DoT upstream or `DNS_SERVER_1/2`).
+
+```yaml
+# Single internal domain
+DNS_SPLIT: "corp.local=10.0.0.53"
+
+# Multiple domains, custom port
+DNS_SPLIT: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
+```
+
+**How it works:**
+
+| Mode | Implementation |
+|---|---|
+| `ENABLE_DOT=true` | unbound `forward-zone` entries with `forward-tls-upstream: no` (plain DNS to internal resolver) |
+| `ENABLE_DOT=false` | dnsmasq `server=/domain/ip#port` directives |
+
+The internal resolver receives queries for the specified domain in **plain DNS** (no TLS) — this is intentional for RFC-1918 resolvers that do not support TLS.
+
+---
+
+## Prometheus Metrics (Optional)
+
+Enable with `ENABLE_METRICS=true`. The endpoint is served on `127.0.0.1:9100` via `socat`, loopback-only (iptables enforces this).
+
+```sh
+# From the host, via docker exec:
+docker exec <container> curl -s http://127.0.0.1:9100/metrics
+
+# Or expose via a tunnel / sidecar — never bind 9100 to 0.0.0.0
+```
+
+**Available metrics:**
+
+| Metric | Type | Description |
+|---|---|---|
+| `vpn_up` | gauge | `1` if the VPN tunnel is active, `0` otherwise |
+| `vpn_restart_total` | counter | Total number of supervisor restart cycles |
+| `dot_active` | gauge | `1` if DNS-over-TLS (unbound) is running |
+| `process_uptime_seconds` | gauge | Container uptime in seconds |
+| `last_restart_timestamp_seconds` | gauge | Unix epoch of the last supervisor restart |
+
+**Prometheus scrape config example:**
+```yaml
+scrape_configs:
+  - job_name: openvpn_proxy
+    static_configs:
+      - targets: ['<docker_host_ip>:9100']   # expose via SSH tunnel or sidecar
+```
+
+---
+
+## Structured JSON Logs
+
+All output from `start.sh` is JSON, one object per line:
+
+```json
+{"ts":"2025-01-15T10:23:01Z","level":"INFO","component":"start_unbound","msg":"started — DoT active","pid":"42","port":"5053"}
+{"ts":"2025-01-15T10:23:04Z","level":"INFO","component":"check_vpn_ip","msg":"public IP via VPN confirmed","ip":"185.220.101.1"}
+{"ts":"2025-01-15T10:33:15Z","level":"WARN","component":"supervisor","msg":"openvpn routing failure"}
+{"ts":"2025-01-15T10:33:20Z","level":"INFO","component":"supervisor","msg":"openvpn routing restored","pid":"89"}
+```
+
+Fields: `ts` (ISO-8601 UTC), `level` (`INFO`/`WARN`/`ERROR`), `component`, `msg`, plus optional key-value pairs.
+
+**Loki / Promtail config:**
+```yaml
+- job_name: openvpn_proxy
+  static_configs:
+    - targets: [localhost]
+      labels:
+        job: openvpn_proxy
+        __path__: /var/lib/docker/containers/*/*-json.log
+  pipeline_stages:
+    - json:
+        expressions:
+          level: level
+          component: component
+    - labels:
+        level:
+        component:
+```
+
+---
+
+## Capability Drop (Optional)
+
+Enable with `DROP_CAPS=true`. After all services have started (first cycle only), the supervisor process drops all Linux capabilities from its bounding set **except**:
+
+- `CAP_NET_ADMIN` (`12`) — required for iptables, ip route, tunnel management  
+- `CAP_NET_RAW` (`13`) — required for ping, healthcheck
+
+Implementation uses `python3` + `ctypes` to call `prctl(PR_CAPBSET_DROP, cap)` directly on the **current process** (bash). This is the only reliable method — `capsh --drop` only affects child processes.
+
+```yaml
+DROP_CAPS: "true"
+```
+
+> **Note:** This only affects the supervisor bash process itself — child processes (OpenVPN, unbound, Privoxy, etc.) already started before the drop retain their own capabilities. The drop reduces the supervisor's attack surface using `python3` + `ctypes` → `prctl(PR_CAPBSET_DROP)` to directly modify the current process's bounding set (unlike `capsh --drop` which only affects child processes).
+
+---
+
 
 ## Proxy Authentication (Optional)
 
@@ -410,13 +684,16 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 
 | Condition | Action |
 |---|---|
-| OpenVPN process died | Lightweight OpenVPN restart. If routing is restored within 5s → continue normally |
+| OpenVPN process died | Kills and restarts OpenVPN only (`restart_openvpn`). Waits up to 5s for routing. If restored → continue normally. If not → full restart. |
 | OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + nginx + OpenVPN + Tailscale) |
 | Privoxy not listening on its port | Full service restart |
 | nginx auth proxy died or not listening (if enabled) | Full service restart |
 | dnsmasq process died | Full service restart |
 | DNS resolution via `127.0.0.1` fails | Full service restart |
 | Tailscale process died (if enabled) | Full service restart |
+| unbound process died or not listening on `:5053` (if DoT enabled) | Full service restart |
+| Metrics endpoint (`socat`) died (if metrics enabled) | Logged only — metrics restart not implemented (non-critical) |
+| DoT IP refresh loop died | Logged only — refreshed on next full restart cycle |
 
 Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **60s**. The counter resets after a successful monitoring cycle.
 
@@ -427,7 +704,7 @@ Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **60s**.
 The image declares a native `HEALTHCHECK` in the `Dockerfile` — no configuration needed:
 
 ```dockerfile
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
 ```
 
@@ -505,7 +782,10 @@ services:
     image: titidnh/openvpn_client_proxy:latest
     container_name: vpn_proxy
     restart: always
-    mem_limit: 128M
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     cap_add:
       - NET_ADMIN
     devices:
@@ -534,7 +814,10 @@ services:
     image: titidnh/openvpn_client_proxy:latest
     container_name: vpn_proxy
     restart: always
-    mem_limit: 192M
+    deploy:
+      resources:
+        limits:
+          memory: 192M   # nginx frontal requires a bit more memory
     cap_add:
       - NET_ADMIN
     devices:
@@ -558,7 +841,10 @@ services:
     image: titidnh/openvpn_client_proxy:latest
     container_name: vpn_proxy
     restart: always
-    mem_limit: 256M
+    deploy:
+      resources:
+        limits:
+          memory: 256M   # Tailscale + nginx require extra memory
     cap_add:
       - NET_ADMIN
     devices:
@@ -578,9 +864,50 @@ services:
       TAILSCALE_ADVERTISE_EXIT_NODE: "true"
       # TAILSCALE_ACCEPT_ROUTES: "false"
       # TAILSCALE_FLAGS: "--shields-up"
+      PROXY_USER: "alice"
+      PROXY_PASS: "s3cr3t!"
+      DNS_SERVER_1: "94.140.14.14"
+      DNS_SERVER_2: "94.140.15.15"
+      DROP_CAPS: "false"
+      ENABLE_METRICS: "false"
 
 volumes:
   tailscale-state:
+```
+
+### With DNS-over-TLS + Metrics + Capability Drop
+
+```yaml
+services:
+  vpnproxy:
+    image: titidnh/openvpn_client_proxy:latest
+    container_name: vpn_proxy
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    volumes:
+      - ./vpn-config:/vpn:ro
+      # Optional: certificate pinning for DoT
+      # - ./my-dot-ca.pem:/vpn/dot-ca.pem:ro
+    ports:
+      - "127.0.0.1:3128:3128"
+      # Metrics: loopback only — access via: docker exec <c> curl http://127.0.0.1:9100/metrics
+      # - "127.0.0.1:9100:9100"
+    environment:
+      ENABLE_DOT: "true"
+      DOT_DNS_SERVERS: "tls://dns.adguard-dns.com tls://cloudflare-dns.com"
+      DOT_IP_REFRESH_INTERVAL: "3600"
+      ENABLE_DNSSEC: "false"
+      # DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
+      # DNS_SPLIT: "corp.local=10.0.0.53"
+      ENABLE_METRICS: "true"
+      DROP_CAPS: "true"
 ```
 
 ### Multi-container — Another container using the VPN proxy
@@ -771,6 +1098,66 @@ docker exec vpn_proxy dnsmasq --test --conf-file=/etc/dnsmasq.conf
 
 The entrypoint handles this automatically via `mount --bind`. If it still fails, check your Docker runtime's `--read-only` or `--mount` flags.
 
+### DoT not working / DNS resolution fails with ENABLE_DOT=true
+
+Check unbound started and is listening:
+
+```sh
+docker logs <container> | grep unbound
+docker exec <container> nc -z 127.0.0.1 5053 && echo "unbound OK"
+```
+
+Test the DoT chain directly:
+```sh
+# Should resolve via dnsmasq → unbound → DoT server
+docker exec <container> nslookup example.com 127.0.0.1
+
+# This should FAIL (external port 53 is blocked when DoT is active)
+docker exec <container> nslookup example.com 8.8.8.8
+```
+
+Check the unbound config was generated correctly:
+```sh
+docker exec <container> cat /etc/unbound/unbound.conf
+docker exec <container> unbound-checkconf /etc/unbound/unbound.conf
+```
+
+### DNSSEC failures (SERVFAIL on valid domains)
+
+If `ENABLE_DNSSEC=true` causes resolution failures, the domain is likely not DNSSEC-signed or the root key is stale. Disable strict mode:
+
+```yaml
+ENABLE_DNSSEC: "false"
+```
+
+Or re-initialise the root trust anchor:
+```sh
+docker exec <container> unbound-anchor -a /var/lib/unbound/root.key -v
+```
+
+### Metrics endpoint not responding
+
+```sh
+# Check socat is running
+docker exec <container> ps aux | grep socat
+
+# Test directly inside the container
+docker exec <container> curl -s http://127.0.0.1:9100/metrics
+```
+
+If `socat` is not available, the fallback nc loop serves one request at a time. Check with:
+```sh
+docker logs <container> | grep metrics
+```
+
+### Capability drop errors
+
+```sh
+docker logs <container> | grep drop_caps
+```
+
+If `python3` is missing, the drop is skipped gracefully (logged as WARN). The container remains functional with full capabilities.
+
 ### Tailscale not starting
 
 ```sh
@@ -785,7 +1172,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid `TAILSCALE_AUTHKEY` is provided. T
 
 | File | Location in container | Description |
 |---|---|---|
-| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration |
+| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh, capability drop |
 | `openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
 | `healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
 | `dnsmasq.conf` | `/etc/dnsmasq.conf` | dnsmasq DNS resolver configuration |
@@ -805,6 +1192,49 @@ Make sure `ENABLE_TAILSCALE=true` and a valid `TAILSCALE_AUTHKEY` is provided. T
 | `/var/lib/tailscale` | Optional — persist Tailscale identity across container recreations |
 
 ---
+
+## Roadmap & Ideas for Improvement
+
+This section lists known limitations and areas where the project could be enhanced.
+
+### 🔐 Security & Privacy
+
+| Idea | Details |
+|---|---|
+| ~~**DNSSEC validation**~~ | ✅ Implemented — `ENABLE_DNSSEC=true` |
+| ~~**DoT certificate pinning**~~ | ✅ Implemented — `DOT_TLS_CERT_BUNDLE` |
+| ~~**DNS-over-HTTPS (DoH)**~~ | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
+| **Proxy TLS (HTTPS proxy)** | Expose the proxy over HTTPS (not just HTTP) to protect proxy credentials in transit. Would require an nginx TLS terminator with a mounted certificate. |
+| **Read-only filesystem** | Make the container filesystem read-only (`--read-only` flag) with only specific tmpfs mounts. Reduces attack surface if the container is compromised. |
+| ~~**Drop capabilities**~~ | ✅ Implemented — `DROP_CAPS=true` |
+
+### 🧰 Operational & Reliability
+
+| Idea | Details |
+|---|---|
+| ~~**Dynamic DoT IP refresh**~~ | ✅ Implemented — `DOT_IP_REFRESH_INTERVAL` |
+| ~~**Metrics endpoint**~~ | ✅ Implemented — `ENABLE_METRICS=true`, port 9100 |
+| ~~**Structured JSON logs**~~ | ✅ Implemented — all output is JSON |
+| **Graceful reload** | Send a signal (`SIGHUP`) to reload dnsmasq/unbound config without restarting the full service stack — useful when rotating DoT servers. |
+| ~~**Split DNS**~~ | ✅ Implemented — `DNS_SPLIT="corp.local=10.0.0.53"` |
+| **OpenVPN reconnect without full restart** | Currently a routing failure triggers a full supervisor restart cycle. The supervisor could attempt a lightweight `openvpn --signal SIGUSR1` reconnect first. |
+
+### 🐳 Docker & Deployment
+
+| Idea | Details |
+|---|---|
+| **`docker-compose` secrets support** | Allow `PROXY_PASS` and `TAILSCALE_AUTHKEY` to be read from Docker secrets files (`/run/secrets/`) instead of environment variables, to avoid secrets appearing in `docker inspect`. |
+| **ARM32v7 support** | The CI currently builds for `linux/amd64` and `linux/arm64`. Adding `linux/arm/v7` would support older Raspberry Pi models (Pi 2/3 in 32-bit mode). |
+| **Healthcheck via DoT** | Extend `healthcheck.sh` to verify that DNS resolution actually goes through unbound when DoT is enabled (check that the resolver chain is intact, not just that dnsmasq is up). |
+| **Config validation at startup** | Add a pre-flight check that validates all env vars (e.g. `DOT_DNS_SERVERS` format, `TAILSCALE_AUTHKEY` length) and fails fast with a clear error message before any service is started. |
+
+### 🌐 Proxy Features
+
+| Idea | Details |
+|---|---|
+| **SOCKS5 proxy** | Expose a SOCKS5 proxy (via `dante` or `microsocks`) in addition to the HTTP proxy. SOCKS5 supports UDP and is more broadly compatible with non-HTTP apps. |
+| **Per-container proxy routing** | Use Privoxy's `forward` directive to route specific domains or IPs through a secondary proxy, enabling split-tunneling at the proxy level. |
+| **Bandwidth / connection limits** | Add rate limiting in nginx to prevent any single client from saturating the VPN uplink. |
 
 ## License
 
