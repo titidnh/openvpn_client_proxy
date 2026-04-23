@@ -119,11 +119,11 @@ s/[?&]+$//g
 FILTER: strip-tracking-params Suppression pixels tracking et beacons HTML
 
 # Pixels 1x1 (img tracking)
-s/<img[^>]+(width|height)=["\']?1["\']?[^>]+(height|width)=["\']?1["\']?[^>]*>//ig
-s/<img[^>]+src=["\'][^"\']*\/(pixel|beacon|track|collect|ping|1x1|spacer)\.[^"\']*["\'][^>]*>//ig
+s/<img[^>]+(width|height)=["']?1["']?[^>]+(height|width)=["']?1["']?[^>]*>//ig
+s/<img[^>]+src=["'][^"']*\/(pixel|beacon|track|collect|ping|1x1|spacer)\.[^"']*["'][^>]*>//ig
 
 # Iframes de tracking
-s/<iframe[^>]+src=["\'][^"\']*\/(pixel|beacon|track|collect)[^"\']*["\'][^>]*>.*?<\/iframe>//igs
+s/<iframe[^>]+src=["'][^"']*\/(pixel|beacon|track|collect)[^"']*["'][^>]*>.*?<\/iframe>//igs
 
 
 ##
@@ -133,34 +133,34 @@ s/<iframe[^>]+src=["\'][^"\']*\/(pixel|beacon|track|collect)[^"\']*["\'][^>]*>.*
 FILTER: remove-js-trackers Suppression scripts de tracking et analytics connus
 
 # Google Analytics / GTM / Ads
-s/<script[^>]*src=["\'][^"\']*googletagmanager\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*google-analytics\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*googletagservices\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*googlesyndication\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*doubleclick\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*googletagmanager\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*google-analytics\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*googletagservices\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*googlesyndication\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*doubleclick\.net[^"']*["'][^>]*>\s*<\/script>//ig
 
 # Meta Pixel
-s/<script[^>]*src=["\'][^"\']*connect\.facebook\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*>\s*!function\(f,b,e,v,n,t,s\).*?fbq\s*=.*?<\/script>//igs
+s/<script[^>]*src=["'][^"']*connect\.facebook\.net[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*>[\s\S]*?!function\(f,b,e,v,n,t,s\)[\s\S]*?fbq[\s\S]*?<\/script>//igs
 
 # Analytics tiers
-s/<script[^>]*src=["\'][^"\']*hotjar\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*mouseflow\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*fullstory\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*segment\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*segment\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*amplitude\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*mixpanel\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*heap\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*heapanalytics\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*newrelic\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*nr-data\.net[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*clarity\.ms[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*criteo\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*adnxs\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*fingerprintjs\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*fingerprint\.com[^"\']*["\'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["\'][^"\']*fpjs\.io[^"\']*["\'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*hotjar\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*mouseflow\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*fullstory\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*segment\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*segment\.io[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*amplitude\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*mixpanel\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*heap\.io[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*heapanalytics\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*newrelic\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*nr-data\.net[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*clarity\.ms[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*criteo\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*adnxs\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*fingerprintjs\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*fingerprint\.com[^"']*["'][^>]*>\s*<\/script>//ig
+s/<script[^>]*src=["'][^"']*fpjs\.io[^"']*["'][^>]*>\s*<\/script>//ig
 
 # Inline dataLayer GTM
 s/<script[^>]*>\s*window\.dataLayer\s*=\s*window\.dataLayer[^<]*<\/script>//ig
@@ -171,6 +171,31 @@ s/<script[^>]*>[^<]*fbq\s*\([^<]*<\/script>//ig
 
 # Inline gtag
 s/<script[^>]*>[^<]*gtag\s*\([^<]*<\/script>//ig
+
+
+##
+## FILTER: block-webrtc
+## Neutralise les APIs WebRTC (RTCPeerConnection et variantes) pour empêcher
+## la fuite de l'IP réelle via STUN/ICE, contournant le proxy/VPN.
+##
+## Mécanisme : injection d'un script en tête de page qui remplace les
+## constructeurs WebRTC natifs par des stubs silencieux AVANT tout autre
+## script de la page. Le stub implémente l'interface EventTarget pour
+## éviter les erreurs JS qui casseraient les pages.
+##
+## Couverture :
+##   - RTCPeerConnection (standard W3C)
+##   - webkitRTCPeerConnection (Chrome legacy)
+##   - mozRTCPeerConnection (Firefox legacy)
+##   - RTCSessionDescription / RTCIceCandidate (constructeurs associés)
+##
+## Limitation connue : ne bloque pas les workers (SharedWorker / ServiceWorker)
+## ni le WebRTC natif hors-navigateur. Pour une protection totale, combiner
+## avec le blocage réseau STUN (ports UDP 3478, 5349) au niveau iptables.
+##
+FILTER: block-webrtc Neutralisation WebRTC pour prévenir les fuites IP
+
+s|<head>|<head><script>(function(){var _stub=function(){var _ev={};return{createOffer:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},createAnswer:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},setLocalDescription:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},setRemoteDescription:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},addIceCandidate:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},close:function(){},getStats:function(){return Promise.resolve(new Map());},getSenders:function(){return[];},getReceivers:function(){return[];},addTrack:function(){},removeTrack:function(){},addEventListener:function(t,cb){(_ev[t]=_ev[t]||[]).push(cb);},removeEventListener:function(t,cb){_ev[t]=(_ev[t]||[]).filter(function(f){return f!==cb;});},dispatchEvent:function(){return true;},signalingState:'closed',iceConnectionState:'closed',iceGatheringState:'complete',connectionState:'closed',localDescription:null,remoteDescription:null,onicecandidate:null,ontrack:null,ondatachannel:null,onnegotiationneeded:null,oniceconnectionstatechange:null,onicegatheringstatechange:null,onsignalingstatechange:null,onconnectionstatechange:null};};var C=function(){return _stub();};C.prototype={};['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection'].forEach(function(k){try{Object.defineProperty(window,k,{value:C,writable:false,configurable:false});}catch(e){}});try{Object.defineProperty(window,'RTCSessionDescription',{value:function(i){return i||{};},writable:false,configurable:false});}catch(e){}try{Object.defineProperty(window,'RTCIceCandidate',{value:function(i){return i||{};},writable:false,configurable:false});}catch(e){}})();</script>|igs
 
 
 ##
