@@ -70,8 +70,12 @@ s/<button[^>]*(?:onclick|class)[^>]*["\'][^"\'>]*(?:accept-all|accept-cookies)[^
 ##
 FILTER: block-ads-js-aggressive-2026 Suppression agressive scripts ads/pagead
 
+# Bloquer les chemins spécifiques recommandés par adblock tests
+# /pagead.js et /widget/ads patterns
+s/<script[^>]*(?:src|data-src)=["\'][^"\']*(?:\/pagead\.js|\/widget\/ads)[^"\']*["\'][^>]*>[\s\S]*?<\/script>//igs
+
 # Bloquer les balises script chargant ads.js et variantes
-s/<script[^>]*(?:src|data-src)=["\'][^"\']*(?:ads\.js|pagead\.js|ads-\d+\.js|pagead-\d+\.js)[^"\']*["\'][^>]*>[\s\S]*?<\/script>//igs
+s/<script[^>]*(?:src|data-src)=["\'][^"\']*(?:ads\.js|pagead\.js|ads-\d+\.js|pagead-\d+\.js|widget\/ads)[^"\']*["\'][^>]*>[\s\S]*?<\/script>//igs
 
 # Bloquer les conteneurs/divs créés pour les ads Google
 s/<div[^>]*(?:id|class)=["\'][^"\']*(?:google_ads|gpt-|adslot|adunit|ad-container|ad-widget)[^"\']*["\'][^>]*>[\s\S]*?<\/div>//igs

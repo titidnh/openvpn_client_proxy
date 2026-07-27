@@ -43,11 +43,45 @@ ad.doubleclick.net
 /pagead.js
 /ads*.js
 /pagead*.js
+/widget/ads.
+/widget/ads*
 google.com/ads
 googlesyndication.com/adsbygoogle
 googleadservices.com/pagead
 pagead.googlesyndication.com
 google.com/pagead
+
+## === Ad Script Paths (Generic Blocking) ===
+{ +block{Ad Script Paths} }
+/ads.js
+/ads-
+/ads/
+/advert.js
+/advertising.js
+/advertisement.js
+/ad-banner.js
+/ad-manager.js
+/ad-unit.js
+/ad-widget.js
+/ad-loader.js
+/ads-loader.js
+/ads-injection.js
+/pagead.js
+/pagead-
+/pagead/
+/googleads.js
+/google-ads.js
+/gpt.js
+/gpt-
+/google-publish.js
+/google-publisher.js
+/widget/ads
+/widget/ads.
+/widget/advert
+/modules/ads
+/modules/advert
+/includes/ads
+/lib/ads.js
 
 ## === Meta / Facebook ===
 { +block{Meta Tracking} }

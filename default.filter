@@ -117,7 +117,7 @@ s/^X-Web3-User:.*\n//im
 FILTER: remove-js-trackers Suppression scripts tracking JavaScript
 
 # Google Ads & Analytics scripts (ads.js, pagead.js, etc)
-s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/ads\.js|pagead\.js|ads\.google\.com)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/ads\.js|\/pagead\.js|\/widget\/ads|ads\.google\.com)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googleadservices\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googlesyndication\.com\/adsbygoogle[^"\'>]*["\'][^>]*>.*?<\/script>//igs
 
