@@ -13,6 +13,10 @@
   +filter{strip-tracking-params} \
   +filter{remove-js-trackers} \
   +filter{anti-fingerprint} \
+  +filter{strip-cookie-consent} \
+  +filter{remove-tracking-pixels-2026} \
+  +filter{strip-telemetry-js-2026} \
+  +filter{strip-consent-washing-2026} \
 }
 /
 
@@ -30,3 +34,34 @@
 ##
 # { +block{Perso} }
 # .domaine-a-bloquer.com
+
+##
+## RECOMMANDATIONS 2026 POUR PRIVACY MAXIMALE
+##
+## 1. CONFIGURATIONS DNS (en parallèle à Privoxy)
+##    - Pi-hole, Unbound, ou NextDNS avec listes de blocage:
+##      * Hagezi's Pro (ads, tracking, malware)
+##      * StevenBlack's hosts (ads, social, fake akamai)
+##      * ENS Adblock List (French-friendly)
+##
+## 2. PARAMETRES NAVIGATEUR (via user.action ou DNS)
+##    - Bloquer WebGL fingerprinting
+##    - Désactiver Storage Access API
+##    - Refuser FLoC / Topics API
+##    - Bloquer Web Share Target
+##    - Lim. User-Agent Reduction
+##
+## 3. HEADERS AVANCÉS (ajouter si besoin)
+##    - Permissions-Policy (ex: camera=(), microphone=(), geolocation=())
+##    - Strict-Transport-Security
+##    - X-Content-Type-Options: nosniff
+##
+## 4. BLOCAGE SUPPLEMENTAIRE (moteurs alternatives)
+##    - Utiliser Privy, Ghostery, uBlock Origin en plus de Privoxy
+##    - Activer "Hard Privacy" si disponible
+##
+## 5. VPN + PROXY
+##    - Cette config utilise VPN + Privoxy (double couche)
+##    - Assure que le VPN ne fuite pas les DNS
+##    - Teste avec DNS leak test, IP leak test
+##

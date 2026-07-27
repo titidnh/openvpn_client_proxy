@@ -12,6 +12,7 @@
   +filter{strip-tracking-params} \
   +filter{remove-js-trackers} \
   +filter{anti-fingerprint} \
+  +filter{strip-cookie-consent} \
 }
 /
 
@@ -98,6 +99,546 @@ self.events.data.microsoft.com
 .undertone.com
 .yieldbot.com
 .turn.com
+
+## === Server-Side Tracking (SST) & First-Party Tracking ===
+{ +block{Server-Side Tracking Providers} }
+.segment.com
+.segment.io
+.analytics.segment.com
+.api.amplitude.com
+.amplitude.com
+.data.amplitude.com
+.mixpanel.com
+.api.mixpanel.com
+.api.intercom.io
+.api.intercomusercontent.com
+.intercom.io
+.logs.rudderstack.com
+.api.rudderstack.com
+.track.hubspot.com
+.hubspot.com
+.api.hubspot.com
+.api.drift.com
+.static.drift.com
+.drift.com
+.data.branch.io
+.branch.io
+.datadog-browser-agent.com
+.browser-intake-datadoghq.com
+.api.getunity.com
+.unity3d.com/unityanalytics
+
+## === CDP (Customer Data Platform) & DMP (Data Management Platform) ===
+{ +block{CDP/DMP Platforms} }
+.blueconic.com
+.evergage.com
+.sitecore.com/xp
+.tealium.com
+.tealium.net
+.umdtag.com
+.tealeaf.edgesuite.net
+.ibm-analytics.com
+.tealeaf.com
+.ensighten.com
+.rocket-cdn.com
+.rocket-tag.com
+.krux.com
+.kxjmp.com
+.acxiom.com
+.liveramp.com
+.liverampservices.com
+.liveramp-match.com
+.rampid.com
+.consentmanager.net
+.consentmanager.com
+.sourcepoint.com
+.sourcepoint.net
+.privacy-center.org
+
+## === Unified ID & Alternative Identifiers (2026) ===
+{ +block{Unified ID Networks} }
+.uid2.com
+.uid2-sync.com
+.uid2.ezhome.io
+.match.adsrvr.org
+.mathtag.com
+.sonobi.com
+.ezoic.com
+.ezodn.com
+.contextweb.com/identity
+.prebid.org
+.prebidjs.org
+.freestar-cdn.com
+
+## === AI/ML Training Data Collection (2026) ===
+{ +block{AI Training Data Collection} }
+.data-collection.openai.com
+.telemetry.anthropic.com
+.training-data.mistral.ai
+.learning-endpoint.google.com
+.ml-telemetry.meta.com
+.model-training.azure.com
+.dataset-collection.local
+
+## === Behavioral & Engagement Tracking ===
+{ +block{Behavioral Analytics} }
+.fullstory.com
+.fullstory-events.com
+.mouseflow.com
+.mouseflowcdn.com
+.clarity.ms/collect
+.c.microsoft.com/cms
+.hotjar.com
+.hotjar.io
+.hjcdn.com
+.smartlook.com
+.api.smartlook.com
+.logrocket.com
+.cdn.logrocket.com
+.rollbar.com
+.api.rollbar.com
+.sentry.io
+.sentry-cdn.com
+.newrelic.com
+.bam.nr-data.net
+
+## === Real-Time Bidding (RTB) - SSP/DSP/Ad Exchanges (2026) ===
+{ +block{RTB & Ad Exchanges} }
+.magnite.com
+.mgn.tech
+.rubicon.com
+.rubiconproject.com
+.gumgum.com
+.sovrn.com
+.sovrn-cdn.com
+.freewheel.com
+.freewheel.tv
+.improvado.io
+.adverity.com
+.jivox.com
+.innovid.com
+.innovid-cdn.com
+.flashtalking.com
+.rocket-cdn.com
+
+## === Privacy-Invasive Analytics & Tracking ===
+{ +block{Analytics Trackers} }
+.facebook.com/uaid
+.facebook.com/tr/pixeljs
+.facebook.com/en_US/fbevents/1.0
+.web.facebook.com/ajax/bz
+.analytics.google.com
+.region1.analytics.google.com
+.region2.analytics.google.com
+.stats.google.com
+.cert.int-x.com
+.mtrack.mixpanel.com
+.seg.ugc.prod.s.apptentive.com
+.api-iam.intercom.io
+.api.appboys.com
+.sdk.iad.appboys.com
+.firebaseremoteconfig.googleapis.com
+.firebaselogging-pa.googleapis.com
+.firebasedynamiclinks.googleapis.com
+.firebaseinstallations.googleapis.com
+.firebase-settings.crashlytics.com
+.firebasecrashlytics.googleapis.com
+
+## === Consent & Preference Washing ===
+{ +block{Consent Evasion Tools} }
+.consentcdn.com
+.quantummetric.com
+.quantumcdn.com
+.onetrust.com
+.cookiebot.com
+.cookie-cdn.cookiebot.com
+.consent-mgmt-cdn.com
+.privacy-mgmt.com
+
+## === Contextual & Keyword Targeting (2026) ===
+{ +block{Contextual Analysis} }
+.contextual-ai.com
+.content-analysis.net
+.semantic-targeting.ai
+.keyword-extract.cloud
+.content-intelligence.io
+
+## === Amazon Advertising & Tracking (US) ===
+{ +block{Amazon Ads/Tracking} }
+.amazon-adsystem.com
+.adserver.amazon.com
+.ads.amazon.com
+.advertising.amazon.com
+.insights.amazon.com
+.attribution.amazon.com
+.rds.amazonaws.com/analytics
+.amazonaws.com/advertising-analytics
+.a2x.com
+
+## === Email Marketing & CRM Tracking (US) ===
+{ +block{Email Marketing Tracking} }
+.klaviyo.com
+.api.klaviyo.com
+.track.klaviyo.com
+.static.klaviyo.com
+.activecampaign.com
+.api.activecampaign.com
+.track.activecampaign.com
+.getresponse.com
+.api.getresponse.com
+.convertkit.com
+.api.convertkit.com
+.substack.com/api/v1/analytics
+.beehiiv.com
+.api.beehiiv.com
+.mailchimp.com
+.api.mailchimp.com
+.list-manage.com
+.chimpstatic.com
+.mc.yandex.com
+
+## === Shopify & E-commerce Analytics (US) ===
+{ +block{E-commerce Tracking} }
+.myshopify.com/analytics
+.shopifycdn.com/analytics
+.shopify.com/cdn/pixels
+.shopifyanalytics.com
+.stats.shopify.com
+.bigcommerce.com/analytics
+.bigcommerce.io/analytics
+.woocommerce.com/analytics
+.woo.com/api/analytics
+.magento.adobe.com/analytics
+.adobecommerce.com/analytics
+.commerce.adobe.com
+.commercecloud.salesforce.com
+.cloud.adobe.com/tracking
+.data.adobe.com
+.analytics.adobe.com
+.experience.adobe.com
+.adobe.io/event
+
+## === Sales Intelligence & B2B Tracking (US) ===
+{ +block{B2B Sales Intelligence} }
+.6sense.com
+.api.6sense.com
+.clearbit.com
+.api.clearbit.com
+.clearbit-analytics.com
+.hunter.io
+.api.hunter.io
+.zoomiinfo.com
+.zoominfo.com
+.api.zoominfo.com
+.leads.zoominfo.com
+.apollo.io
+.api.apollo.io
+.rocketreach.co
+.api.rocketreach.co
+.lusha.io
+.api.lusha.io
+.instantly.ai
+.api.instantly.ai
+.outreach.io
+.salesloft.com
+.api.salesloft.com
+.groove.io
+.api.groove.io
+.gong.io
+.api.gong.io
+.gong-analytics.com
+.chorus.ai
+.api.chorus.ai
+.chorus-analytics.com
+
+## === Video & Streaming Analytics (US) ===
+{ +block{Video Analytics} }
+.vidyard.com
+.api.vidyard.com
+.vidyard-analytics.com
+.wistia.com
+.api.wistia.com
+.wistia-analytics.com
+.fast.wistia.net
+.vimeo.com/analytics
+.api.vimeo.com/analytics
+.analytics.vimeo.com
+.mux.com/analytics
+.api.mux.com/analytics
+.smartvideo.net
+.api.smartvideo.net
+
+## === Content Marketing & Engagement (US) ===
+{ +block{Content Analytics} }
+.chartbeat.com
+.static.chartbeat.com
+.parse.ly
+.static.parsely.com
+.contentsquare.com
+.contentsquarecdn.com
+.momentum.com/analytics
+.momenta.ai
+.api.momenta.ai
+.siteimprove.com
+.analytics.siteimprove.com
+.qualitybench.com
+
+## === Digital Marketing & Ad Tech (US) ===
+{ +block{Ad Tech Networks} }
+.adroll.com
+.api.adroll.com
+.adroll-analytics.com
+.rollworks.com
+.api.rollworks.com
+.ramp.com
+.marin-software.com
+.api.marin.com
+.pathmatics.com
+.semrush.com/advertising
+.semrush-analytics.com
+.semrush-ads.com
+.adbeat.com
+.api.adbeat.com
+.mediaocean.com
+.api.mediaocean.com
+.flashtalking.com/analytics
+.innovid-analytics.com
+.jivox-analytics.com
+
+## === Healthcare & Pharma Tracking (US/GDPR-sensitive) ===
+{ +block{Healthcare Tracking} }
+.veeva.com/analytics
+.veeva-track.com
+.salesforce.com/healthcare-analytics
+.optum.com/analytics
+.unitedhealth.com/tracking
+.truven-analytics.com
+.iqvia.com/tracking
+.iqvia-analytics.com
+
+## === German Analytics & Tracking Companies ===
+{ +block{German Tracking} }
+.webtrekk.com
+.webtrekk.net
+.webtrekk-cdn.com
+.api.webtrekk.com
+.etracker.com
+.etracker.de
+.etracker-cdn.com
+.api.etracker.com
+.mapp.com
+.mapp.digital
+.mapp-analytics.com
+.mapp-cdn.com
+.api.mapp.com
+.searchmetrics.com
+.searchmetrics-analytics.com
+.sistrix.com
+.sistrix-analytics.com
+.ryte.com
+.ryte-analytics.com
+.getstat.com
+.getstat-analytics.com
+.rank-tracker.de
+
+## === French Analytics & Tracking Companies ===
+{ +block{French Tracking} }
+.eulerian.com
+.eulerian.net
+.eulerian-cdn.com
+.api.eulerian.com
+.at-internet.com
+.at-internet.com
+.atinternet-solutions.com
+.atinternet-cdn.com
+.xiti.com
+.ati-host.net
+.api.atinternet.com
+.tag-commander.com
+.tagcommander.com
+.tagcommander-cdn.com
+.api.tagcommander.com
+.commanders-act.com
+.commandersact.com
+.commanders-act-cdn.com
+.api.commandersact.com
+.ab-tasty.com
+.cdn.abtasty.com
+.api.abtasty.com
+.kameleoon.com
+.kameleoon.net
+.kameleoon-cdn.com
+.api.kameleoon.com
+.ebuzzing.com
+.ebuzzing.net
+.ebuzzing-analytics.com
+.api.ebuzzing.com
+
+## === UK & European Tracking Companies ===
+{ +block{UK/European Tracking} }
+.contentsquare.com
+.contentsquare-cdn.com
+.contentsquare-analytics.com
+.seedtag.com
+.seedtag-analytics.com
+.idnomic.com
+.idnomic-analytics.com
+.netboard.me
+.netboard-analytics.com
+.onaudience.com
+.onaudience-analytics.com
+.onaudience-cdn.com
+.upland.com/analytics
+.uplaod-analytics.com
+
+## === Form & Session Analytics (Privacy Risk) ===
+{ +block{Form Analytics} }
+.fullstory.com/session
+.sessioncam.com
+.api.sessioncam.com
+.sessioncam-cdn.com
+.clicktale.net
+.tealeaf.com/session
+.tealeaf.net/session
+.touchclarity.com
+.userreplay.com
+.api.userreplay.com
+.logrocket.com/session
+.cdn.logrocket.com/session
+.mixpanel.com/form-tracking
+.amplitude.com/form-tracking
+.heap.io/session
+.api.heap.io/session
+.pendo.io/session
+.api.pendo.io/session
+.appcues.com/session
+.api.appcues.com/session
+
+## === Crash Reporting & Performance Monitoring (Can leak PII) ===
+{ +block{Crash Reporting} }
+.bugsnag.com
+.api.bugsnag.com
+.sentry.io/crash
+.api.sentry.io/crash
+.rollbar.com/errors
+.api.rollbar.com/errors
+.raygun.io
+.api.raygun.io
+.stackdriver.google.com
+.googleapis.com/monitoring
+.newrelic.com/crash
+.bam.nr-data.net/crash
+.apica.io
+.api.apica.io
+.splunk.com/crash
+.hec.splunk.com
+.datadog.com/crash
+.api.datadoghq.com/crash
+
+## === Location & Geofencing Tracking ===
+{ +block{Location Tracking} }
+.gimbal.com
+.api.gimbal.com
+.proximiio.com
+.api.proximiio.com
+.kontakt.io
+.api.kontakt.io
+.mist.systems
+.api.mist.systems
+.bluedot.io
+.api.bluedot.io
+.marketsquare.net/location
+.plutio.com/location
+
+## === Mobile App Analytics & Attribution (US) ===
+{ +block{Mobile Attribution} }
+.branch.io
+.api.branch.io
+.branch-analytics.com
+.appsflyer.com
+.api.appsflyer.com
+.appsflyer-analytics.com
+.adjust.com
+.api.adjust.com
+.adjust-analytics.com
+.singular.net
+.api.singular.net
+.singular-analytics.com
+.mobileaction.com
+.api.mobileaction.com
+.hasoffers.com
+.api.hasoffers.com
+.impact.com
+.api.impact.com
+
+## === Social Listening & Monitoring (US) ===
+{ +block{Social Monitoring} }
+.brandwatch.com
+.api.brandwatch.com
+.talkwalker.com
+.api.talkwalker.com
+.sprinklr.com
+.api.sprinklr.com
+.salesforce.com/social
+.hootsuite.com/analytics
+.api.hootsuite.com/analytics
+.buffer.com/analytics
+.api.buffer.com/analytics
+.sendible.com/analytics
+.agorapulse.com/analytics
+.api.agorapulse.com/analytics
+
+## === AI-Powered Personalization & Targeting (2026 Growth) ===
+{ +block{AI Personalization} }
+.dynamic-yield.com
+.api.dynamic-yield.com
+.evergage.com/ai
+.api.evergage.com/ai
+.optimizely.com/ai
+.api.optimizely.com/ai
+.vwo.com/ai
+.api.vwo.com/ai
+.unbounce.com/ai
+.api.unbounce.com/ai
+.instapage.com/ai
+.api.instapage.com/ai
+.leadpages.com/ai
+.api.leadpages.com/ai
+.landingi.com/ai
+.api.landingi.com/ai
+.personalize.ai
+.api.personalize.ai
+.smartsensei.com
+.api.smartsensei.com
+.theconversionapi.com
+.personalize-api.com
+
+## === Voice & Audio Fingerprinting (2026 Emerging Threat) ===
+{ +block{Audio Fingerprinting} }
+.audiomatch.com
+.api.audiomatch.com
+.voicetech.com/tracking
+.voiceprint.ai
+.api.voiceprint.ai
+.soundcheck.ai
+.api.soundcheck.ai
+.audiogram.net/tracking
+.speech-analytics.com
+
+## === NFT & Web3 Tracking (2026 Privacy Risk) ===
+{ +block{Web3 Tracking} }
+.web3-analytics.com
+.blockchain-track.com
+.nft-analytics.com
+.defi-track.com
+.metamask.io/telemetry
+.metamask.com/analytics
+.walletconnect.org/analytics
+.alchemy.com/analytics
+.infura.io/analytics
+.etherscan.io/analytics
+.opensea.io/analytics
+.uniswap.org/analytics
 .mopub.com
 .smartadserver.com
 .smartclip.net

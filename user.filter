@@ -11,7 +11,58 @@ FILTER: strip-cookie-consent Suppression bandeaux cookie consent
 
 s/<div[^>]+(cookie-banner|cookie-consent|cookiebar|cookie-notice|gdpr-banner|cc-window)[^>]*>.*?<\/div>//igs
 s/<div[^>]+id=["\']?(CybotCookiebotDialog|onetrust-banner-sdk|sp-cc|truste-consent)[^"\']*["\']?[^>]*>.*?<\/div>//igs
+##
+## FILTER: remove-tracking-pixels-2026
+## Supprime les pixels de suivi, beacons, et web bugs modernes (2026)
+##
+FILTER: remove-tracking-pixels-2026 Suppression pixels, beacons et web bugs
 
+# Pixels et beacons génériques
+s/<img[^>]+(?:src|data-src)=["\']?(?:https?:|\/)\/?[^"\'>]*(?:pixel|beacon|tracking|analytics|gif|transparent|1x1)[^"\'>]*["\']?[^>]*(?:\/?>|>.*?<\/img>)//igs
+s/<img[^>]+(?:width|height)[^>]*=["\'](1|0)[^\'"][^>]*(?:\/?>|>.*?<\/img>)//igs
+s/<noscript[^>]*>.*?<img[^>]*>.*?<\/noscript>//igs
+
+# Tracking pixels spécifiques
+s/<img[^>]*src=["\'][^\'">]*(?:\/tr\?|google-analytics|facebook\.com\/tr|doubleclick\.net)[^"\'>]*["\'][^>]*(?:\/?>|>.*?<\/img>)//igs
+
+# Web fonts origin tracking (diminue les fingerprints)
+s/<link[^>]*href=["\']https?:\/\/fonts\.googleapis\.com[^"\'>]*["\'][^>]*>//<igs
+
+# Iframes tracking et consentement
+s/<iframe[^>]*(?:name|id|src|data-src)=["\']?(?:consent|tracking|analytics|pixel)[^"\'>]*["\']?[^>]*>.*?<\/iframe>//igs
+
+##
+## FILTER: strip-telemetry-js-2026
+## Supprime les scripts de télémétrie et collecte données avancés (2026)
+##
+FILTER: strip-telemetry-js-2026 Suppression scripts télémétrie avancés
+
+# Scripts de telemetrie navigateur
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:telemetry|usage-stats|crash-reporting|error-tracking)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Scripts de collecte comportementale (engagement, scroll, etc)
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:behavioral|engagement|scroll-tracking|interaction|keystroke)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Scripts d'apprentissage IA/ML données (2026)
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:ml-training|training-data|model-improvement|ai-collection)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Scripts CDP/DMP
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/cdp\/|\/dmp\/|segment\.io|tealium|rudderstack|mparticle|analytics\.js)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+##
+## FILTER: strip-consent-washing-2026
+## Combats les techniques de "consent washing" en 2026
+##
+FILTER: strip-consent-washing-2026 Suppression consentement cosmétique
+
+# Éléments consent pré-sélectionnés (manipulation)
+s/checked[^>]*(?=\s*(?:id|name)=["\']?(?:gdpr|cookie|consent|tracking))/disabled/igs
+
+# Overlay de consentement masquant contenu
+s/<div[^>]*(?:overlay|modal)[^>]*(?:consent|privacy)[^>]*>.*?<\/div>//igs
+
+# "Dark patterns" - boutons Accept cachant déclinaison
+s/<button[^>]*(?:onclick|class)[^>]*["\'][^"\'>]*(?:accept-all|accept-cookies)[^"\'>]*["\'][^>]*>/--transparent-->/igs
 ##
 ## Ajouter tes filtres custom ici
 ##

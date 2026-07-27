@@ -51,6 +51,191 @@ s/^Observe-Browsing-Topics:.*\n//im
 s/^Attribution-Reporting-Eligible:.*\n//im
 s/^Attribution-Reporting-Support:.*\n//im
 
+# Protected Audience API / FLEDGE (2026)
+s/^Sec-Auction-Signals:.*\n//im
+s/^Sec-Ad-Auction-Fetch:.*\n//im
+
+# Topics API alternatives
+s/^Sec-Topics[^:]*:.*\n//im
+s/^X-Topics[^:]*:.*\n//im
+
+# Contextual Signal Sharing (2026)
+s/^Sec-Contextual-Signal:.*\n//im
+s/^X-Contextual-Data:.*\n//im
+
+# First-party CDP headers
+s/^X-Customer-Data[^:]*:.*\n//im
+s/^CDP-Signal:.*\n//im
+
+# Unified ID 2.0 headers
+s/^X-Uid2[^:]*:.*\n//im
+s/^X-Rampid[^:]*:.*\n//im
+
+# Consent/Preference Sync Headers
+s/^X-Consent-Token:.*\n//im
+s/^X-Privacy-Pref:.*\n//im
+s/^X-IAB-TCF:.*\n//im
+
+# Email & CRM Headers (2026)
+s/^X-Subscriber-Id:.*\n//im
+s/^X-Email-Id:.*\n//im
+s/^X-Campaign-Id:.*\n//im
+s/^X-List-Id:.*\n//im
+
+# Session & Form Tracking Headers
+s/^X-Session-Recording:.*\n//im
+s/^X-Form-Tracking:.*\n//im
+s/^X-Session-Replay:.*\n//im
+
+# Sales Intelligence & B2B Headers (2026)\ns/^X-Account-Id:.*\n//im
+s/^X-Intent-Score:.*\n//im
+s/^X-Lead-Score:.*\n//im
+s/^X-Buying-Signal:.*\n//im
+s/^X-Firmographic:.*\n//im
+s/^X-Technographic:.*\n//im
+
+# Video Analytics Headers
+s/^X-Video-Session:.*\n//im
+s/^X-Playback-Data:.*\n//im
+s/^X-Watch-Time:.*\n//im
+
+# Audio/Voice Fingerprinting Headers (2026)
+s/^X-Audio-Fingerprint:.*\n//im
+s/^X-Voice-Id:.*\n//im
+s/^X-Speech-Data:.*\n//im
+
+# Web3/Blockchain Headers (2026)
+s/^X-Wallet-Address:.*\n//im
+s/^X-Blockchain-Id:.*\n//im
+s/^X-Web3-User:.*\n//im
+
+
+##
+## FILTER: remove-js-trackers
+## Supprime les scripts de tracking JavaScript courants
+##
+FILTER: remove-js-trackers Suppression scripts tracking JavaScript
+
+# Google Analytics
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/analytics\.js|googletagmanager|google-analytics|ga\.js)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Facebook/Meta tracking
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*facebook\.com\/.*\/fbevents\.js[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Hotjar
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*hotjar\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Mixpanel
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*mixpanel\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Segment
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*cdn\.segment\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+##
+## FILTER: anti-fingerprint
+## Supprime les données de fingerprinting JavaScript
+##
+FILTER: anti-fingerprint Suppression données de fingerprinting
+
+# Canvas fingerprinting
+s/canvas\.toDataURL\([^)]*\)/""/igs
+
+# WebGL fingerprinting
+s/getParameter\(.*?UNMASKED_VENDOR\)/"WebGL Disabled"/igs
+s/getParameter\(.*?UNMASKED_RENDERER\)/"WebGL Disabled"/igs
+
+# Font detection
+s/document\.fonts\.check\([^)]*\)/false/igs
+
+# Plugin detection
+s/navigator\.plugins/\[\]/igs
+s/navigator\.mimeTypes/\[\]/igs
+
+# WebRTC leak prevention
+s/RTCPeerConnection\([^)]*\)/null/igs
+s/webkitRTCPeerConnection\([^)]*\)/null/igs
+
+# Screen resolution leaking
+s/window\.screen\.width/1024/igs
+s/window\.screen\.height/768/igs
+s/devicePixelRatio/1/igs
+
+##
+## FILTER: strip-tracking-params
+## Supprime les paramètres avancés de suivi (2026)
+##
+FILTER: strip-tracking-params Suppression paramètres tracking avancés 2026
+
+# Paramètres de suivi server-side (SST)
+s/[?&]server_side_tracking=[^&\s"']*//ig
+s/[?&]sst_event=[^&\s"']*//ig
+s/[?&]first_party_event=[^&\s"']*//ig
+s/[?&]event_id=[^&\s"']*//ig
+s/[?&]event_timestamp=[^&\s"']*//ig
+
+# Cross-domain tracking IDs
+s/[?&]cross_domain_id=[^&\s"']*//ig
+s/[?&]extended_id=[^&\s"']*//ig
+s/[?&]visitor_id=[^&\s"']*//ig
+s/[?&]user_hash=[^&\s"']*//ig
+
+# CDP/DMP identifiers
+s/[?&]cdp_id=[^&\s"']*//ig
+s/[?&]dmp_id=[^&\s"']*//ig
+s/[?&]customer_id=[^&\s"']*//ig
+s/[?&]audience_id=[^&\s"']*//ig
+s/[?&]segment_id=[^&\s"']*//ig
+
+# Privacy-invasive feature flags
+s/[?&]ad_targeting=[^&\s"']*//ig
+s/[?&]targeting_keywords=[^&\s"']*//ig
+s/[?&]user_segments=[^&\s"']*//ig
+s/[?&]behavioral_data=[^&\s"']*//ig
+s/[?&]purchase_intent=[^&\s"']*//ig
+
+# Video analytics tracking (2026)
+s/[?&]video_id=[^&\s"']*//ig
+s/[?&]video_session=[^&\s"']*//ig
+s/[?&]watch_time=[^&\s"']*//ig
+s/[?&]playback_data=[^&\s"']*//ig
+s/[?&]engagement_metrics=[^&\s"']*//ig
+
+# Form & Session Replay (Privacy invasive)
+s/[?&]form_data=[^&\s"']*//ig
+s/[?&]session_recording=[^&\s"']*//ig
+s/[?&]replay_token=[^&\s"']*//ig
+s/[?&]mouse_data=[^&\s"']*//ig
+
+# Email & CRM tracking
+s/[?&]email_id=[^&\s"']*//ig
+s/[?&]subscriber_id=[^&\s"']*//ig
+s/[?&]list_id=[^&\s"']*//ig
+s/[?&]campaign_id=[^&\s"']*//ig
+s/[?&]email_open=[^&\s"']*//ig
+s/[?&]link_click=[^&\s"']*//ig
+s/[?&]unsubscribe_id=[^&\s"']*//ig
+
+# Sales & B2B Intelligence (2026)
+s/[?&]account_id=[^&\s"']*//ig
+s/[?&]intent_score=[^&\s"']*//ig
+s/[?&]firmographic=[^&\s"']*//ig
+s/[?&]technographic=[^&\s"']*//ig
+s/[?&]buying_signal=[^&\s"']*//ig
+s/[?&]predictive_score=[^&\s"']*//ig
+s/[?&]lead_score=[^&\s"']*//ig
+
+# Audio & Voice Fingerprinting (2026)
+s/[?&]audio_fingerprint=[^&\s"']*//ig
+s/[?&]voice_id=[^&\s"']*//ig
+s/[?&]voice_data=[^&\s"']*//ig
+s/[?&]speech_analytics=[^&\s"']*//ig
+
+# Web3/Blockchain Tracking (2026)
+s/[?&]wallet_address=[^&\s"']*//ig
+s/[?&]blockchain_id=[^&\s"']*//ig
+s/[?&]nft_tracking=[^&\s"']*//ig
+s/[?&]defi_activity=[^&\s"']*//ig
+s/[?&]web3_user=[^&\s"']*//ig
 
 ##
 ## FILTER: strip-utm-params
@@ -98,6 +283,49 @@ s/[?&]obOrigUrl=[^&\s"']*//ig
 # Divers
 s/[?&]mc_eid=[^&\s"']*//ig
 s/[?&]mc_cid=[^&\s"']*//ig
+
+# Amazon Ads
+s/[?&]amazon_ad_id=[^&\s"']*//ig
+s/[?&]amzn_assoc_ad_mode=[^&\s"']*//ig
+
+# Snap / Snapchat
+s/[?&]snap_pxl=[^&\s"']*//ig
+s/[?&]scm_data=[^&\s"']*//ig
+
+# Identifiants Unifiés (RampID, UnifiedID, etc)
+s/[?&]rampid=[^&\s"']*//ig
+s/[?&]unified_id=[^&\s"']*//ig
+s/[?&]userid=[^&\s"']*//ig
+s/[?&]adid=[^&\s"']*//ig
+
+# Paramètres de consentement et préférences
+s/[?&]consent_token=[^&\s"']*//ig
+s/[?&]consent_string=[^&\s"']*//ig
+s/[?&]iab_tcf=[^&\s"']*//ig
+s/[?&]privacy_signal=[^&\s"']*//ig
+
+# Paramètres comportementaux (scroll, engagement, etc)
+s/[?&]scroll_depth=[^&\s"']*//ig
+s/[?&]engagement_time=[^&\s"']*//ig
+s/[?&]time_on_page=[^&\s"']*//ig
+s/[?&]mouse_movements=[^&\s"']*//ig
+s/[?&]keystroke_data=[^&\s"']*//ig
+
+# Paramètres de contextualisation IA/ML (2026)
+s/[?&]ai_context=[^&\s"']*//ig
+s/[?&]content_vector=[^&\s"']*//ig
+s/[?&]semantic_hash=[^&\s"']*//ig
+s/[?&]ml_signal=[^&\s"']*//ig
+
+# Tracking d'apprentissage données (données d'entraînement)
+s/[?&]training_data=[^&\s"']*//ig
+s/[?&]data_telemetry=[^&\s"']*//ig
+s/[?&]model_improvement=[^&\s"']*//ig
+
+# Paramètres de session et device fingerprinting avancé
+s/[?&]session_id=[^&\s"']*//ig
+s/[?&]fp_hash=[^&\s"']*//ig
+s/[?&]device_fingerprint=[^&\s"']*//ig
 s/[?&]_ga=[^&\s"']*//ig
 s/[?&]_gl=[^&\s"']*//ig
 s/[?&]_hsenc=[^&\s"']*//ig
@@ -110,68 +338,6 @@ s/[?&]ref=[^&\s"']*//ig
 # Nettoyage résiduel : ? ou & orphelin en fin d'URL
 s/\?&/\?/g
 s/[?&]+$//g
-
-
-##
-## FILTER: strip-tracking-params
-## Supprime les pixels de tracking 1x1 et beacons dans le HTML
-##
-FILTER: strip-tracking-params Suppression pixels tracking et beacons HTML
-
-# Pixels 1x1 (img tracking)
-s/<img[^>]+(width|height)=["']?1["']?[^>]+(height|width)=["']?1["']?[^>]*>//ig
-s/<img[^>]+src=["'][^"']*\/(pixel|beacon|track|collect|ping|1x1|spacer)\.[^"']*["'][^>]*>//ig
-
-# Iframes de tracking
-s/<iframe[^>]+src=["'][^"']*\/(pixel|beacon|track|collect)[^"']*["'][^>]*>.*?<\/iframe>//igs
-
-
-##
-## FILTER: remove-js-trackers
-## Supprime les balises <script> chargeant des trackers externes connus
-##
-FILTER: remove-js-trackers Suppression scripts de tracking et analytics connus
-
-# Google Analytics / GTM / Ads
-s/<script[^>]*src=["'][^"']*googletagmanager\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*google-analytics\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*googletagservices\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*googlesyndication\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*doubleclick\.net[^"']*["'][^>]*>\s*<\/script>//ig
-
-# Meta Pixel
-s/<script[^>]*src=["'][^"']*connect\.facebook\.net[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*>[\s\S]*?!function\(f,b,e,v,n,t,s\)[\s\S]*?fbq[\s\S]*?<\/script>//igs
-
-# Analytics tiers
-s/<script[^>]*src=["'][^"']*hotjar\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*mouseflow\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*fullstory\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*segment\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*segment\.io[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*amplitude\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*mixpanel\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*heap\.io[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*heapanalytics\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*newrelic\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*nr-data\.net[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*clarity\.ms[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*criteo\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*adnxs\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*fingerprintjs\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*fingerprint\.com[^"']*["'][^>]*>\s*<\/script>//ig
-s/<script[^>]*src=["'][^"']*fpjs\.io[^"']*["'][^>]*>\s*<\/script>//ig
-
-# Inline dataLayer GTM
-s/<script[^>]*>\s*window\.dataLayer\s*=\s*window\.dataLayer[^<]*<\/script>//ig
-s/<script[^>]*>\s*\(function\(w,d,s,l,i\)\{[^<]*googletagmanager[^<]*<\/script>//ig
-
-# Inline fbq (Meta Pixel)
-s/<script[^>]*>[^<]*fbq\s*\([^<]*<\/script>//ig
-
-# Inline gtag
-s/<script[^>]*>[^<]*gtag\s*\([^<]*<\/script>//ig
-
 
 ##
 ## FILTER: block-webrtc
@@ -196,42 +362,6 @@ s/<script[^>]*>[^<]*gtag\s*\([^<]*<\/script>//ig
 FILTER: block-webrtc Neutralisation WebRTC pour prévenir les fuites IP
 
 s|<head>|<head><script>(function(){var _stub=function(){var _ev={};return{createOffer:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},createAnswer:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},setLocalDescription:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},setRemoteDescription:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},addIceCandidate:function(){return Promise.reject(new DOMException('WebRTC blocked','NotSupportedError'));},close:function(){},getStats:function(){return Promise.resolve(new Map());},getSenders:function(){return[];},getReceivers:function(){return[];},addTrack:function(){},removeTrack:function(){},addEventListener:function(t,cb){(_ev[t]=_ev[t]||[]).push(cb);},removeEventListener:function(t,cb){_ev[t]=(_ev[t]||[]).filter(function(f){return f!==cb;});},dispatchEvent:function(){return true;},signalingState:'closed',iceConnectionState:'closed',iceGatheringState:'complete',connectionState:'closed',localDescription:null,remoteDescription:null,onicecandidate:null,ontrack:null,ondatachannel:null,onnegotiationneeded:null,oniceconnectionstatechange:null,onicegatheringstatechange:null,onsignalingstatechange:null,onconnectionstatechange:null};};var C=function(){return _stub();};C.prototype={};['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection'].forEach(function(k){try{Object.defineProperty(window,k,{value:C,writable:false,configurable:false});}catch(e){}});try{Object.defineProperty(window,'RTCSessionDescription',{value:function(i){return i||{};},writable:false,configurable:false});}catch(e){}try{Object.defineProperty(window,'RTCIceCandidate',{value:function(i){return i||{};},writable:false,configurable:false});}catch(e){}})();</script>|igs
-
-
-##
-## FILTER: anti-fingerprint
-## Injecte un script de protection contre le fingerprinting canvas/audio/webgl
-##
-FILTER: anti-fingerprint Injection protection anti-fingerprinting
-
-s|</head>|<script>(function(){try{
-  // Canvas fingerprint
-  var _toDataURL = HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL = function(type){
-    if(type === 'image/png' && this.width === 16 && this.height === 16) return '';
-    return _toDataURL.apply(this, arguments);
-  };
-  // WebGL renderer info
-  var _getParameter = WebGLRenderingContext.prototype.getParameter;
-  WebGLRenderingContext.prototype.getParameter = function(param){
-    if(param === 37445 || param === 37446) return 'Generic GPU';
-    return _getParameter.call(this, param);
-  };
-  // AudioContext fingerprint
-  var _AC = window.AudioContext || window.webkitAudioContext;
-  if(_AC){ window.AudioContext = window.webkitAudioContext = function(){return new _AC({sampleRate:44100});}; }
-  // Navigator overrides
-  Object.defineProperty(navigator,'hardwareConcurrency',{get:function(){return 4;}});
-  Object.defineProperty(navigator,'deviceMemory',{get:function(){return 8;}});
-  Object.defineProperty(navigator,'languages',{get:function(){return['en-US','en'];}});
-  Object.defineProperty(navigator,'plugins',{get:function(){return[];}});
-  // Timezone normalization (lecture seule, on ne peut que masquer via intl)
-  var _DateTimeFormat = Intl.DateTimeFormat;
-  Intl.DateTimeFormat = function(locale, options){
-    if(options && options.timeZone === undefined) options = Object.assign({}, options, {timeZone:'UTC'});
-    return new _DateTimeFormat(locale, options);
-  };
-}catch(e){}})();</script></head>|igs
 
 
 ##
