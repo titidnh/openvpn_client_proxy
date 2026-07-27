@@ -63,6 +63,30 @@ s/<div[^>]*(?:overlay|modal)[^>]*(?:consent|privacy)[^>]*>.*?<\/div>//igs
 
 # "Dark patterns" - boutons Accept cachant déclinaison
 s/<button[^>]*(?:onclick|class)[^>]*["\'][^"\'>]*(?:accept-all|accept-cookies)[^"\'>]*["\'][^>]*>/--transparent-->/igs
+
+##
+## FILTER: block-ads-js-aggressive-2026
+## Blocage agressif des scripts ads.js et pagead.js (2026)
+##
+FILTER: block-ads-js-aggressive-2026 Suppression agressive scripts ads/pagead
+
+# Bloquer les balises script chargant ads.js et variantes
+s/<script[^>]*(?:src|data-src)=["\'][^"\']*(?:ads\.js|pagead\.js|ads-\d+\.js|pagead-\d+\.js)[^"\']*["\'][^>]*>[\s\S]*?<\/script>//igs
+
+# Bloquer les conteneurs/divs créés pour les ads Google
+s/<div[^>]*(?:id|class)=["\'][^"\']*(?:google_ads|gpt-|adslot|adunit|ad-container|ad-widget)[^"\']*["\'][^>]*>[\s\S]*?<\/div>//igs
+s/<ins[^>]*(?:class)=["\'][^"\']*(?:adsbygoogle|google-ads)[^"\']*["\'][^>]*>[\s\S]*?<\/ins>//igs
+
+# Bloquer les styles spécifiques aux ad containers (empêche leur affichage même si le JS passe)
+s/\.adsbygoogle[^{]*{[^}]*}//igs
+s/\.google-ads-[^{]*{[^}]*}//igs
+
+# Bloc les scripts qui se déguisent en analytics mais chargent des ads
+s/<script[^>]*(?:src|data-src)=["\'][^"\']*(?:google(?:ads|analytics)|gstatic|ads\.google)[^"\']*["\'][^>]*>[\s\S]*?<\/script>//igs
+
+# Supprime les appels de fonction de chargement d'ads
+s/<script[^>]*>[^<]*(?:googletag\.cmd\.push|adsbygoogle\.push|window\.adsbygoogle)[^<]*<\/script>//igs
+
 ##
 ## Ajouter tes filtres custom ici
 ##

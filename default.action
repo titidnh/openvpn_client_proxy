@@ -39,6 +39,15 @@
 stats.g.doubleclick.net
 cm.g.doubleclick.net
 ad.doubleclick.net
+/ads.js
+/pagead.js
+/ads*.js
+/pagead*.js
+google.com/ads
+googlesyndication.com/adsbygoogle
+googleadservices.com/pagead
+pagead.googlesyndication.com
+google.com/pagead
 
 ## === Meta / Facebook ===
 { +block{Meta Tracking} }

@@ -116,11 +116,21 @@ s/^X-Web3-User:.*\n//im
 ##
 FILTER: remove-js-trackers Suppression scripts tracking JavaScript
 
-# Google Analytics
+# Google Ads & Analytics scripts (ads.js, pagead.js, etc)
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/ads\.js|pagead\.js|ads\.google\.com)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googleadservices\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googlesyndication\.com\/adsbygoogle[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Google Analytics general
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:\/analytics\.js|googletagmanager|google-analytics|ga\.js)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Google Tag Manager specific
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googletagmanager\.com\/gtag\/js[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*googletagservices\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
 
 # Facebook/Meta tracking
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*facebook\.com\/.*\/fbevents\.js[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*connect\.facebook\.net[^"\'>]*["\'][^>]*>.*?<\/script>//igs
 
 # Hotjar
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*hotjar\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
@@ -130,6 +140,15 @@ s/<script[^>]*(?:data-)?src=["\'][^"\'>]*mixpanel\.com[^"\'>]*["\'][^>]*>.*?<\/s
 
 # Segment
 s/<script[^>]*(?:data-)?src=["\'][^"\'>]*cdn\.segment\.com[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Autres networks d'ads courants
+s/<script[^>]*(?:data-)?src=["\'][^"\'>]*(?:doubleclick\.net|adnxs\.com|criteo\.com|rubiconproject\.com|pubmatic\.com)[^"\'>]*["\'][^>]*>.*?<\/script>//igs
+
+# Blocage des scripts inlines d'ads courants
+s/<script[^>]*>[^<]*(?:adsbygoogle|googletag\.cmd|google_ad_|gpt\.defineSlot)[^<]*<\/script>//igs
+
+# Suppression des attributs data- qui chargent des ads
+s/\s+data-ad-[^=]*=["\'][^"\']*["\']//igs
 
 ##
 ## FILTER: anti-fingerprint

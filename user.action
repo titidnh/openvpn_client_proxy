@@ -17,6 +17,7 @@
   +filter{remove-tracking-pixels-2026} \
   +filter{strip-telemetry-js-2026} \
   +filter{strip-consent-washing-2026} \
+  +filter{block-ads-js-aggressive-2026} \
 }
 /
 
