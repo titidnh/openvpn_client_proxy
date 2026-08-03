@@ -5,6 +5,7 @@ set -o pipefail
 
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
+ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
 
 # PID variables
 vpn_pid=""
@@ -181,16 +182,6 @@ setup_iptables() {
     iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5053 -j ACCEPT
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5053 -j ACCEPT
 
-    # Port 53 toujours autorisé uniquement vers DNS_SERVER_1/2 (DOT actif ou non)
-    # Nécessaire au boot pour que parse_dot_servers() puisse résoudre les hostnames DoT
-    # et pour que dnsmasq puisse contacter les upstreams.
-    for _dns in "${DNS_SERVER_1:-}" "${DNS_SERVER_2:-}"; do
-        [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-        iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
-        log_json INFO setup_iptables "allowing port 53" "ip=${_dns}"
-    done
-
     if [ "${ENABLE_DOT:-false}" = "true" ]; then
         if [ -n "$DOT_RESOLVED_IPS" ]; then
             for dot_ip in $DOT_RESOLVED_IPS; do
@@ -200,11 +191,18 @@ setup_iptables() {
         else
             log_json WARN setup_iptables "DoT: no resolved IPs — TCP 853 not explicitly allowed"
         fi
-        # Kill switch : bloquer tout DNS 53 externe sauf DNS_SERVER_1/2 déjà autorisés ci-dessus
+        # Kill switch DoT strict : bloquer tout DNS 53 externe
         iptables -A OUTPUT -p udp ! -d 127.0.0.0/8 --dport 53 -j DROP
         iptables -A OUTPUT -p tcp ! -d 127.0.0.0/8 --dport 53 -j DROP
-        log_json INFO setup_iptables "DoT DNS leak prevention: external port 53 blocked except DNS_SERVER_1/2"
+        log_json INFO setup_iptables "DoT DNS leak prevention: external port 53 blocked"
     else
+        # Mode non-DoT : autoriser DNS_SERVER_1/2 + upstreams dnsmasq
+        for _dns in "${DNS_SERVER_1:-}" "${DNS_SERVER_2:-}"; do
+            [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
+            iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
+            log_json INFO setup_iptables "allowing port 53" "ip=${_dns}"
+        done
         # Mode non-DoT : autoriser aussi les upstreams dnsmasq (si différents de DNS_SERVER_1/2)
         while read -r dns; do
             [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
@@ -385,10 +383,11 @@ DOT_FORWARD_ADDRS_FILE="/tmp/dot_forward_addrs"
 parse_dot_servers() {
     local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
     servers=$(echo "$servers" | tr ',' ' ')
-    # Réinitialiser IPs, fichier de map et forward-addr à chaque appel
+    local tmp_map tmp_forward
+    tmp_map=$(mktemp /tmp/dot_ip_map.XXXXXX)
+    tmp_forward=$(mktemp /tmp/dot_forward_addrs.XXXXXX)
     DOT_RESOLVED_IPS=""
-    : > "$DOT_IP_MAP_FILE"
-    : > "$DOT_FORWARD_ADDRS_FILE"
+    DOT_HOST_IP_MAP=()
 
     for entry in $servers; do
         local proto host
@@ -426,21 +425,31 @@ parse_dot_servers() {
 
         if [ -n "$ip" ]; then
             DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
-            dot_ip_map_set "$host" "$ip"
-            # Écriture dans le fichier (pas stdout) pour survivre hors subshell
+            DOT_HOST_IP_MAP["$host"]="$ip"
+            echo "${host}=${ip}" >> "$tmp_map"
             if [ "$proto" = "https" ]; then
-                echo "        forward-addr: ${ip}@443#${host}" >> "$DOT_FORWARD_ADDRS_FILE"
+                echo "        forward-addr: ${ip}@443#${host}" >> "$tmp_forward"
             else
-                echo "        forward-addr: ${ip}@853#${host}" >> "$DOT_FORWARD_ADDRS_FILE"
+                echo "        forward-addr: ${ip}@853#${host}" >> "$tmp_forward"
             fi
             log_json INFO parse_dot_servers "resolved" \
                 "host=${host}" "ip=${ip}" "proto=${proto}" >&2
         else
             log_json WARN parse_dot_servers \
                 "could not resolve, skipping unresolved DoT server" "host=${host}" >&2
-            continue
         fi
     done
+
+    if [ -s "$tmp_map" ]; then
+        mv -f "$tmp_map" "$DOT_IP_MAP_FILE"
+    else
+        rm -f "$tmp_map"
+    fi
+    if [ -s "$tmp_forward" ]; then
+        mv -f "$tmp_forward" "$DOT_FORWARD_ADDRS_FILE"
+    else
+        rm -f "$tmp_forward"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -458,11 +467,15 @@ configure_unbound() {
         return 1
     fi
 
+    local conf_file
+    conf_file=$(mktemp /tmp/unbound.conf.XXXXXX)
+
     # Appel direct (pas subshell) pour que DOT_RESOLVED_IPS soit peuplé dans le process parent
     parse_dot_servers
 
     if [ ! -s "$DOT_FORWARD_ADDRS_FILE" ]; then
         log_json ERROR configure_unbound "no valid DoT servers parsed — DoT disabled"
+        rm -f "$conf_file"
         return 1
     fi
     local forward_addrs
@@ -511,7 +524,7 @@ forward-zone:
     mkdir -p /etc/unbound /var/lib/unbound
     chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
 
-    cat > /etc/unbound/unbound.conf <<EOF
+    cat > "$conf_file" <<EOF
 server:
     interface: 127.0.0.1
     port: 5053
@@ -553,11 +566,11 @@ EOF
 
     if [ "${ENABLE_DNSSEC:-false}" = "true" ] && [ -f /var/lib/unbound/root.key ]; then
         echo "    auto-trust-anchor-file: /var/lib/unbound/root.key" \
-            >> /etc/unbound/unbound.conf
+            >> "$conf_file"
     fi
 
     # Zone principale → DoT
-    cat >> /etc/unbound/unbound.conf <<EOF
+    cat >> "$conf_file" <<EOF
 
 forward-zone:
     name: "."
@@ -566,7 +579,16 @@ ${forward_addrs}
 EOF
 
     # Zones split DNS (override, sans TLS)
-    [ -n "$split_zones" ] && echo "$split_zones" >> /etc/unbound/unbound.conf
+    [ -n "$split_zones" ] && echo "$split_zones" >> "$conf_file"
+
+    if ! unbound-checkconf "$conf_file" >/tmp/unbound.checkconf 2>&1; then
+        log_json ERROR configure_unbound "unbound config test failed"
+        cat /tmp/unbound.checkconf >&2 || true
+        rm -f "$conf_file"
+        return 1
+    fi
+
+    mv -f "$conf_file" /etc/unbound/unbound.conf
 
     log_json INFO configure_unbound "config written" \
         "dnssec=${ENABLE_DNSSEC:-false}" \
@@ -581,12 +603,6 @@ start_unbound() {
     [ "${ENABLE_DOT:-false}" = "true" ] || return 0
 
     configure_unbound || return 0
-
-    if ! unbound-checkconf /etc/unbound/unbound.conf >/tmp/unbound.test 2>&1; then
-        log_json ERROR start_unbound "config test failed"
-        cat /tmp/unbound.test >&2 || true
-        return 1
-    fi
 
     unbound -d -c /etc/unbound/unbound.conf &
     unbound_pid=$!
@@ -607,6 +623,17 @@ start_unbound() {
     fi
 }
 
+test_unbound_dns() {
+    if command -v dig >/dev/null 2>&1; then
+        dig @127.0.0.1 -p 5053 example.com +short | grep -q .
+        return $?
+    elif command -v nslookup >/dev/null 2>&1; then
+        nslookup example.com 127.0.0.1#5053 >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
 # _dot_refresh_loop — boucle de re-résolution périodique des IPs DoT.
 # Définie ici (scope global bash) et lancée en background par start_dot_ip_refresh.
 # La communication avec le superviseur parent se fait via DOT_IP_MAP_FILE.
@@ -614,6 +641,7 @@ _dot_refresh_loop() {
     local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
     while true; do
         sleep "$interval"
+        local dot_changed=0
 
         local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
         servers=$(echo "$servers" | tr ',' ' ')
@@ -637,15 +665,41 @@ _dot_refresh_loop() {
                 continue
             fi
 
-            log_json INFO dot_refresh "IP changed — updating iptables"                 "host=${host}" "old=${old_ip:-none}" "new=${new_ip}"
+            log_json INFO dot_refresh "IP changed — preparing iptables and config refresh" \
+                "host=${host}" "old=${old_ip:-none}" "new=${new_ip}"
 
-            # Ajout avant suppression = zéro interruption de connectivité DoT
             ipt_add_853 "$new_ip"
-            [ -n "$old_ip" ] && ipt_del_853 "$old_ip"
 
-            # Mise à jour du fichier partagé et du tableau associatif
-            dot_ip_map_set "$host" "$new_ip"
+            if configure_unbound; then
+                local ub_pid
+                ub_pid=$(pidof unbound | awk '{print $1}' || true)
+                if [ -n "$ub_pid" ]; then
+                    kill -HUP "$ub_pid" 2>/dev/null || true
+                    sleep 1
+                    if test_unbound_dns; then
+                        [ -n "$old_ip" ] && ipt_del_853 "$old_ip"
+                        dot_ip_map_set "$host" "$new_ip"
+                        dot_changed=1
+                        log_json INFO dot_refresh "unbound config refreshed after DoT IP change" \
+                            "pid=${ub_pid}" "host=${host}" "new_ip=${new_ip}"
+                    else
+                        log_json ERROR dot_refresh "unbound DNS validation failed after IP change" \
+                            "host=${host}" "new_ip=${new_ip}"
+                        ipt_del_853 "$new_ip"
+                    fi
+                else
+                    log_json WARN dot_refresh "unbound not running while refreshing config"
+                    ipt_del_853 "$new_ip"
+                fi
+            else
+                log_json WARN dot_refresh "failed to regenerate unbound config after DoT IP change"
+                ipt_del_853 "$new_ip"
+            fi
         done
+
+        if [ "$dot_changed" -eq 1 ]; then
+            log_json INFO dot_refresh "DoT IP refresh complete" "changed=1"
+        fi
     done
 }
 
@@ -1025,7 +1079,7 @@ EOF
 check_openvpn_routing() {
     command -v ip >/dev/null 2>&1 || return 0
     local out dev
-    out=$(ip route get 8.8.8.8 2>/dev/null || true)
+    out=$(ip route get "$ROUTE_TEST_IP" 2>/dev/null || true)
     dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
     [ -z "$dev" ] && return 1
     case "$dev" in tun*|tap*) ;; *) return 1 ;; esac

@@ -11,6 +11,18 @@ if [ ! -f /tmp/vpn_healthy ]; then
     exit 1
 fi
 
+# Route effective obligatoire via tun/tap pour éviter les faux positifs.
+ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
+check_openvpn_routing() {
+    out=$(ip route get "$ROUTE_TEST_IP" 2>/dev/null || true)
+    dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    [ -n "$dev" ] || return 1
+    case "$dev" in
+        tun*|tap*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # Détection du port et protocole VPN depuis vpn.conf
 # ---------------------------------------------------------------------------
@@ -40,22 +52,10 @@ fi
 : "${proto:=udp}"
 
 # ---------------------------------------------------------------------------
-# Test 1 : connectivité TCP directe vers le serveur VPN
-# Uniquement pour les configs TCP — nc -u (UDP) retourne toujours 0
-# même si le port est fermé, donc inutilisable comme indicateur réel.
-# Pour UDP on passe directement au test Privoxy (Test 2) qui est fiable.
-# ---------------------------------------------------------------------------
-if [ -n "$host" ] && [ "$proto" = "tcp" ]; then
-    nc -z -w 3 "$host" "$port" >/dev/null 2>&1 && exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# Test 2 : connectivité HTTP via Privoxy
+# Test connectivité HTTP via Privoxy
 # Vérifie que le trafic sort effectivement par le tunnel VPN.
-# C'est le test principal pour UDP (cas le plus courant) et le fallback pour TCP.
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Test 2 : connectivité HTTP via Privoxy (ou nginx auth proxy)
+# Test : connectivité HTTP via Privoxy (ou nginx auth proxy)
 # Le port public est toujours 3128. Si PROXY_USER/PROXY_PASS sont définis,
 # les credentials sont passés au proxy.
 # ---------------------------------------------------------------------------
@@ -65,10 +65,14 @@ if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
     proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
 fi
 
-if pidof openvpn >/dev/null 2>&1; then
-    curl -fsS --max-time 5 \
-        --proxy "$proxy_url" \
-        http://example.com >/dev/null 2>&1 && exit 0
-fi
+# 1) OpenVPN doit être vivant
+pidof openvpn >/dev/null 2>&1 || exit 1
+
+# 2) Le routage doit passer par tun/tap
+check_openvpn_routing || exit 1
+
+# 3) Requête HTTP via proxy avec fallback d'endpoints
+curl -fsS --max-time 5 --proxy "$proxy_url" http://connectivitycheck.gstatic.com/generate_204 >/dev/null 2>&1 && exit 0
+curl -fsS --max-time 5 --proxy "$proxy_url" http://example.com >/dev/null 2>&1 && exit 0
 
 exit 1
