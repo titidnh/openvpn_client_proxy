@@ -26,12 +26,6 @@ check_openvpn_routing() {
 }
 
 check_dns_local() {
-    if command -v getent >/dev/null 2>&1; then
-        if getent ahosts "$PROXY_TEST_HOST" >/dev/null 2>&1; then
-            return 0
-        fi
-    fi
-
     if command -v nslookup >/dev/null 2>&1; then
         if nslookup "$PROXY_TEST_HOST" 127.0.0.1 >/dev/null 2>&1; then
             return 0
@@ -40,6 +34,10 @@ check_dns_local() {
         if dig @127.0.0.1 "$PROXY_TEST_HOST" +short >/dev/null 2>&1; then
             return 0
         fi
+    fi
+
+    if command -v nc >/dev/null 2>&1; then
+        nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1 && return 0
     fi
 
     return 1
@@ -52,16 +50,17 @@ check_http_proxy() {
         proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
     fi
 
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "[healthcheck] curl is not available"
-        return 1
+    if command -v nc >/dev/null 2>&1; then
+        nc -z -w 1 127.0.0.1 "$proxy_port" >/dev/null 2>&1 && return 0
     fi
 
-    for test_url in "$PROXY_TEST_URL" "http://example.com"; do
-        if curl -fsS --connect-timeout 3 --max-time 5 --proxy "$proxy_url" "$test_url" >/dev/null 2>&1; then
-            return 0
-        fi
-    done
+    if command -v curl >/dev/null 2>&1; then
+        for test_url in "$PROXY_TEST_URL" "http://example.com"; do
+            if curl -fsS --connect-timeout 3 --max-time 5 --proxy "$proxy_url" "$test_url" >/dev/null 2>&1; then
+                return 0
+            fi
+        done
+    fi
 
     return 1
 }

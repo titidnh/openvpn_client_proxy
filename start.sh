@@ -1103,7 +1103,7 @@ supervise_all() {
             "vpn=${vpn_pid}" "dnsmasq=${dnsmasq_pid:-unknown}"
 
         # Boucle de monitoring
-        local fail=0 stable_cycles=0
+        local fail=0 stable_cycles=0 healthcheck_failures=0
         while true; do
             sleep "$SLEEP_HEALTHCHECK_INTERVAL"
             fail=0
@@ -1178,8 +1178,20 @@ supervise_all() {
             fi
 
             # Healthcheck
-            if [ "$fail" -eq 0 ] && ! run_service_healthcheck; then
-                fail=1
+            if [ "$fail" -eq 0 ]; then
+                if run_service_healthcheck; then
+                    healthcheck_failures=0
+                else
+                    healthcheck_failures=$((healthcheck_failures + 1))
+                    if [ "$healthcheck_failures" -ge 3 ]; then
+                        log_json WARN "supervisor" "healthcheck failed repeatedly" \
+                            "failures=${healthcheck_failures}" "threshold=3"
+                        fail=1
+                    else
+                        log_json WARN "supervisor" "healthcheck failed, keeping grace period" \
+                            "failures=${healthcheck_failures}" "threshold=3"
+                    fi
+                fi
             fi
 
             [ "$fail" -eq 0 ] && {
