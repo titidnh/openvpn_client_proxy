@@ -19,12 +19,9 @@ find_vpn_interface() {
     ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | while read -r dev; do
         case "$dev" in
             tun*|tap*)
-                ip link show dev "$dev" up >/dev/null 2>&1 || continue
-                ip -4 addr show dev "$dev" scope global | grep -q 'inet ' || continue
-                if ip -4 route show dev "$dev" 2>/dev/null | grep -Eq '(^default|^0\.0\.0\.0/1|^128\.0\.0\.0/1|^0\.0\.0\.0/0)'; then
-                    printf '%s\n' "$dev"
-                    return 0
-                fi
+                ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet ' || continue
+                printf '%s\n' "$dev"
+                return 0
                 ;;
         esac
     done

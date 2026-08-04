@@ -6,7 +6,6 @@ set -o pipefail
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
-TAILSCALE_UP_PID=""
 
 # PID variables
 vpn_pid=""
@@ -115,12 +114,9 @@ find_vpn_interface() {
     while read -r dev; do
         case "$dev" in
             tun*|tap*)
-                ip link show dev "$dev" up >/dev/null 2>&1 || continue
-                ip -4 addr show dev "$dev" scope global | grep -q 'inet ' || continue
-                if ip -4 route show dev "$dev" 2>/dev/null | grep -Eq '(^default|^0\.0\.0\.0/1|^128\.0\.0\.0/1|^0\.0\.0\.0/0)'; then
-                    printf '%s\n' "$dev"
-                    return 0
-                fi
+                ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet ' || continue
+                printf '%s\n' "$dev"
+                return 0
                 ;;
         esac
     done < <(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1)
@@ -131,7 +127,7 @@ find_vpn_interface() {
 vpn_tunnel_ready() {
     local dev
     dev=$(find_vpn_interface) || return 1
-    ip -4 route show dev "$dev" >/dev/null 2>&1
+    ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet '
 }
 
 wait_for_vpn_tunnel() {
@@ -214,7 +210,6 @@ run_tailscale_up_async() {
     log_json INFO start_tailscale "running 'tailscale up'"
     # shellcheck disable=SC2086
     (tailscale up --accept-dns=false $up_flags > /var/log/tailscale-up.log 2>&1) &
-    TAILSCALE_UP_PID=$!
 }
 
 # ===========================================================================
@@ -915,7 +910,7 @@ drop_capabilities() {
     python3 - <<'PYCAPS'
 import ctypes, sys, os
 
-libc = ctypes.CDLL("libc.so.6", use_errno=True)
+libc = ctypes.CDLL(None, use_errno=True)
 PR_CAPBSET_DROP = 24
 CAP_NET_RAW     = 13
 CAP_NET_ADMIN   = 12  # Linux CAP_NET_ADMIN
@@ -1211,7 +1206,6 @@ supervise_all() {
         start_privoxy
         start_nginx_auth
         start_openvpn
-        start_tailscale
 
         # Services auxiliaires : démarrés une seule fois, survivent aux restarts
         if [ "$attempt" -eq 1 ]; then
@@ -1230,6 +1224,7 @@ supervise_all() {
             check_vpn_ip
             touch /tmp/vpn_healthy
             METRIC_VPN_UP=1
+            start_tailscale
         else
             log_json WARN supervisor "tunnel not ready after 30s — skipping return routes"
             rm -f /tmp/vpn_healthy
