@@ -743,7 +743,7 @@ docker run \
 
 When `TAILSCALE_ADVERTISE_EXIT_NODE=true`, all Tailscale clients that select this node as their exit will have their traffic routed through the OpenVPN tunnel.
 
-> **Note:** This requires kernel IP forwarding. Pass the sysctls at the container/compose level.
+> **Note:** This requires kernel IP forwarding. Pass the sysctls at the container/compose level. The container no longer tries to change these sysctls at runtime, because many container runtimes mount that part of `/proc` read-only.
 
 ```sh
 docker run \
@@ -762,6 +762,8 @@ docker run \
 ```
 
 After the container starts, **approve the exit node** in the Tailscale admin console (or pass `--advertise-exit-node` via `TAILSCALE_FLAGS` if auto-approval is enabled on your tailnet).
+
+If `TAILSCALE_AUTHKEY` is omitted but `/var/lib/tailscale/tailscaled.state` already exists, the supervisor now reuses the persisted identity and still runs `tailscale up` to refresh hostname/routes/exit-node settings.
 
 ### Persist Tailscale identity
 
