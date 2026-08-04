@@ -324,7 +324,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | Variable | Default | Description |
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
-| `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver. |
+| `DNS_SERVER_2` | `84.200.69.80` | Secondary upstream DNS resolver. |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
 | `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth. Uses bcrypt hashing via `htpasswd`. |
 | `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup. |
@@ -334,7 +334,13 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `TAILSCALE_HOSTNAME` | `openvpn-client-proxy` | Hostname registered in Tailscale (`--hostname`). |
 | `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node — all Tailscale clients can route traffic through the VPN. |
 | `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
-| `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
+| `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com,tls://dns.quad9.net` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
+| `HEALTHCHECK_IP` | `9.9.9.9` | IP address used by health checks (ping / connectivity probes). |
+| `ROUTE_TEST_IP` | `9.9.9.9` | IP used to test basic routing/connectivity from inside the container. |
+| `SKIP_HEALTHCHECK_FIRST_MINUTES` | `2` | Number of minutes to skip the healthcheck after container startup. Useful to avoid false failures during initialization. |
+| `TAILSCALE_RUN_DIR` | `/var/run/tailscale` | Directory where `tailscaled` creates its runtime socket (override if needed). |
+| `PROXY_TEST_HOST` | `connectivitycheck.gstatic.com` | Hostname used by the healthcheck to verify local DNS resolution. |
+| `PROXY_TEST_URL` | `http://connectivitycheck.gstatic.com/generate_204` | URL used by the healthcheck to verify HTTP proxy connectivity. |
 | `ENABLE_DNSSEC` | `false` | Set to `true` to enable strict DNSSEC validation in unbound. Initialises the root trust anchor via `unbound-anchor`. Leave `false` for zones that are not DNSSEC-signed. |
 | `DOT_TLS_CERT_BUNDLE` | *(system CA)* | Path to a PEM bundle for TLS certificate verification of DoT servers. Defaults to Alpine's system bundle. Mount a restricted bundle for certificate pinning (e.g. `-v ./my-ca.pem:/vpn/dot-ca.pem:ro` then `DOT_TLS_CERT_BUNDLE=/vpn/dot-ca.pem`). |
 | `DOT_IP_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of DoT server hostnames. If an IP changes, iptables rules are updated atomically. Set to `0` to disable. |
