@@ -1104,6 +1104,19 @@ restart_openvpn() {
     return 1
 }
 
+run_service_healthcheck() {
+    local log_file="/tmp/healthcheck.log"
+    if /usr/local/bin/healthcheck.sh >"$log_file" 2>&1; then
+        return 0
+    fi
+
+    cat "$log_file" >&2 || true
+    log_json WARN supervisor "healthcheck failed — restarting services"
+    rm -f /tmp/vpn_healthy
+    METRIC_VPN_UP=0
+    return 1
+}
+
 # ===========================================================================
 # Superviseur principal
 # ===========================================================================
@@ -1230,6 +1243,10 @@ supervise_all() {
             # Tailscale
             if [ -n "$tailscaled_pid" ] && ! kill -0 "$tailscaled_pid" >/dev/null 2>&1; then
                 log_json ERROR supervisor "tailscaled process died"; fail=1
+            fi
+
+            if [ "$fail" -eq 0 ] && ! run_service_healthcheck; then
+                fail=1
             fi
 
             [ "$fail" -eq 1 ] && break
