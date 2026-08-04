@@ -3,13 +3,18 @@
 set -eu
 set -o pipefail
 
+# ===========================================================================
+# Variables d'environnement avec valeurs par défaut (respectueuses de la vie privée)
+# ===========================================================================
+: "${DNS_SERVER_1:=94.140.14.14}"       # AdGuard DNS (Allemagne)
+: "${DNS_SERVER_2:=84.200.69.80}"       # DNS.WATCH (Allemagne)
+: "${DOT_DNS_SERVERS:=tls://dns.adguard-dns.com,tls://dns.quad9.net}"
+: "${HEALTHCHECK_IP:=9.9.9.9}"          # Quad9 (Suisse) - utilisée pour le healthcheck
+: "${ROUTE_TEST_IP:=9.9.9.9}"           # Quad9 (Suisse) - utilisée pour tester la connectivité
+: "${SKIP_HEALTHCHECK_FIRST_MINUTES:=2}" # Désactive le healthcheck pendant 2 minutes au démarrage
+
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
-ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
-
-# --- NOUVEAU : Valeurs par défaut pour DNS_SERVER_1/2 (Europe, vie privée) ---
-: "${DNS_SERVER_1:=94.140.14.14}"   # AdGuard DNS (Allemagne)
-: "${DNS_SERVER_2:=84.200.69.80}"   # DNS.WATCH (Allemagne)
 
 # PID variables
 vpn_pid=""
@@ -159,19 +164,33 @@ check_vpn_ip() {
         [ -n "$addr" ] && proxy_port=$(echo "$addr" | awk -F: '{print $NF}')
     fi
 
+    # Vérifier que Privoxy est prêt
+    if ! nc -z -w 3 127.0.0.1 "$proxy_port" >/dev/null 2>&1; then
+        log_json WARN check_vpn_ip "Privoxy not ready on port ${proxy_port}, skipping public IP check"
+        return 0
+    fi
+
     local public_ip
     local proxy_url="http://127.0.0.1:${proxy_port}"
     if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
         proxy_url="http://${PROXY_USER}:${PROXY_PASS}@127.0.0.1:${proxy_port}"
     fi
-    public_ip=$(curl -fsS --max-time 10 --proxy "$proxy_url" \
-        https://api.ipify.org 2>/dev/null || true)
+
+    # Utiliser HEALTHCHECK_IP pour le test de connectivité
+    public_ip=$(curl -fsS --max-time 20 --retry 3 --retry-delay 2 --proxy "$proxy_url" \
+        "https://api.ipify.org" 2>/dev/null || true)
 
     if [ -n "$public_ip" ]; then
         log_json INFO check_vpn_ip "public IP via VPN confirmed" "ip=${public_ip}"
         METRIC_VPN_UP=1
     else
-        log_json WARN check_vpn_ip "could not determine public IP (tunnel may still be initializing)"
+        # Fallback : vérifier la connectivité via un ping vers HEALTHCHECK_IP
+        if ping -c 1 -W 5 "$HEALTHCHECK_IP" >/dev/null 2>&1; then
+            log_json INFO check_vpn_ip "VPN connectivity confirmed (ping to ${HEALTHCHECK_IP})"
+            METRIC_VPN_UP=1
+        else
+            log_json WARN check_vpn_ip "could not determine public IP (tunnel may still be initializing)"
+        fi
     fi
 }
 
@@ -216,7 +235,6 @@ run_tailscale_up_async() {
 # ===========================================================================
 # Firewall IPv4
 # ===========================================================================
-
 setup_iptables() {
     local docker_network
     docker_network="$(ip -o addr show dev eth0 2>/dev/null | awk '$3=="inet"{print $4}' || true)"
@@ -226,11 +244,17 @@ setup_iptables() {
     iptables -F; iptables -X; iptables -t nat -F
     iptables -P INPUT DROP; iptables -P FORWARD DROP; iptables -P OUTPUT DROP
 
-    # --- MODIFIÉ : Autoriser temporairement DNS_SERVER_1 et DNS_SERVER_2 ---
+    # Autoriser temporairement DNS_SERVER_1 et DNS_SERVER_2 pour la résolution initiale
     for dns in $DNS_SERVER_1 $DNS_SERVER_2; do
         iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
         iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
     done
+
+    # Autoriser HEALTHCHECK_IP pour le healthcheck (HTTP/HTTPS/DNS)
+    iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 80 -j ACCEPT   # HTTP pour api.ipify.org
+    iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 443 -j ACCEPT  # HTTPS pour api.ipify.org
+    iptables -A OUTPUT -p udp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT   # DNS pour nslookup
+    iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
 
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -316,7 +340,6 @@ setup_iptables() {
 # ===========================================================================
 # Firewall IPv6
 # ===========================================================================
-
 setup_ip6tables() {
     if ! command -v ip6tables >/dev/null 2>&1; then
         log_json WARN setup_ip6tables "ip6tables not installed, skipping"; return 0
@@ -331,7 +354,6 @@ setup_ip6tables() {
     ipt6 -F; ipt6 -X; ipt6 -t nat -F
     ipt6 -P INPUT DROP; ipt6 -P FORWARD DROP; ipt6 -P OUTPUT DROP
 
-    # IPv6 : Pas de règles temporaires pour DNS_SERVER_1/2 (sauf si IPv6 défini)
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -p icmpv6 -j ACCEPT
     ipt6 -A INPUT -i lo -j ACCEPT
@@ -387,7 +409,6 @@ setup_ip6tables() {
 # ===========================================================================
 # Routes retour
 # ===========================================================================
-
 setup_return_routes() {
     local iface gw gw6 ips ip6s
 
@@ -428,7 +449,6 @@ setup_return_routes() {
 # ===========================================================================
 # DNS-over-TLS via Unbound
 # ===========================================================================
-
 DOT_IP_MAP_FILE="/tmp/dot_ip_map"
 DOT_FORWARD_ADDRS_FILE="/tmp/dot_forward_addrs"
 
@@ -451,7 +471,7 @@ dot_ip_map_get() {
 }
 
 parse_dot_servers() {
-    local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
+    local servers="${DOT_DNS_SERVERS}"
     servers=$(echo "$servers" | tr ',' ' ')
     local tmp_map tmp_forward
     tmp_map=$(mktemp /tmp/dot_ip_map.XXXXXX)
@@ -462,10 +482,10 @@ parse_dot_servers() {
     for entry in $servers; do
         local proto host
         proto=$(echo "$entry" | awk -F'://' '{print $1}')
-        host=$(echo "$entry"  | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
+        host=$(echo "$entry" | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
         [ -z "$host" ] && continue
 
-        # --- MODIFIÉ : Utiliser DNS_SERVER_1 et DNS_SERVER_2 pour la résolution ---
+        # Utiliser DNS_SERVER_1 et DNS_SERVER_2 pour la résolution
         local ip
         ip=$(dig +short "$host" @$DNS_SERVER_1 A 2>/dev/null | grep -E '^[0-9.]+$' | head -1 || true)
         if [ -z "$ip" ]; then
@@ -696,7 +716,7 @@ _dot_refresh_loop() {
         sleep "$interval"
         local dot_changed=0
 
-        local servers="${DOT_DNS_SERVERS:-tls://dns.adguard-dns.com}"
+        local servers="${DOT_DNS_SERVERS}"
         servers=$(echo "$servers" | tr ',' ' ')
 
         for entry in $servers; do
@@ -1109,15 +1129,28 @@ restart_openvpn() {
 
 run_service_healthcheck() {
     local log_file="/tmp/healthcheck.log"
-    if /usr/local/bin/healthcheck.sh >"$log_file" 2>&1; then
-        return 0
-    fi
+    local max_retries=3
+    local retry=0
+    local success=0
 
-    cat "$log_file" >&2 || true
-    log_json WARN supervisor "healthcheck failed — restarting services"
-    rm -f /tmp/vpn_healthy
-    METRIC_VPN_UP=0
-    return 1
+    while [ $retry -lt $max_retries ]; do
+        if /usr/local/bin/healthcheck.sh >"$log_file" 2>&1; then
+            success=1
+            break
+        fi
+        retry=$((retry + 1))
+        log_json WARN supervisor "healthcheck failed (attempt ${retry}/${max_retries}) — retrying in 5s"
+        sleep 5
+    done
+
+    if [ $success -eq 0 ]; then
+        cat "$log_file" >&2 || true
+        log_json WARN supervisor "healthcheck failed after ${max_retries} retries — restarting services"
+        rm -f /tmp/vpn_healthy
+        METRIC_VPN_UP=0
+        return 1
+    fi
+    return 0
 }
 
 # ===========================================================================
@@ -1126,7 +1159,7 @@ run_service_healthcheck() {
 supervise_all() {
     local attempt=0
 
-    # --- MODIFIÉ : Utiliser DNS_SERVER_1 et DNS_SERVER_2 pour le resolv.conf temporaire ---
+    # Configurer un DNS temporaire avec DNS_SERVER_1 et DNS_SERVER_2
     cp /etc/resolv.conf /tmp/resolv.conf.bak 2>/dev/null || true
     echo "nameserver ${DNS_SERVER_1}" > /etc/resolv.conf
     echo "nameserver ${DNS_SERVER_2}" >> /etc/resolv.conf
@@ -1192,9 +1225,27 @@ supervise_all() {
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes
             check_vpn_ip
-            touch /tmp/vpn_healthy
-            METRIC_VPN_UP=1
-            start_tailscale
+
+            # Attendre que le tunnel soit pleinement opérationnel
+            log_json INFO supervisor "waiting for tunnel to be fully operational..."
+            local full_ready=0
+            for i in 1 2 3; do
+                if check_vpn_ip && nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+                    full_ready=1
+                    break
+                fi
+                sleep 5
+            done
+
+            if [ "$full_ready" -eq 1 ]; then
+                touch /tmp/vpn_healthy
+                METRIC_VPN_UP=1
+                start_tailscale
+            else
+                log_json WARN supervisor "tunnel not fully operational after 15s — skipping Tailscale"
+                rm -f /tmp/vpn_healthy
+                METRIC_VPN_UP=0
+            fi
         else
             log_json WARN supervisor "tunnel not ready after 30s — skipping return routes"
             rm -f /tmp/vpn_healthy
@@ -1215,9 +1266,23 @@ supervise_all() {
             "metrics=${metrics_pid:-disabled}" \
             "dot_refresh=${dot_refresh_pid:-disabled}"
 
+        # Attendre 20s avant le premier healthcheck
+        log_json INFO supervisor "waiting 20s before first healthcheck..."
+        sleep 20
+
         local fail=0 proxy_port addr stable_cycles=0
+        local start_time=$(date +%s)
+
         while true; do
             sleep 10
+            local current_time=$(date +%s)
+            local elapsed_minutes=$(( (current_time - start_time) / 60 ))
+
+            # Sauter le healthcheck pendant les premières minutes
+            if [ "$elapsed_minutes" -lt "$SKIP_HEALTHCHECK_FIRST_MINUTES" ]; then
+                log_json INFO supervisor "skipping healthcheck (elapsed: ${elapsed_minutes}min < ${SKIP_HEALTHCHECK_FIRST_MINUTES}min)"
+                continue
+            fi
 
             # OpenVPN process
             if ! kill -0 "$vpn_pid" >/dev/null 2>&1; then
