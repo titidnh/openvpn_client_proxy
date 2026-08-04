@@ -6,6 +6,7 @@ set -o pipefail
 conf="/vpn/vpn.conf"
 TAILSCALE_RUN_DIR="${TAILSCALE_RUN_DIR:-/var/run/tailscale}"
 ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
+TAILSCALE_UP_PID=""
 
 # PID variables
 vpn_pid=""
@@ -108,6 +109,46 @@ get_dns_upstreams() {
         | awk -F'[#@]' '{print $1}'
 }
 
+find_vpn_interface() {
+    local dev
+
+    while read -r dev; do
+        case "$dev" in
+            tun*|tap*)
+                ip link show dev "$dev" up >/dev/null 2>&1 || continue
+                ip -4 addr show dev "$dev" scope global | grep -q 'inet ' || continue
+                if ip -4 route show dev "$dev" 2>/dev/null | grep -Eq '(^default|^0\.0\.0\.0/1|^128\.0\.0\.0/1|^0\.0\.0\.0/0)'; then
+                    printf '%s\n' "$dev"
+                    return 0
+                fi
+                ;;
+        esac
+    done < <(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1)
+
+    return 1
+}
+
+vpn_tunnel_ready() {
+    local dev
+    dev=$(find_vpn_interface) || return 1
+    ip -4 route show dev "$dev" >/dev/null 2>&1
+}
+
+wait_for_vpn_tunnel() {
+    local timeout_s="$1"
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout_s" ]; do
+        if vpn_tunnel_ready; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    return 1
+}
+
 check_vpn_ip() {
     if ! command -v curl >/dev/null 2>&1; then
         log_json WARN check_vpn_ip "curl not available, skipping public IP check"
@@ -135,6 +176,45 @@ check_vpn_ip() {
     else
         log_json WARN check_vpn_ip "could not determine public IP (tunnel may still be initializing)"
     fi
+}
+
+tailscale_has_state() {
+    [ -s /var/lib/tailscale/tailscaled.state ]
+}
+
+tailscale_can_advertise_exit_node() {
+    local ipv4_forward ipv6_forward
+    ipv4_forward=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)
+    ipv6_forward=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || echo 0)
+    [ "$ipv4_forward" = "1" ] && [ "$ipv6_forward" = "1" ]
+}
+
+build_tailscale_up_flags() {
+    local up_flags="${TAILSCALE_FLAGS:-}"
+
+    [ "${TAILSCALE_ACCEPT_ROUTES:-false}" = "true" ] && up_flags="$up_flags --accept-routes"
+    [ -n "${TAILSCALE_HOSTNAME:-}" ] && up_flags="$up_flags --hostname=${TAILSCALE_HOSTNAME}"
+
+    if [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ]; then
+        if tailscale_can_advertise_exit_node; then
+            up_flags="$up_flags --advertise-exit-node"
+        else
+            log_json WARN start_tailscale \
+                "exit-node advertisement requested but forwarding sysctls are disabled" \
+                "required=net.ipv4.ip_forward=1,net.ipv6.conf.all.forwarding=1"
+        fi
+    fi
+
+    printf '%s\n' "$up_flags"
+}
+
+run_tailscale_up_async() {
+    local up_flags="$1"
+
+    log_json INFO start_tailscale "running 'tailscale up'"
+    # shellcheck disable=SC2086
+    (tailscale up --accept-dns=false $up_flags > /var/log/tailscale-up.log 2>&1) &
+    TAILSCALE_UP_PID=$!
 }
 
 # ===========================================================================
@@ -1048,28 +1128,26 @@ start_tailscale() {
         sleep 1; waited=$((waited + 1))
     done
 
-    [ -z "${TAILSCALE_AUTHKEY:-}" ] && {
-        log_json WARN start_tailscale "no authkey — skipping 'tailscale up'"; return 0
-    }
+    if ! tailscale status >/dev/null 2>&1; then
+        log_json WARN start_tailscale "tailscale daemon socket not ready after wait window"
+    fi
 
-    local up_flags="${TAILSCALE_FLAGS:-}"
-    [ "${TAILSCALE_ACCEPT_ROUTES:-false}"       = "true" ] && up_flags="$up_flags --accept-routes"
-    [ -n "${TAILSCALE_HOSTNAME:-}" ]                       && up_flags="$up_flags --hostname=${TAILSCALE_HOSTNAME}"
-    [ "${TAILSCALE_ADVERTISE_EXIT_NODE:-false}" = "true" ] && {
-        up_flags="$up_flags --advertise-exit-node"
-        mkdir -p /etc/sysctl.d || true
-        cat > /etc/sysctl.d/99-tailscale.conf <<'EOF'
-net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
-EOF
-        sysctl -p /etc/sysctl.d/99-tailscale.conf || true
-        (tailscale set --advertise-exit-node=true >> /var/log/tailscale-up.log 2>&1) || true &
-    }
+    local up_flags
+    up_flags=$(build_tailscale_up_flags)
 
-    log_json INFO start_tailscale "running 'tailscale up'"
-    # shellcheck disable=SC2086
-    (tailscale up --accept-dns=false --authkey="$TAILSCALE_AUTHKEY" $up_flags \
-        > /var/log/tailscale-up.log 2>&1) &
+    if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+        up_flags="--authkey=${TAILSCALE_AUTHKEY} ${up_flags}"
+        run_tailscale_up_async "$up_flags"
+        return 0
+    fi
+
+    if tailscale_has_state; then
+        log_json INFO start_tailscale "existing tailscale state detected — refreshing settings without authkey"
+        run_tailscale_up_async "$up_flags"
+        return 0
+    fi
+
+    log_json WARN start_tailscale "no authkey and no persisted state — skipping 'tailscale up'"
 }
 
 # ===========================================================================
@@ -1078,12 +1156,7 @@ EOF
 
 check_openvpn_routing() {
     command -v ip >/dev/null 2>&1 || return 0
-    local out dev
-    out=$(ip route get "$ROUTE_TEST_IP" 2>/dev/null || true)
-    dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-    [ -z "$dev" ] && return 1
-    case "$dev" in tun*|tap*) ;; *) return 1 ;; esac
-    ip -4 addr show dev "$dev" >/dev/null 2>&1
+    vpn_tunnel_ready
 }
 
 restart_openvpn() {
@@ -1147,11 +1220,10 @@ supervise_all() {
         fi
 
         log_json INFO supervisor "waiting for OpenVPN tunnel..."
-        local tun_ready=0 tun_wait=0
-        while [ "$tun_wait" -lt 30 ]; do
-            if check_openvpn_routing; then tun_ready=1; break; fi
-            sleep 1; tun_wait=$((tun_wait + 1))
-        done
+        local tun_ready=0
+        if wait_for_vpn_tunnel 30; then
+            tun_ready=1
+        fi
 
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes

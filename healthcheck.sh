@@ -15,14 +15,25 @@ ROUTE_TEST_IP="${ROUTE_TEST_IP:-9.9.9.9}"
 PROXY_TEST_HOST="${PROXY_TEST_HOST:-connectivitycheck.gstatic.com}"
 PROXY_TEST_URL="${PROXY_TEST_URL:-http://connectivitycheck.gstatic.com/generate_204}"
 
+find_vpn_interface() {
+    ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | while read -r dev; do
+        case "$dev" in
+            tun*|tap*)
+                ip link show dev "$dev" up >/dev/null 2>&1 || continue
+                ip -4 addr show dev "$dev" scope global | grep -q 'inet ' || continue
+                if ip -4 route show dev "$dev" 2>/dev/null | grep -Eq '(^default|^0\.0\.0\.0/1|^128\.0\.0\.0/1|^0\.0\.0\.0/0)'; then
+                    printf '%s\n' "$dev"
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    return 1
+}
+
 check_openvpn_routing() {
-    out=$(ip route get "$ROUTE_TEST_IP" 2>/dev/null || true)
-    dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-    [ -n "$dev" ] || return 1
-    case "$dev" in
-        tun*|tap*) return 0 ;;
-        *) return 1 ;;
-    esac
+    dev=$(find_vpn_interface || true)
+    [ -n "$dev" ]
 }
 
 check_dns_local() {
