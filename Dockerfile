@@ -96,7 +96,7 @@ ENV ENABLE_TAILSCALE=false \
     ROUTE_TEST_IP="9.9.9.9" \
     PROXY_TEST_HOST="connectivitycheck.gstatic.com" \
     PROXY_TEST_URL="http://connectivitycheck.gstatic.com/generate_204" \
-    SKIP_HEALTHCHECK_FIRST_MINUTES=2
+    SKIP_HEALTHCHECK_FIRST_MINUTES=2 \
 
 # ---------------------------------------------------------------------------
 # Utilisateur système
@@ -171,12 +171,6 @@ VOLUME ["/vpn", "/var/lib/tailscale"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
-
-# ---------------------------------------------------------------------------
-# Configuration par défaut pour resolv.conf
-# ---------------------------------------------------------------------------
-RUN echo "nameserver 94.140.14.14" > /etc/resolv.conf && \
-    echo "nameserver 94.140.15.15" >> /etc/resolv.conf
 
 # ---------------------------------------------------------------------------
 # Point d'entrée
