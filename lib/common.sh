@@ -154,6 +154,9 @@ log_json() {
 # Fonctions réseau
 # ===========================================================================
 
+# Wrapper pour ip6tables qui ignore les erreurs si la commande n'existe pas
+ipt6() { ip6tables "$@" 2>/dev/null || true; }
+
 # Trouve l'interface VPN (tun ou tap) active
 # Retourne le nom de l'interface ou vide si non trouvée
 # Usage: find_vpn_interface
