@@ -26,6 +26,7 @@ FROM alpine:3.22 AS tailscale-dl
 ARG TARGETARCH
 # TAILSCALE_VERSION peut être figé à l'époque de la construction: --build-arg TAILSCALE_VERSION=1.80.3
 # Si laissé vide, la dernière version stable est récupérée automatiquement.
+# Pour 2026, utiliser une version récente comme 1.80.3 ou supérieur
 ARG TAILSCALE_VERSION=""
 
 RUN apk add --no-cache curl tar \
@@ -68,35 +69,23 @@ ENV ENABLE_TAILSCALE=false \
     TAILSCALE_ACCEPT_ROUTES=false \
     TAILSCALE_HOSTNAME="openvpn-client-proxy" \
     TAILSCALE_ADVERTISE_EXIT_NODE=false \
-    
-    # DNS - AdGuard DNS (toujours valide en 2026)
     DNS_SERVER_1="94.140.14.14" \
     DNS_SERVER_2="94.140.15.15" \
-    
-    # Proxy auth
     PROXY_USER="" \
     PROXY_PASS="" \
-    
-    # DNS-over-TLS
     ENABLE_DOT=false \
     DOT_DNS_SERVERS="tls://dns.adguard-dns.com" \
     ENABLE_DNSSEC=false \
     DOT_TLS_CERT_BUNDLE="" \
     DOT_IP_REFRESH_INTERVAL=3600 \
     DNS_SPLIT="" \
-    
-    # Métriques
     ENABLE_METRICS=false \
-    
-    # Sécurité
     DROP_CAPS=false \
-    
-    # Healthcheck
     HEALTHCHECK_IP="9.9.9.9" \
     ROUTE_TEST_IP="9.9.9.9" \
     PROXY_TEST_HOST="connectivitycheck.gstatic.com" \
     PROXY_TEST_URL="http://connectivitycheck.gstatic.com/generate_204" \
-    SKIP_HEALTHCHECK_FIRST_MINUTES=2 \
+    SKIP_HEALTHCHECK_FIRST_MINUTES=2
 
 # ---------------------------------------------------------------------------
 # Utilisateur système
