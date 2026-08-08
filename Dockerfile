@@ -143,7 +143,7 @@ COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh        /start.sh
 
 # Copier la bibliothèque de fonctions communes
-COPY --chmod=0755 lib/common.sh   /usr/local/lib/common.sh \
+COPY --chmod=0755 lib/common.sh   /usr/local/lib/common.sh
 COPY --chmod=0755 lib/common.sh   /lib/common.sh
 
 # Supprimer les retours chariot (pour compatibilité Windows)
