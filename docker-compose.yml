@@ -1,125 +1,139 @@
-# =============================================================================
-# openvpn-client-proxy — example docker-compose with all options
-# =============================================================================
+# ===========================================================================
+# docker-compose.yml pour openvpn-client-proxy
+# 
+# Exemple de configuration Docker Compose avec toutes les options disponibles.
+# 
+# Auteur: Vibe Code (amélioration 2026)
+# Licence: MIT
+# Version: 2.0.0
+# ===========================================================================
 #
-# Environment variables for DNS:
+# Variables d'environnement pour DNS:
 #
-#  ENABLE_DOT           Enable DNS-over-TLS via unbound (default: false)
-#                       If true: dnsmasq → local unbound (127.0.0.1:5053) → DoT
-#                       If false: dnsmasq → DNS_SERVER_1 / DNS_SERVER_2 in cleartext
+#  ENABLE_DOT           Activer DNS-over-TLS via unbound (défaut: false)
+#                       Si true: dnsmasq → unbound local (127.0.0.1:5053) → DoT
+#                       Si false: dnsmasq → DNS_SERVER_1 / DNS_SERVER_2 en clair
 #
-#  DOT_DNS_SERVERS      DoT servers to use when ENABLE_DOT=true
-#                       Format: "tls://hostname" or "https://hostname", separated
-#                       by spaces or commas
-#                       Default: tls://dns.adguard-dns.com
+#  DOT_DNS_SERVERS      Serveurs DoT à utiliser lorsque ENABLE_DOT=true
+#                       Format: "tls://hostname" ou "https://hostname", séparés
+#                       par des espaces ou des virgules
+#                       Défaut: tls://dns.adguard-dns.com
 #
-#  DNS_SERVER_1/2       Used only if ENABLE_DOT=false
-#                       Default: 94.140.14.14 / 94.140.15.15 (AdGuard DNS)
+#  DNS_SERVER_1/2       Utilisés uniquement si ENABLE_DOT=false
+#                       Défaut: 94.140.14.14 / 94.140.15.15 (AdGuard DNS)
 #
-#  ENABLE_DNSSEC        Strict DNSSEC validation via unbound (default: false)
-#                       Requires ENABLE_DOT=true.
+#  ENABLE_DNSSEC        Validation DNSSEC stricte via unbound (défaut: false)
+#                       Nécessite ENABLE_DOT=true.
 #
-#  DOT_TLS_CERT_BUNDLE  CA PEM bundle for DoT certificate pinning.
-#                       Default: system CA bundle on Alpine.
+#  DOT_TLS_CERT_BUNDLE  Bundle CA PEM pour le pinning de certificat DoT.
+#                       Défaut: bundle CA du système sur Alpine.
 #
 #  DOT_IP_REFRESH_INTERVAL
-#                       Interval (seconds) to re-resolve DoT hostnames.
-#                       Default: 3600. Set to 0 to disable.
+#                       Intervalle (secondes) pour re-résoudre les noms d'hôte DoT.
+#                       Défaut: 3600. Mettre à 0 pour désactiver.
 #
-#  DNS_SPLIT            Split DNS: "domain=resolver[:port]" separated by commas.
-#                       Example: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
+#  DNS_SPLIT            Split DNS: "domain=resolver[:port]" séparés par des virgules.
+#                       Exemple: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
 #
-# Firewall (managed automatically):
-#   ENABLE_DOT=false  → UDP/TCP 53 ALLOWED to DNS_SERVER_1/2
-#   ENABLE_DOT=true   → TCP 853 ALLOWED to DoT IPs — external UDP/TCP 53 BLOCKED
+# Firewall (géré automatiquement):
+#   ENABLE_DOT=false  → UDP/TCP 53 AUTORISÉ vers DNS_SERVER_1/2
+#   ENABLE_DOT=true   → TCP 853 AUTORISÉ vers les IPs DoT - UDP/TCP 53 BLOQUÉ
 #
-# Metrics:
-#   ENABLE_METRICS=true → Prometheus endpoint on 127.0.0.1:9100 (loopback only)
-#   DO NOT bind 9100 to 0.0.0.0 — access via SSH tunnel or sidecar
+# Métriques:
+#   ENABLE_METRICS=true → Endpoint Prometheus sur 127.0.0.1:9100 (loopback uniquement)
+#   NE PAS lier 9100 à 0.0.0.0 - accès via tunnel SSH ou sidecar
 #
-# Security:
-#   DROP_CAPS=true → drops all Linux capabilities except CAP_NET_ADMIN
-#                    and CAP_NET_RAW after services start.
-# =============================================================================
+# Sécurité:
+#   DROP_CAPS=true → Supprime toutes les capabilities Linux sauf CAP_NET_ADMIN
+#                    et CAP_NET_RAW après le démarrage des services.
+# ===========================================================================
 
 services:
   vpn:
     build: .
-    # image: ghcr.io/yourname/openvpn-client-proxy:latest
+    # image: ghcr.io/titidnh/openvpn-client-proxy:latest
     container_name: openvpn-client-proxy
+    
+    # Capacités nécessaires pour le VPN
     cap_add:
       - NET_ADMIN
+    
+    # Périphériques nécessaires pour OpenVPN
     devices:
       - /dev/net/tun
+    
+    # Volumes pour la configuration et les données persistantes
     volumes:
       - ./vpn:/vpn:ro
       - tailscale-data:/var/lib/tailscale
-      # Certificate pinning for DoT (optional):
+      # Pinning de certificat pour DoT (optionnel):
       # - ./my-dot-ca.pem:/vpn/dot-ca.pem:ro
+    
+    # Ports exposés
     ports:
-      - "3128:3128"   # HTTP proxy (Privoxy or nginx if auth enabled)
-      # Prometheus metrics — loopback only, DO NOT expose publicly
-      # Access via: docker exec <container> curl http://127.0.0.1:9100/metrics
+      - "3128:3128"   # HTTP proxy (Privoxy ou nginx si auth activé)
+      # Métriques Prometheus - loopback uniquement, NE PAS exposer publiquement
+      # Accès via: docker exec <container> curl http://127.0.0.1:9100/metrics
       # - "127.0.0.1:9100:9100"
 
     environment:
       # -----------------------------------------------------------------------
-      # Classic DNS (ENABLE_DOT=false, default)
+      # DNS Classique (ENABLE_DOT=false, par défaut)
       # -----------------------------------------------------------------------
       ENABLE_DOT: "false"
       DNS_SERVER_1: "94.140.14.14"
       DNS_SERVER_2: "94.140.15.15"
 
       # -----------------------------------------------------------------------
-      # DNS-over-TLS — uncomment this block and comment out the classic DNS block
+      # DNS-over-TLS - décommentez ce bloc et commentez le bloc DNS classique
       # -----------------------------------------------------------------------
       # ENABLE_DOT: "true"
       # DOT_DNS_SERVERS: "tls://dns.adguard-dns.com"
-      # Multiple servers:
+      # Plusieurs serveurs:
       # DOT_DNS_SERVERS: "tls://dns.adguard-dns.com tls://cloudflare-dns.com"
       # DNS-over-HTTPS:
       # DOT_DNS_SERVERS: "https://cloudflare-dns.com"
 
       # -----------------------------------------------------------------------
-      # Strict DNSSEC (requires ENABLE_DOT=true)
-      # Warning: unsigned DNS zones will fail if enabled
+      # DNSSEC strict (nécessite ENABLE_DOT=true)
+      # Avertissement: les zones DNS non signées échoueront si activé
       # -----------------------------------------------------------------------
       ENABLE_DNSSEC: "false"
 
       # -----------------------------------------------------------------------
-      # Certificate pinning for DoT (optional, requires ENABLE_DOT=true)
-      # Mount the bundle via the volumes section before enabling
+      # Pinning de certificat pour DoT (optionnel, nécessite ENABLE_DOT=true)
+      # Montez le bundle via la section volumes avant de l'activer
       # -----------------------------------------------------------------------
       # DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
 
       # -----------------------------------------------------------------------
-      # Dynamic refresh of DoT IPs (default: 3600s, 0 = disabled)
+      # Rafraîchissement dynamique des IPs DoT (défaut: 3600s, 0 = désactivé)
       # -----------------------------------------------------------------------
       DOT_IP_REFRESH_INTERVAL: "3600"
 
       # -----------------------------------------------------------------------
-      # Split DNS (optional) — "domain=resolver[:port]" separated by commas
+      # Split DNS (optionnel) - "domain=resolver[:port]" séparés par des virgules
       # -----------------------------------------------------------------------
       # DNS_SPLIT: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
 
       # -----------------------------------------------------------------------
-      # Proxy auth (optional) — enables nginx in front with HTTP Basic Auth
+      # Authentification proxy (optionnel) - active nginx devant avec HTTP Basic Auth
       # -----------------------------------------------------------------------
       PROXY_USER: ""
       PROXY_PASS: ""
 
       # -----------------------------------------------------------------------
-      # Prometheus metrics on 127.0.0.1:9100 (loopback, iptables enforced)
+      # Métriques Prometheus sur 127.0.0.1:9100 (loopback, imposé par iptables)
       # -----------------------------------------------------------------------
       ENABLE_METRICS: "false"
 
       # -----------------------------------------------------------------------
-      # Capability drop — removes all caps except CAP_NET_ADMIN + CAP_NET_RAW
+      # Suppression des capabilities - supprime toutes les caps sauf CAP_NET_ADMIN + CAP_NET_RAW
       # -----------------------------------------------------------------------
       DROP_CAPS: "false"
 
       # -----------------------------------------------------------------------
-      # Tailscale (optional)
+      # Tailscale (optionnel)
       # -----------------------------------------------------------------------
       ENABLE_TAILSCALE: "false"
       # TAILSCALE_AUTHKEY: "tskey-auth-xxxx"
@@ -128,19 +142,32 @@ services:
       # TAILSCALE_ADVERTISE_EXIT_NODE: "false"
       # TAILSCALE_FLAGS: ""
 
+      # -----------------------------------------------------------------------
+      # Paramètres de healthcheck
+      # -----------------------------------------------------------------------
+      HEALTHCHECK_IP: "9.9.9.9"
+      ROUTE_TEST_IP: "9.9.9.9"
+      PROXY_TEST_HOST: "connectivitycheck.gstatic.com"
+      PROXY_TEST_URL: "http://connectivitycheck.gstatic.com/generate_204"
+      SKIP_HEALTHCHECK_FIRST_MINUTES: "2"
+
+    # Paramètres système nécessaires
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
       - net.ipv6.conf.all.disable_ipv6=0
-      # Required only if TAILSCALE_ADVERTISE_EXIT_NODE=true:
+      # Nécessaire uniquement si TAILSCALE_ADVERTISE_EXIT_NODE=true:
       # - net.ipv4.ip_forward=1
       # - net.ipv6.conf.all.forwarding=1
 
+    # Limites de ressources
     deploy:
       resources:
         limits:
-          memory: 128M   # 192M if auth enabled, 256M if Tailscale enabled
+          memory: 128M   # 192M si auth activé, 256M si Tailscale activé
 
+    # Politique de redémarrage
     restart: unless-stopped
 
+# Volumes pour les données persistantes
 volumes:
   tailscale-data:
