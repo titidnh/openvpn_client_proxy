@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation**: Added comments and metadata
 
 #### Improved Dockerfile
-- **Base update**: Switched to `alpine:3.22` (2026-compatible)
+- **Base update**: Switched to `alpine:3.23` (2026-compatible)
 - **Enriched metadata**: Added OpenContainers labels
 - **Optimization**: Better layer organization
 - **Documentation**: More detailed comments
