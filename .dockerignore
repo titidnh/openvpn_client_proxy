@@ -1,11 +1,64 @@
-*
-!privoxy.config
-!default.action
-!default.filter
-!user.action
-!user.filter
-!openvpn.sh
-!start.sh
-!dnsmasq.conf
-!healthcheck.sh
-!Dockerfile
+# ===========================================================================
+# .dockerignore - Fichiers à exclure de la construction Docker
+# 
+# Auteur: Vibe Code (amélioration 2026)
+# Licence: MIT
+# Version: 2.0.0
+# ===========================================================================
+
+# Fichiers Git
+.git
+.gitignore
+
+# Fichiers de documentation (sauf ceux explicitement copiés)
+*.md
+LICENSE
+IMPROVE.md
+README.md
+
+# Fichiers temporaires et logs
+*.log
+*.tmp
+*.swp
+*~
+
+# Fichiers de configuration locale
+.ds_store
+.idea
+.vscode
+
+# Fichiers de build Docker
+Dockerfile*
+docker-compose*.yml
+.docker/
+
+# Fichiers de configuration sensible (ne doivent pas être dans l'image)
+.env
+*.env
+*.pem
+*.key
+*.crt
+*.conf.local
+
+# Répertoires de données persistantes (montés comme volumes)
+vpn/
+
+# Fichiers de test et développement
+test*
+*.test
+*.spec
+
+# Fichiers de backup
+*.bak
+*.old
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers de cache
+*.cache
+.cache/
+
+# Fichiers de métriques temporaires
+tmp/

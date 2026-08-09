@@ -49,7 +49,7 @@
 | 🧹 **Ad/Content Filtering** | DNS-level filtering via upstream resolver — configurable with `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
-| 📦 **Minimal Image** | Based on `alpine:3.20` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
+| 📦 **Minimal Image** | Based on `alpine:3.22` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
 | 🔐 **DNS-over-TLS** | Optional — all DNS queries encrypted via `unbound` → DoT upstream (port 853). Blocks plain DNS port 53 leaks when enabled. |
 | 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor |
 | 📌 **DoT Cert Pinning** | Mount a custom CA bundle (`DOT_TLS_CERT_BUNDLE`) to restrict which TLS certificates are accepted for DoT connections |
@@ -1173,7 +1173,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 | `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
 | `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
 | `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
-| `Dockerfile` | — | Multi-stage build: `alpine:3.20` base + Tailscale binary stage |
+| `Dockerfile` | — | Multi-stage build: `alpine:3.22` base + Tailscale binary stage |
 | `docker-compose.yml` | — | Full example compose file with all options |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
 
