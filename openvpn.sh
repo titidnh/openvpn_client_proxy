@@ -14,8 +14,9 @@
 set -euo pipefail
 
 # Charger les fonctions communes
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/common.sh"
+#SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#source "${SCRIPT_DIR}/lib/common.sh"
+source "/usr/local/lib/common.sh"
 
 # Initialiser l'environnement
 init_environment
