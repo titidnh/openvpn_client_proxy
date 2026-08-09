@@ -68,7 +68,7 @@ et ce projet adhère à [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Modularité** : Séparation du code en modules logiques
 
 #### Compatibilité 2026
-- **Alpine 3.22** : Base Docker mise à jour vers une version supportée en 2026
+- **Alpine 3.23** : Base Docker mise à jour vers une version supportée en 2026
 - **DNS par défaut** : AdGuard DNS (94.140.14.14, 94.140.15.15) toujours valide
 - **Tailscale** : Support des versions récentes (1.80.3+)
 - **Applications** : OpenVPN, Privoxy, dnsmasq, Unbound - toutes compatibles 2026
