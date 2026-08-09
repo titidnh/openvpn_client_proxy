@@ -513,7 +513,8 @@ forward-zone:
     fi
 
     mkdir -p /etc/unbound /var/lib/unbound
-    chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
+    chown -R unbound:unbound /etc/unbound /var/lib/unbound 2>/dev/null || true
+    chmod 0755 /etc/unbound 2>/dev/null || true
 
     # Écrire la configuration Unbound
     cat > "$conf_file" <<EOF
@@ -577,7 +578,11 @@ EOF
         return 1
     fi
 
+    chmod 0644 "$conf_file" 2>/dev/null || true
+    chown unbound:unbound "$conf_file" 2>/dev/null || true
     mv -f "$conf_file" "$UNBOUND_CONF"
+    chmod 0644 "$UNBOUND_CONF" 2>/dev/null || true
+    chown unbound:unbound "$UNBOUND_CONF" 2>/dev/null || true
 
     log_json INFO "configure_unbound" "config written" \
         "dnssec=${ENABLE_DNSSEC:-false}" \
