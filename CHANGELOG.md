@@ -7,7 +7,7 @@ et ce projet adhère à [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [2.0.0] - 2026-01-01
+## [2.0.0] - 2026-08-09
 
 ### Améliorations de la qualité du code
 
