@@ -21,7 +21,7 @@
 # l'image finale et permet à BuildKit de mettre en cache la couche de téléchargement
 # indépendamment.
 # ===========================================================================
-FROM alpine:3.22 AS tailscale-dl
+FROM alpine:3.23 AS tailscale-dl
 
 ARG TARGETARCH
 # TAILSCALE_VERSION peut être figé à l'époque de la construction: --build-arg TAILSCALE_VERSION=1.80.3
