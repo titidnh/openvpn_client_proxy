@@ -526,7 +526,7 @@ server:
     do-udp: yes
     do-tcp: yes
     do-not-query-localhost: no
-
+    control-enable: yes
     verbosity: 1
     logfile: "/var/log/unbound.log"
 
