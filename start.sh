@@ -613,7 +613,7 @@ start_unbound() {
 
     local max_wait=10
     if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
-        max_wait=10
+        max_wait=30
         log_json INFO "start_unbound" "DNSSEC enabled - extended startup timeout" \
             "timeout=${max_wait}s"
     fi
@@ -650,18 +650,18 @@ start_unbound() {
 # aux connexions TLS et aux validations DNSSEC de se finaliser.
 test_unbound_dns_robust() {
     local attempt=0
-    local max_attempts=3
+    local max_attempts=6
 
     while [ "$attempt" -lt "$max_attempts" ]; do
         attempt=$((attempt + 1))
 
         if command_exists dig; then
-            if timeout 3 dig @127.0.0.1 -p 5053 \
-                +tries=1 +timeout=2 example.com +short 2>/dev/null | grep -q .; then
+            if timeout 6 dig @127.0.0.1 -p 5053 \
+                +tries=1 +timeout=4 example.com +short 2>/dev/null | grep -q .; then
                 return 0
             fi
         elif command_exists nslookup; then
-            if timeout 3 nslookup example.com 127.0.0.1 2>/dev/null | grep -q "Name:"; then
+            if timeout 6 nslookup example.com 127.0.0.1 2>/dev/null | grep -q "Name:"; then
                 return 0
             fi
         fi
@@ -984,6 +984,43 @@ start_dnsmasq() {
     fi
 }
 
+# Start dnsmasq in "classic" mode (use DNS_SERVER_1/2) to provide initial DNS
+# This avoids a race where Unbound tries to resolve DoT hosts before any DNS
+# is available. It temporarily forces ENABLE_DOT=false while starting dnsmasq.
+start_dnsmasq_classic() {
+    log_json INFO "start_dnsmasq_classic" "Starting dnsmasq (classic upstreams)"
+    local old_enable_dot="${ENABLE_DOT:-false}"
+    export ENABLE_DOT="false"
+    start_dnsmasq
+    export ENABLE_DOT="$old_enable_dot"
+}
+
+# Wait until local DNS at 127.0.0.1:53 is responsive, with a configurable timeout
+# Usage: wait_for_dns_ready [timeout_seconds]
+wait_for_dns_ready() {
+    local max_wait="${1:-30}"
+    log_json INFO "wait_for_dns_ready" "waiting for local DNS" "timeout=${max_wait}s"
+    local i
+    for i in $(seq 1 "$max_wait"); do
+        if nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1; then
+            log_json INFO "wait_for_dns_ready" "local DNS is responsive" "after=${i}s"
+            return 0
+        fi
+        sleep 1
+    done
+    log_json WARN "wait_for_dns_ready" "local DNS did not become ready" "timeout=${max_wait}s"
+    return 1
+}
+
+# Reconfigure dnsmasq to use Unbound (127.0.0.1:5053) when DoT is enabled.
+# This restarts dnsmasq so the new config is loaded.
+reconfigure_dnsmasq_to_unbound() {
+    log_json INFO "reconfigure_dnsmasq" "Reconfiguring dnsmasq to use unbound"
+    kill_if_running "${SERVICE_PIDS[dnsmasq]}"
+    SERVICE_PIDS[dnsmasq]=0
+    start_dnsmasq
+}
+
 # ===========================================================================
 # Configuration Proxy
 # ===========================================================================
@@ -1286,9 +1323,18 @@ supervise_all() {
         METRIC_RESTART_COUNT=$((attempt - 1))
         METRIC_LAST_RESTART_TS=$(date +%s)
 
-        # Démarrer unbound EN PREMIER (pour résoudre les IPs DoT)
+        # Two-phase DNS startup to avoid Unbound resolving DoT hosts before DNS is available
+        # Phase 1: bring up dnsmasq with classic upstreams so hostname resolution works
+        start_dnsmasq_classic
+        wait_for_dns_ready 30 || log_json WARN "supervisor" "classic dns not ready - continuing"
+
+        # Phase 2: now start Unbound which will be able to resolve DoT hosts
         start_unbound
-        start_dnsmasq
+
+        # If DoT is enabled, reconfigure dnsmasq to use Unbound as upstream (127.0.0.1:5053)
+        if [ "${ENABLE_DOT:-false}" = "true" ]; then
+            reconfigure_dnsmasq_to_unbound
+        fi
 
         # Attendre que DNS soit prêt (unbound + dnsmasq)
         if [ "${ENABLE_DOT:-false}" = "true" ]; then
