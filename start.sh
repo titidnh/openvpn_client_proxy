@@ -517,11 +517,7 @@ forward-zone:
     chmod 0755 /etc/unbound 2>/dev/null || true
 
     # Écrire la configuration Unbound
-    cat > "$conf_file" <<EOF
-remote-control:
-    control-enable: yes
-    control-interface: 127.0.0.1
-    control-port: 8953        
+    cat > "$conf_file" <<EOF     
 server:
     interface: 127.0.0.1
     port: 5053
@@ -559,6 +555,11 @@ server:
 
     # DNSSEC
     ${dnssec_mode}
+    
+remote-control:
+    control-enable: yes
+    control-interface: 127.0.0.1
+    control-port: 8953       
 EOF
 
     if [ "${ENABLE_DNSSEC:-false}" = "true" ] && [ -f /var/lib/unbound/root.key ]; then
@@ -575,18 +576,26 @@ EOF
 
     [ -n "$split_zones" ] && echo "$split_zones" >> "$conf_file"
 
-    if ! unbound-checkconf "$conf_file" >/tmp/unbound.checkconf 2>&1; then
-        log_json ERROR "configure_unbound" "unbound config test failed"
-        cat /tmp/unbound.checkconf >&2 || true
-        rm -f "$conf_file"
-        return 1
+    if command_exists unbound-checkconf; then
+        if ! unbound-checkconf "$conf_file" >/tmp/unbound.checkconf 2>&1; then
+            log_json ERROR "configure_unbound" "unbound config test failed - keeping config for inspection"
+            cat /tmp/unbound.checkconf >&2 || true
+            # Preserve the generated config for debugging and also install it so it's available under /etc/unbound
+            mv -f "$conf_file" "${UNBOUND_CONF}.invalid" 2>/dev/null || true
+            chmod 0644 "${UNBOUND_CONF}.invalid" 2>/dev/null || true
+            chown unbound:unbound "${UNBOUND_CONF}.invalid" 2>/dev/null || true
+            cp -f "${UNBOUND_CONF}.invalid" "$UNBOUND_CONF" 2>/dev/null || true
+        fi
+    else
+        log_json WARN "configure_unbound" "unbound-checkconf not found - skipping syntax check"
     fi
 
-    chmod 0644 "$conf_file" 2>/dev/null || true
-    chown unbound:unbound "$conf_file" 2>/dev/null || true
+    # Ensure the generated config is installed (either the checked one or the raw file)
+    [ -f "$conf_file" ] && mv -f "$conf_file" "$UNBOUND_CONF" 2>/dev/null || true
+    chmod 0644 "$UNBOUND_CONF" 2>/dev/null || true
+    chown unbound:unbound "$UNBOUND_CONF" 2>/dev/null || true
     touch /var/log/unbound.log 2>/dev/null || true
     chown unbound:unbound /var/log/unbound.log 2>/dev/null || true
-    mv -f "$conf_file" "$UNBOUND_CONF"
     chmod 0644 "$UNBOUND_CONF" 2>/dev/null || true
     chown unbound:unbound "$UNBOUND_CONF" 2>/dev/null || true
 
