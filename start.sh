@@ -603,15 +603,21 @@ start_unbound() {
     unbound -d -c "$UNBOUND_CONF" &
     SERVICE_PIDS[unbound]=$!
 
-    local max_wait=6
+    local max_wait=10
     if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
-        max_wait=15
+        max_wait=30
         log_json INFO "start_unbound" "DNSSEC enabled - extended startup timeout" \
             "timeout=${max_wait}s"
     fi
 
     local bound=0 i
     for i in $(seq 1 "$max_wait"); do
+        if ! kill -0 "${SERVICE_PIDS[unbound]}" 2>/dev/null; then
+            log_json WARN "start_unbound" "unbound exited during startup" \
+                "pid=${SERVICE_PIDS[unbound]}"
+            break
+        fi
+
         if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1; then
             if test_unbound_dns_robust; then
                 bound=1
@@ -626,10 +632,8 @@ start_unbound() {
         log_json INFO "start_unbound" "started - DoT active" \
             "pid=${SERVICE_PIDS[unbound]}" "port=5053"
     else
-        log_json ERROR "start_unbound" "unbound failed to start properly" \
-            "timeout=${max_wait}s"
-        kill_if_running "${SERVICE_PIDS[unbound]}"
-        SERVICE_PIDS[unbound]=0
+        log_json WARN "start_unbound" "unbound not ready after startup window" \
+            "timeout=${max_wait}s" "pid=${SERVICE_PIDS[unbound]:-unknown}"
         METRIC_DOT_ACTIVE=0
     fi
 }
@@ -1282,15 +1286,15 @@ supervise_all() {
         if [ "${ENABLE_DOT:-false}" = "true" ]; then
             log_json INFO "supervisor" "waiting for DNS services to be ready..."
             local dns_ready=0
-            for i in 1 2 3 4 5; do
-                if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 && nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+            for i in $(seq 1 15); do
+                if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 && test_unbound_dns_robust; then
                     dns_ready=1
                     break
                 fi
                 sleep 2
             done
             if [ "$dns_ready" -ne 1 ]; then
-                log_json ERROR "supervisor" "DNS services (unbound/dnsmasq) not ready after 10s - retrying"
+                log_json ERROR "supervisor" "DNS services (unbound/dnsmasq) not ready after 30s - retrying"
                 continue
             fi
         else
