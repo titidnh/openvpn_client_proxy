@@ -518,6 +518,10 @@ forward-zone:
 
     # Écrire la configuration Unbound
     cat > "$conf_file" <<EOF
+remote-control:
+    control-enable: yes
+    control-interface: 127.0.0.1
+    control-port: 8953        
 server:
     interface: 127.0.0.1
     port: 5053
@@ -555,11 +559,6 @@ server:
 
     # DNSSEC
     ${dnssec_mode}
-
-remote-control:
-    control-enable: yes
-    control-interface: 127.0.0.1
-    control-port: 8953    
 EOF
 
     if [ "${ENABLE_DNSSEC:-false}" = "true" ] && [ -f /var/lib/unbound/root.key ]; then
