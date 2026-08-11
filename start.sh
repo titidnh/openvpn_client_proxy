@@ -528,7 +528,7 @@ server:
     do-not-query-localhost: no
 
     verbosity: 1
-    logfile: ""
+    logfile: "/var/log/unbound.log"
 
     # Masquage d'identité
     hide-identity: yes
