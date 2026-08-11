@@ -605,7 +605,7 @@ start_unbound() {
 
     local max_wait=10
     if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
-        max_wait=30
+        max_wait=120
         log_json INFO "start_unbound" "DNSSEC enabled - extended startup timeout" \
             "timeout=${max_wait}s"
     fi
@@ -1286,7 +1286,7 @@ supervise_all() {
         if [ "${ENABLE_DOT:-false}" = "true" ]; then
             log_json INFO "supervisor" "waiting for DNS services to be ready..."
             local dns_ready=0
-            for i in $(seq 1 15); do
+            for i in $(seq 1 60); do
                 if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 && test_unbound_dns_robust; then
                     dns_ready=1
                     break
@@ -1294,7 +1294,7 @@ supervise_all() {
                 sleep 2
             done
             if [ "$dns_ready" -ne 1 ]; then
-                log_json ERROR "supervisor" "DNS services (unbound/dnsmasq) not ready after 30s - retrying"
+                log_json ERROR "supervisor" "DNS services (unbound/dnsmasq) not ready after 120s - retrying"
                 continue
             fi
         else
