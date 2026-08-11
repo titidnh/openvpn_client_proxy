@@ -580,6 +580,7 @@ EOF
 
     chmod 0644 "$conf_file" 2>/dev/null || true
     chown unbound:unbound "$conf_file" 2>/dev/null || true
+    chown unbound:unbound /var/log/unbound.log 2>/dev/null || true
     mv -f "$conf_file" "$UNBOUND_CONF"
     chmod 0644 "$UNBOUND_CONF" 2>/dev/null || true
     chown unbound:unbound "$UNBOUND_CONF" 2>/dev/null || true
