@@ -555,11 +555,6 @@ server:
 
     # DNSSEC
     ${dnssec_mode}
-    
-remote-control:
-    control-enable: yes
-    control-interface: 127.0.0.1
-    control-port: 8953       
 EOF
 
     if [ "${ENABLE_DNSSEC:-false}" = "true" ] && [ -f /var/lib/unbound/root.key ]; then
