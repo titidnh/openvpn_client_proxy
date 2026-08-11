@@ -601,9 +601,21 @@ start_unbound() {
     unbound -d -c "$UNBOUND_CONF" &
     SERVICE_PIDS[unbound]=$!
 
+    local max_wait=6
+    if [ "${ENABLE_DNSSEC:-false}" = "true" ]; then
+        max_wait=15
+        log_json INFO "start_unbound" "DNSSEC enabled - extended startup timeout" \
+            "timeout=${max_wait}s"
+    fi
+
     local bound=0 i
-    for i in 1 2 3 4 5 6; do
-        nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 && { bound=1; break; }
+    for i in $(seq 1 "$max_wait"); do
+        if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1; then
+            if test_unbound_dns_robust; then
+                bound=1
+                break
+            fi
+        fi
         sleep 1
     done
 
@@ -612,21 +624,39 @@ start_unbound() {
         log_json INFO "start_unbound" "started - DoT active" \
             "pid=${SERVICE_PIDS[unbound]}" "port=5053"
     else
-        log_json ERROR "start_unbound" "unbound did not bind to 127.0.0.1:5053"
+        log_json ERROR "start_unbound" "unbound failed to start properly" \
+            "timeout=${max_wait}s"
+        kill_if_running "${SERVICE_PIDS[unbound]}"
         SERVICE_PIDS[unbound]=0
         METRIC_DOT_ACTIVE=0
     fi
 }
 
-# Teste la résolution DNS via Unbound
-test_unbound_dns() {
-    if command_exists dig; then
-        dig @127.0.0.1 -p 5053 example.com +short | grep -q .
-        return $?
-    elif command_exists nslookup; then
-        nslookup example.com 127.0.0.1#5053 >/dev/null 2>&1
-        return $?
-    fi
+# Teste la résolution DNS via Unbound avec retries pour laisser le temps
+# aux connexions TLS et aux validations DNSSEC de se finaliser.
+test_unbound_dns_robust() {
+    local attempt=0
+    local max_attempts=3
+
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        attempt=$((attempt + 1))
+
+        if command_exists dig; then
+            if timeout 3 dig @127.0.0.1 -p 5053 \
+                +tries=1 +timeout=2 example.com +short 2>/dev/null | grep -q .; then
+                return 0
+            fi
+        elif command_exists nslookup; then
+            if timeout 3 nslookup example.com 127.0.0.1 2>/dev/null | grep -q "Name:"; then
+                return 0
+            fi
+        fi
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            sleep 1
+        fi
+    done
+
     return 1
 }
 
@@ -670,16 +700,37 @@ _dot_refresh_loop() {
                 local ub_pid
                 ub_pid=$(pidof unbound | awk '{print $1}' || true)
                 if [ -n "$ub_pid" ]; then
+                    log_json INFO "dot_refresh" "Reloading unbound after config change" \
+                        "pid=${ub_pid}" "host=${host}"
+
                     kill -HUP "$ub_pid" 2>/dev/null || true
-                    sleep 1
-                    if test_unbound_dns; then
+
+                    local reload_ok=0
+                    local reload_max_wait=15
+
+                    for reload_attempt in $(seq 1 "$reload_max_wait"); do
+                        sleep 1
+
+                        if ! kill -0 "$ub_pid" 2>/dev/null; then
+                            log_json WARN "dot_refresh" "unbound died during reload" \
+                                "host=${host}"
+                            break
+                        fi
+
+                        if test_unbound_dns_robust; then
+                            reload_ok=1
+                            break
+                        fi
+                    done
+
+                    if [ "$reload_ok" -eq 1 ]; then
                         [ -n "$old_ip" ] && ipt_del_853 "$old_ip"
                         dot_ip_map_set "$host" "$new_ip"
                         dot_changed=1
-                        log_json INFO "dot_refresh" "unbound config refreshed after DoT IP change" \
+                        log_json INFO "dot_refresh" "unbound reloaded successfully" \
                             "pid=${ub_pid}" "host=${host}" "new_ip=${new_ip}"
                     else
-                        log_json ERROR "dot_refresh" "unbound DNS validation failed after IP change" \
+                        log_json WARN "dot_refresh" "unbound reload validation timeout" \
                             "host=${host}" "new_ip=${new_ip}"
                         ipt_del_853 "$new_ip"
                     fi
