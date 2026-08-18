@@ -622,9 +622,15 @@ start_unbound() {
     log_json INFO "start_unbound" "Starting Unbound"
     
     [ "${ENABLE_DOT:-false}" = "true" ] || return 0
-
+    # ✅ FIX #4: Attendre dnsmasq AVANT Unbound
+    wait_for_dns_ready 30 || {
+        log_json WARN "start_unbound" "classic DNS not ready - delaying unbound"
+        return 0
+    }
     configure_unbound || return 0
-
+    # Tuer ancienne instance si elle existe (orphan)
+    pkill -9 -f "^unbound -d" 2>/dev/null || true
+    sleep 1
     unbound -d -c "$UNBOUND_CONF" &
     SERVICE_PIDS[unbound]=$!
 
@@ -653,6 +659,8 @@ start_unbound() {
     done
 
     if [ "$bound" -eq 1 ]; then
+        # ✅ Reconfigurer dnsmasq immédiatement
+        reconfigure_dnsmasq
         METRIC_DOT_ACTIVE=1
         log_json INFO "start_unbound" "started - DoT active" \
             "pid=${SERVICE_PIDS[unbound]}" "port=5053"
@@ -1487,9 +1495,9 @@ supervise_all() {
             "metrics=${SERVICE_PIDS[metrics]:-disabled}" \
             "dot_refresh=${SERVICE_PIDS[dot_refresh]:-disabled}"
 
-        # Attendre 20s avant le premier healthcheck
-        log_json INFO "supervisor" "waiting 20s before first healthcheck..."
-        sleep 20
+        # ✅ FIX #6: Augmenter délai initial de stabilisation
+        log_json INFO "supervisor" "waiting 40s before first healthcheck for stability..."
+        sleep 40
 
         local fail=0
         local start_time=$(date +%s)
@@ -1628,10 +1636,15 @@ supervise_all() {
         unset DOT_HOST_IP_MAP
         declare -gA DOT_HOST_IP_MAP=()
 
-        local sleep_s=$((5 * attempt))
-        [ "$sleep_s" -gt 60 ] && sleep_s=60
-        log_json INFO "supervisor" "restarting in ${sleep_s}s" "attempt=${attempt}"
+        # ✅ FIX #6: Augmenter délai exponentiellement
+        local sleep_s=$((5 + attempt * 10))  # Au lieu de 5 * attempt
+        if [ "$sleep_s" -gt 120 ]; then
+            sleep_s=120
+        fi
+        log_json INFO "supervisor" "stabilization wait ${sleep_s}s (attempt $attempt)"
         sleep "$sleep_s"
+        # ✅ Sauter prochaine itération healthcheck
+        SKIP_HEALTHCHECK_FIRST_MINUTES=$((SKIP_HEALTHCHECK_FIRST_MINUTES + 5))
     done
 }
 
