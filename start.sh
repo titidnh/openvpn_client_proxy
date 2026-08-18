@@ -464,6 +464,22 @@ cleanup_routes_on_restart() {
     timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
 }
 
+
+# ✅ FIX #2: Nettoyer les routes proprement avant restart
+cleanup_routes_on_restart() {
+    local tun_dev
+    tun_dev=$(find_vpn_interface || true)
+    
+    if [ -n "$tun_dev" ] && ip link show "$tun_dev" >/dev/null 2>&1; then
+        log_json DEBUG "supervisor" "cleaning up TUN device" "dev=$tun_dev"
+        timeout 3 ip addr flush dev "$tun_dev" 2>/dev/null || true
+    fi
+    
+    # Nettoyer les routes statiques de VPN (pattern générique)
+    timeout 3 ip route del default via 0.0.0.0 2>/dev/null || true
+    timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
+}
+
 configure_unbound() {
     log_json INFO "configure_unbound" "Configuring Unbound for DoT"
     
