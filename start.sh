@@ -676,7 +676,7 @@ start_unbound() {
 
     if [ "$bound" -eq 1 ]; then
         # ✅ Reconfigurer dnsmasq immédiatement
-        reconfigure_dnsmasq
+        reconfigure_dnsmasq_to_unbound 
         METRIC_DOT_ACTIVE=1
         log_json INFO "start_unbound" "started - DoT active" \
             "pid=${SERVICE_PIDS[unbound]}" "port=5053"
@@ -732,7 +732,7 @@ restart_unbound_if_needed() {
         SERVICE_PIDS[unbound]=$!
         
         # Reconfigurer dnsmasq immédiatement
-        reconfigure_dnsmasq
+        reconfigure_dnsmasq_to_unbound
         
         log_json INFO "supervisor" "unbound restarted" "pid=${SERVICE_PIDS[unbound]}"
         return 1
@@ -747,7 +747,7 @@ restart_unbound_if_needed() {
         
         unbound -d -c "$UNBOUND_CONF" &
         SERVICE_PIDS[unbound]=$!
-        reconfigure_dnsmasq
+        reconfigure_dnsmasq_to_unbound
         
         return 1
     fi
