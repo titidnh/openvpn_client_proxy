@@ -448,6 +448,22 @@ parse_dot_servers() {
 }
 
 # Configure Unbound pour DoT
+
+# ✅ FIX #2: Nettoyer les routes proprement avant restart
+cleanup_routes_on_restart() {
+    local tun_dev
+    tun_dev=$(find_vpn_interface || true)
+    
+    if [ -n "$tun_dev" ] && ip link show "$tun_dev" >/dev/null 2>&1; then
+        log_json DEBUG "supervisor" "cleaning up TUN device" "dev=$tun_dev"
+        timeout 3 ip addr flush dev "$tun_dev" 2>/dev/null || true
+    fi
+    
+    # Nettoyer les routes statiques de VPN (pattern générique)
+    timeout 3 ip route del default via 0.0.0.0 2>/dev/null || true
+    timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
+}
+
 configure_unbound() {
     log_json INFO "configure_unbound" "Configuring Unbound for DoT"
     
@@ -674,6 +690,47 @@ test_unbound_dns_robust() {
 
     return 1
 }
+
+# ✅ FIX #5: Restart Unbound automatiquement si crash
+restart_unbound_if_needed() {
+    if [ "${ENABLE_DOT:-false}" != "true" ]; then
+        return 0
+    fi
+    
+    # Vérifier processus
+    if ! kill -0 "${SERVICE_PIDS[unbound]}" 2>/dev/null; then
+        log_json WARN "supervisor" "unbound process died - restarting immediately"
+        
+        pkill -9 -f "^unbound" 2>/dev/null || true
+        sleep 1
+        
+        unbound -d -c "$UNBOUND_CONF" &
+        SERVICE_PIDS[unbound]=$!
+        
+        # Reconfigurer dnsmasq immédiatement
+        reconfigure_dnsmasq
+        
+        log_json INFO "supervisor" "unbound restarted" "pid=${SERVICE_PIDS[unbound]}"
+        return 1
+    fi
+    
+    # Vérifier port
+    if ! nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1; then
+        log_json WARN "supervisor" "unbound port unresponsive - hard restart"
+        
+        pkill -9 -f "^unbound" 2>/dev/null || true
+        sleep 2
+        
+        unbound -d -c "$UNBOUND_CONF" &
+        SERVICE_PIDS[unbound]=$!
+        reconfigure_dnsmasq
+        
+        return 1
+    fi
+    
+    return 0
+}
+
 
 # Boucle de rafraîchissement des IPs DoT
 _dot_refresh_loop() {
