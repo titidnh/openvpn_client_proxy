@@ -518,7 +518,7 @@ parse_dot_servers() {
 
     local entry
     for entry in $servers; do
-        local proto host ip
+        local proto host ip attempt max_attempts backoff
 
         proto=$(echo "$entry" | awk -F'://' '{print $1}')
         host=$(echo "$entry" |
@@ -527,10 +527,43 @@ parse_dot_servers() {
 
         [ -z "$host" ] && continue
 
-        ip=$(resolve_hostname \
-            "$host" \
-            "$DNS_SERVER_1" \
-            "$DNS_SERVER_2")
+        # FIX STABILITÉ #1 : Retry with exponential backoff for DoT host resolution
+        ip=""
+        max_attempts=5
+        backoff=1
+        
+        for attempt in $(seq 1 "$max_attempts"); do
+            ip=$(resolve_hostname \
+                "$host" \
+                "$DNS_SERVER_1" \
+                "$DNS_SERVER_2" 2>/dev/null || true)
+
+            if [ -n "$ip" ]; then
+                if [ "$attempt" -gt 1 ]; then
+                    log_json INFO "parse_dot_servers" \
+                        "resolved after retry" \
+                        "host=${host}" \
+                        "ip=${ip}" \
+                        "attempts=${attempt}"
+                fi
+                break
+            fi
+
+            if [ "$attempt" -lt "$max_attempts" ]; then
+                log_json WARN "parse_dot_servers" \
+                    "resolve attempt failed, retrying" \
+                    "host=${host}" \
+                    "attempt=${attempt}/${max_attempts}" \
+                    "wait=${backoff}s"
+                
+                sleep "$backoff"
+                backoff=$((backoff * 2))
+                
+                if [ "$backoff" -gt 10 ]; then
+                    backoff=10
+                fi
+            fi
+        done
 
         if [ -n "$ip" ]; then
             DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
@@ -553,8 +586,9 @@ parse_dot_servers() {
                 "proto=${proto}"
         else
             log_json WARN "parse_dot_servers" \
-                "could not resolve, skipping" \
-                "host=${host}"
+                "could not resolve after max retries, skipping" \
+                "host=${host}" \
+                "max_attempts=${max_attempts}"
         fi
     done
 
@@ -1349,10 +1383,16 @@ start_dnsmasq() {
     local bound=0
     local i
 
-    for i in 1 2 3 4 5; do
+    # FIX STABILITÉ #2 : Improved dnsmasq startup check
+    # Test both port availability AND actual DNS resolution
+    for i in $(seq 1 10); do
         if nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1; then
-            bound=1
-            break
+            # Port is open, now test actual resolution
+            if nslookup example.com 127.0.0.1 >/dev/null 2>&1 || \
+               dig @127.0.0.1 example.com +short 2>/dev/null | grep -q .; then
+                bound=1
+                break
+            fi
         fi
 
         sleep 1
@@ -1365,7 +1405,7 @@ start_dnsmasq() {
             "port=53"
     else
         log_json ERROR "start_dnsmasq" \
-            "dnsmasq did not bind to 127.0.0.1:53"
+            "dnsmasq did not become fully operational"
     fi
 }
 
@@ -1376,6 +1416,33 @@ start_dnsmasq_classic() {
     local old_enable_dot="${ENABLE_DOT:-false}"
 
     export ENABLE_DOT="false"
+
+    # FIX STABILITÉ #4 : Validate upstream DNS servers before starting
+    local retry=0
+    local max_retries=3
+    
+    for retry in $(seq 1 "$max_retries"); do
+        # Quick check if DNS servers are reachable
+        local dns_ok=0
+        
+        if command_exists timeout; then
+            if timeout 3 bash -c "echo > /dev/tcp/${DNS_SERVER_1}/53" 2>/dev/null || \
+               timeout 3 bash -c ": > /dev/udp/${DNS_SERVER_1}/53" 2>/dev/null; then
+                dns_ok=1
+            fi
+        fi
+        
+        if [ "$dns_ok" -eq 0 ] && [ "$retry" -lt "$max_retries" ]; then
+            log_json WARN "start_dnsmasq_classic" \
+                "upstream DNS not responding, retry in 2s" \
+                "dns_server=${DNS_SERVER_1}" \
+                "retry=${retry}/${max_retries}"
+            sleep 2
+            continue
+        fi
+        
+        break
+    done
 
     start_dnsmasq
 
@@ -1392,7 +1459,10 @@ wait_for_dns_ready() {
     local i
 
     for i in $(seq 1 "$max_wait"); do
-        if nc -z -w 1 127.0.0.1 53 >/dev/null 2>&1; then
+        # Test actual DNS resolution, not just port connectivity
+        if nslookup example.com 127.0.0.1 >/dev/null 2>&1 || \
+           dig @127.0.0.1 example.com +short 2>/dev/null | grep -q .; then
+            
             log_json INFO "wait_for_dns_ready" \
                 "local DNS is responsive" \
                 "after=${i}s"
@@ -1870,6 +1940,10 @@ supervise_all() {
         if ! wait_for_dns_ready 30; then
             log_json WARN "supervisor" \
                 "classic dns not ready - continuing"
+        else
+            # FIX STABILITÉ #5 : Give classic DNS extra time to stabilize
+            # before attempting to resolve DoT hostnames
+            sleep 2
         fi
 
         # -------------------------------------------------------------------
@@ -1884,6 +1958,13 @@ supervise_all() {
         # C'est important : éviter deux redémarrages successifs de dnsmasq
         # pendant le démarrage initial.
 
+        # FIX STABILITÉ #6 : Give Unbound/DoT extra time to stabilize
+        if [ "${ENABLE_DOT:-false}" = "true" ] && [ -s "$DOT_FORWARD_ADDRS_FILE" ]; then
+            log_json INFO "supervisor" \
+                "DoT configured - waiting for stabilization..."
+            sleep 3
+        fi
+
         # -------------------------------------------------------------------
         # Vérification DNS
         # -------------------------------------------------------------------
@@ -1895,12 +1976,23 @@ supervise_all() {
             local dns_ready=0
             local i
 
-            for i in $(seq 1 60); do
-                if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 &&
-                    test_unbound_dns_robust; then
-
-                    dns_ready=1
-                    break
+            # FIX STABILITÉ #7 : Extended timeout for DoT startup
+            # and more flexible validation criteria
+            for i in $(seq 1 90); do
+                if nc -z -w 2 127.0.0.1 5053 >/dev/null 2>&1; then
+                    # Unbound port is open, test if it's actually responsive
+                    if test_unbound_dns_robust; then
+                        dns_ready=1
+                        log_json INFO "supervisor" \
+                            "DoT DNS ready" \
+                            "wait_cycles=${i}"
+                        break
+                    fi
+                elif [ $((i % 10)) -eq 0 ]; then
+                    # Log progress every 10 cycles to avoid log spam
+                    log_json DEBUG "supervisor" \
+                        "DoT DNS still initializing" \
+                        "cycles=${i}"
                 fi
 
                 sleep 2
@@ -1924,18 +2016,20 @@ supervise_all() {
             local dns_ready=0
             local i
 
-            for i in 1 2 3 4 5; do
-                if nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+            # FIX STABILITÉ #8 : Better validation for classic DNS mode
+            for i in $(seq 1 15); do
+                if nslookup example.com 127.0.0.1 >/dev/null 2>&1 || \
+                   dig @127.0.0.1 example.com +short 2>/dev/null | grep -q .; then
                     dns_ready=1
                     break
                 fi
 
-                sleep 2
+                sleep 1
             done
 
             if [ "$dns_ready" -ne 1 ]; then
                 log_json ERROR "supervisor" \
-                    "dnsmasq not ready after 10s - retrying"
+                    "dnsmasq not ready after 15s - retrying"
 
                 kill_if_running "${SERVICE_PIDS[dnsmasq]}"
                 SERVICE_PIDS[dnsmasq]=0
@@ -2134,14 +2228,17 @@ supervise_all() {
                 local dns_ok=0
 
                 if [ "${ENABLE_DOT:-false}" = "true" ]; then
-                    if nc -z -w 1 127.0.0.1 5053 >/dev/null 2>&1 &&
+                    if nc -z -w 2 127.0.0.1 5053 >/dev/null 2>&1 &&
                         test_unbound_dns_robust &&
                         nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
 
                         dns_ok=1
                     fi
                 else
-                    if nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+                    # FIX STABILITÉ #9 : More robust DNS check in keepalive loop
+                    # Try both classic and dig methods for better compatibility
+                    if nslookup example.com 127.0.0.1 >/dev/null 2>&1 || \
+                       dig @127.0.0.1 example.com +short 2>/dev/null | grep -q .; then
                         dns_ok=1
                     fi
                 fi
@@ -2273,7 +2370,8 @@ supervise_all() {
                         "dnsmasq process died"
 
                     fail=1
-                elif ! nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+                elif ! nslookup example.com 127.0.0.1 >/dev/null 2>&1 && \
+                     ! dig @127.0.0.1 example.com +short 2>/dev/null | grep -q .; then
                     log_json ERROR "supervisor" \
                         "DNS resolution via 127.0.0.1 failed"
 
