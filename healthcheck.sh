@@ -16,6 +16,7 @@ set -euo pipefail
 # Version: 2.0.0
 # ===========================================================================
 
+
 # Charger les fonctions communes
 source "/usr/local/lib/common.sh"
 
