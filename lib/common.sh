@@ -208,6 +208,7 @@ wait_for_vpn_tunnel() {
 # ===========================================================================
 
 # Résout un nom d'hôte en IP en utilisant plusieurs serveurs DNS de fallback
+# Retourne SEULEMENT la première IP
 # Usage: resolve_hostname HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
 resolve_hostname() {
     local hostname="$1"
@@ -235,6 +236,42 @@ resolve_hostname() {
         ip=$(nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) {print $2; exit} }' || true)
         if [ -n "$ip" ]; then
             echo "$ip"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Résout un nom d'hôte en TOUTES les IPs (retourne une IP par ligne)
+# FIX STABILITÉ #10 (suite): Résout TOUTES les IPs pour un hostname
+# Usage: resolve_hostname_all HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
+resolve_hostname_all() {
+    local hostname="$1"
+    shift
+    local dns_servers=("$@")
+    
+    # Si aucun serveur DNS fourni, utiliser les serveurs par défaut
+    if [ ${#dns_servers[@]} -eq 0 ]; then
+        dns_servers=("$DEFAULT_DNS_SERVER_1" "$DEFAULT_DNS_SERVER_2")
+    fi
+
+    local ips=""
+    
+    # Essayer avec dig d'abord - retourne TOUTES les IPs
+    for dns in "${dns_servers[@]}"; do
+        ips=$(dig +short "$hostname" @"$dns" A 2>/dev/null | grep -E '^[0-9.]+$' || true)
+        if [ -n "$ips" ]; then
+            echo "$ips"
+            return 0
+        fi
+    done
+    
+    # Essayer avec nslookup - retourne TOUTES les IPs
+    for dns in "${dns_servers[@]}"; do
+        ips=$(nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) print $2 }' || true)
+        if [ -n "$ips" ]; then
+            echo "$ips"
             return 0
         fi
     done
