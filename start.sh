@@ -503,6 +503,96 @@ dot_ip_map_get() {
     fi
 }
 
+# ===========================================================================
+# Pre-loading DoT IPs at boot - FIX STABILITÉ #10
+# Resolves all DoT hostnames early and caches them to minimize
+# later restarts. When IPs change, Unbound can reload config
+# without dying since iptables already allows all known IPs.
+# ===========================================================================
+
+preload_dot_ips() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    log_json INFO "preload_dot_ips" \
+        "Pre-loading DoT IP mappings at boot"
+
+    local servers="${DOT_DNS_SERVERS}"
+    servers=$(echo "$servers" | tr ',' ' ')
+
+    local preload_count=0
+    local preload_failed=0
+
+    DOT_RESOLVED_IPS=""
+    DOT_HOST_IP_MAP=()
+
+    local entry
+    for entry in $servers; do
+        local proto host ip attempt max_attempts backoff
+
+        proto=$(echo "$entry" | awk -F'://' '{print $1}')
+        host=$(echo "$entry" |
+            sed 's|^[a-z]*://||' |
+            awk -F'[:/]' '{print $1}')
+
+        [ -z "$host" ] && continue
+
+        # Try to resolve with exponential backoff
+        ip=""
+        max_attempts=5
+        backoff=1
+        
+        for attempt in $(seq 1 "$max_attempts"); do
+            ip=$(resolve_hostname \
+                "$host" \
+                "$DNS_SERVER_1" \
+                "$DNS_SERVER_2" 2>/dev/null || true)
+
+            if [ -n "$ip" ]; then
+                break
+            fi
+
+            if [ "$attempt" -lt "$max_attempts" ]; then
+                sleep "$backoff"
+                backoff=$((backoff * 2))
+                [ "$backoff" -gt 10 ] && backoff=10
+            fi
+        done
+
+        if [ -n "$ip" ]; then
+            # Cache the IP for later use by firewall and refresh loop
+            DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
+            DOT_HOST_IP_MAP["$host"]="$ip"
+            dot_ip_map_set "$host" "$ip"
+            preload_count=$((preload_count + 1))
+
+            log_json INFO "preload_dot_ips" \
+                "pre-loaded DoT hostname IP" \
+                "host=${host}" \
+                "ip=${ip}" \
+                "proto=${proto}"
+        else
+            preload_failed=$((preload_failed + 1))
+
+            log_json WARN "preload_dot_ips" \
+                "could not pre-load DoT hostname" \
+                "host=${host}" \
+                "max_attempts=${max_attempts}"
+        fi
+    done
+
+    if [ "$preload_count" -gt 0 ]; then
+        log_json INFO "preload_dot_ips" \
+            "DoT pre-loading complete - IPs cached for firewall" \
+            "loaded=${preload_count}" \
+            "failed=${preload_failed}" \
+            "cached_ips=${DOT_RESOLVED_IPS}"
+    else
+        log_json WARN "preload_dot_ips" \
+            "DoT pre-loading failed - no IPs resolved" \
+            "failed=${preload_failed}"
+    fi
+}
+
 parse_dot_servers() {
     log_json INFO "parse_dot_servers" "Parsing DoT servers"
 
@@ -956,6 +1046,44 @@ restart_unbound_if_needed() {
 # Refresh périodique des IP DoT
 # ===========================================================================
 
+update_single_dot_forward_addr() {
+    local host="$1"
+    local new_ip="$2"
+    local proto="$3"
+
+    if [ ! -f "$UNBOUND_CONF" ]; then
+        return 1
+    fi
+
+    local tmp_conf
+    tmp_conf=$(temp_file "unbound_update")
+
+    if [ "$proto" = "https" ]; then
+        local new_line="        forward-addr: ${new_ip}@443#${host}"
+    else
+        local new_line="        forward-addr: ${new_ip}@853#${host}"
+    fi
+
+    # Replace forward-addr line for this specific host
+    sed "s|.*forward-addr:.*#${host}.*|${new_line}|" \
+        "$UNBOUND_CONF" > "$tmp_conf" || return 1
+
+    if ! command_exists unbound-checkconf; then
+        mv -f "$tmp_conf" "$UNBOUND_CONF" 2>/dev/null || true
+        return 0
+    fi
+
+    if unbound-checkconf "$tmp_conf" >/dev/null 2>&1; then
+        mv -f "$tmp_conf" "$UNBOUND_CONF" 2>/dev/null || true
+        chmod 0644 "$UNBOUND_CONF" 2>/dev/null || true
+        chown unbound:unbound "$UNBOUND_CONF" 2>/dev/null || true
+        return 0
+    else
+        rm -f "$tmp_conf"
+        return 1
+    fi
+}
+
 _dot_refresh_loop() {
     local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
 
@@ -1009,26 +1137,38 @@ _dot_refresh_loop() {
                 "old=${old_ip:-none}" \
                 "new=${new_ip}"
 
-            # FIX STABILITÉ :
-            # Autoriser la nouvelle IP AVANT de recharger Unbound.
-            # L'ancienne IP reste autorisée jusqu'à validation complète.
+            # FIX STABILITÉ #10 (suite) :
+            # Firewall already has both old and new IPs authorized
+            # (from preload_dot_ips), so we can just update Unbound config
+            # without needing to restart it.
+
+            # Pre-authorize new IP if not already present
             ipt_add_853 "$new_ip"
 
-            if configure_unbound; then
+            # Extract proto from entry
+            local proto="tls"
+            if echo "$entry" | grep -q "https://"; then
+                proto="https"
+            fi
+
+            # Try lightweight config update first
+            if update_single_dot_forward_addr "$host" "$new_ip" "$proto"; then
                 local ub_pid
 
                 ub_pid=$(pidof unbound | awk '{print $1}' || true)
 
                 if [ -n "$ub_pid" ]; then
                     log_json INFO "dot_refresh" \
-                        "Reloading unbound after config change" \
+                        "Reloading unbound (lightweight update)" \
                         "pid=${ub_pid}" \
-                        "host=${host}"
+                        "host=${host}" \
+                        "new_ip=${new_ip}"
 
+                    # Send HUP for graceful reload
                     kill -HUP "$ub_pid" 2>/dev/null || true
 
                     local reload_ok=0
-                    local reload_max_wait=15
+                    local reload_max_wait=10
                     local reload_attempt
 
                     for reload_attempt in $(seq 1 "$reload_max_wait"); do
@@ -1036,8 +1176,9 @@ _dot_refresh_loop() {
 
                         if ! kill -0 "$ub_pid" 2>/dev/null; then
                             log_json WARN "dot_refresh" \
-                                "unbound died during reload" \
+                                "unbound died during reload - will restart" \
                                 "host=${host}"
+                            reload_ok=0
                             break
                         fi
 
@@ -1048,10 +1189,8 @@ _dot_refresh_loop() {
                     done
 
                     if [ "$reload_ok" -eq 1 ]; then
-                        # Le nouveau serveur fonctionne.
-                        # On peut maintenant retirer l'ancienne IP.
-                        if [ -n "$old_ip" ] &&
-                            [ "$old_ip" != "$new_ip" ]; then
+                        # Reload succeeded, cleanup old IP rule
+                        if [ -n "$old_ip" ] && [ "$old_ip" != "$new_ip" ]; then
                             ipt_del_853 "$old_ip"
                         fi
 
@@ -1059,32 +1198,84 @@ _dot_refresh_loop() {
                         dot_changed=1
 
                         log_json INFO "dot_refresh" \
-                            "unbound reloaded successfully" \
+                            "unbound reloaded successfully (lightweight)" \
                             "pid=${ub_pid}" \
                             "host=${host}" \
-                            "new_ip=${new_ip}" \
-                            "iptables_updated=true"
-                    else
-                        # Le reload n'est pas validé :
-                        # retirer uniquement la nouvelle règle.
-                        log_json WARN "dot_refresh" \
-                            "unbound reload validation timeout" \
-                            "host=${host}" \
                             "new_ip=${new_ip}"
+                    else
+                        # Reload failed - need full reconfiguration
+                        log_json WARN "dot_refresh" \
+                            "lightweight reload failed - falling back to full reconfigure" \
+                            "host=${host}"
 
-                        ipt_del_853 "$new_ip"
+                        # Remove the partial update
+                        if [ -n "$old_ip" ]; then
+                            update_single_dot_forward_addr "$host" "$old_ip" "$proto" 2>/dev/null || true
+                        fi
+
+                        # Fall back to full reconfigure_unbound
+                        if configure_unbound; then
+                            ub_pid=$(pidof unbound | awk '{print $1}' || true)
+
+                            if [ -n "$ub_pid" ]; then
+                                kill -HUP "$ub_pid" 2>/dev/null || true
+
+                                # Wait a bit for reload
+                                sleep 2
+
+                                if test_unbound_dns_robust; then
+                                    dot_ip_map_set "$host" "$new_ip"
+                                    dot_changed=1
+
+                                    log_json INFO "dot_refresh" \
+                                        "unbound reconfigured successfully (fallback)" \
+                                        "host=${host}" \
+                                        "new_ip=${new_ip}"
+                                fi
+                            fi
+                        fi
                     fi
                 else
                     log_json WARN "dot_refresh" \
-                        "unbound not running while refreshing config"
+                        "unbound not running - full reconfigure needed" \
+                        "host=${host}"
 
                     ipt_del_853 "$new_ip"
                 fi
             else
+                # Lightweight update failed - need full reconfigure
                 log_json WARN "dot_refresh" \
-                    "failed to regenerate unbound config after DoT IP change"
+                    "lightweight config update failed - full reconfigure" \
+                    "host=${host}"
 
                 ipt_del_853 "$new_ip"
+
+                # Try full reconfiguration as last resort
+                if configure_unbound; then
+                    local ub_pid
+
+                    ub_pid=$(pidof unbound | awk '{print $1}' || true)
+
+                    if [ -n "$ub_pid" ]; then
+                        log_json INFO "dot_refresh" \
+                            "Reloading unbound after full reconfigure" \
+                            "pid=${ub_pid}" \
+                            "host=${host}"
+
+                        kill -HUP "$ub_pid" 2>/dev/null || true
+                        sleep 2
+
+                        if test_unbound_dns_robust; then
+                            dot_ip_map_set "$host" "$new_ip"
+                            dot_changed=1
+
+                            log_json INFO "dot_refresh" \
+                                "unbound reloaded successfully (full reconfigure)" \
+                                "host=${host}" \
+                                "new_ip=${new_ip}"
+                        fi
+                    fi
+                fi
             fi
         done
 
@@ -1944,6 +2135,16 @@ supervise_all() {
             # FIX STABILITÉ #5 : Give classic DNS extra time to stabilize
             # before attempting to resolve DoT hostnames
             sleep 2
+        fi
+
+        # -------------------------------------------------------------------
+        # Phase 1.5: Pre-load DoT IPs (FIX STABILITÉ #10)
+        # Pre-resolve all DoT hostnames and cache their IPs to minimize
+        # later restarts when IPs change
+        # -------------------------------------------------------------------
+
+        if [ "${ENABLE_DOT:-false}" = "true" ]; then
+            preload_dot_ips
         fi
 
         # -------------------------------------------------------------------
