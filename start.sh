@@ -2666,9 +2666,16 @@ supervise_all() {
 # Gestion des signaux
 # ===========================================================================
 
+declare -g _CLEANUP_RUNNING=0
+
 cleanup() {
-    log_json INFO "cleanup" \
-        "Cleaning up services"
+    # Éviter d'afficher le message de cleanup plusieurs fois
+    # (le trap peut être déclenché par plusieurs signaux successifs)
+    if [ "$_CLEANUP_RUNNING" -eq 0 ]; then
+        log_json INFO "cleanup" \
+            "Cleaning up services"
+        _CLEANUP_RUNNING=1
+    fi
 
     rm -f "$VPN_HEALTHY_FILE"
 
@@ -2694,6 +2701,9 @@ cleanup() {
 
     log_json INFO "cleanup" \
         "All services stopped"
+
+    # Réinitialiser le flag pour les appels futurs (par sécurité)
+    _CLEANUP_RUNNING=0
 
     exit 0
 }
