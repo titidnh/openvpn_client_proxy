@@ -26,6 +26,19 @@ source "/usr/local/lib/common.sh"
 init_environment
 
 # ===========================================================================
+# Sélection et configuration VPN
+# ===========================================================================
+source "/usr/local/bin/vpn-selector.sh"
+
+if ! vpn_type=$(validate_vpn_type "${VPN_TYPE:-openvpn}"); then
+    log_json ERROR "main" "Failed to validate VPN type"
+    exit 1
+fi
+
+export_vpn_config "$vpn_type"
+check_vpn_config_files "$vpn_type" || true
+
+# ===========================================================================
 # Configuration globale
 # ===========================================================================
 
@@ -261,14 +274,34 @@ setup_iptables() {
         iptables -A OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
     fi
 
-    # OpenVPN.
-    iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
+    # VPN Configuration
+    if [ "${VPN_TYPE}" = "openvpn" ]; then
+        # OpenVPN
+        iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
+        iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+        iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
+        
+        log_json INFO "setup_iptables" \
+            "OpenVPN firewall rules configured" \
+            "vpn_proto=${VPN_PROTO}" \
+            "vpn_port=${VPN_PORT}"
+            
+    elif [ "${VPN_TYPE}" = "wireguard" ]; then
+        # WireGuard - autoriser tout trafic vers wg0
+        iptables -A OUTPUT -o wg0 -j ACCEPT
+        iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE
+        
+        # Autoriser les connexions DNS via WireGuard
+        iptables -A OUTPUT -p udp -o wg0 --dport 53 -j ACCEPT
+        iptables -A OUTPUT -p tcp -o wg0 --dport 53 -j ACCEPT
+        
+        log_json INFO "setup_iptables" \
+            "WireGuard firewall rules configured"
+    fi
+    
+    # Propriétaire du groupe vpn (pour les deux)
     iptables -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
     iptables -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
-
-    # NAT.
-    iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
-    iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
     log_json INFO "setup_iptables" \
         "IPv4 configured - kill switch active" \

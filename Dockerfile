@@ -69,6 +69,9 @@ ENV ENABLE_TAILSCALE=false \
     TAILSCALE_ACCEPT_ROUTES=false \
     TAILSCALE_HOSTNAME="openvpn-client-proxy" \
     TAILSCALE_ADVERTISE_EXIT_NODE=false \
+    VPN_TYPE="openvpn" \
+    OPENVPN_ENABLED="true" \
+    WIREGUARD_ENABLED="false" \
     DNS_SERVER_1="94.140.14.14" \
     DNS_SERVER_2="94.140.15.15" \
     PROXY_USER="" \
@@ -119,7 +122,9 @@ RUN apk add --no-cache \
       unbound \
       libcap \
       python3 \
-      socat
+      socat \
+      wireguard-tools \
+      wireguard-go
 
 # S'assurer que les répertoires runtime d'unbound existent et sont détenus par l'utilisateur unbound
 RUN mkdir -p /var/lib/unbound /etc/unbound \
@@ -139,6 +144,8 @@ RUN mkdir -p /usr/local/lib
 
 # Copier les scripts avec les bonnes permissions
 COPY --chmod=0755 openvpn.sh      /usr/local/bin/openvpn.sh
+COPY --chmod=0755 vpn-selector.sh /usr/local/bin/vpn-selector.sh
+COPY --chmod=0755 vpn-startup.sh  /usr/local/bin/vpn-startup.sh
 COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh        /start.sh
 
@@ -146,7 +153,7 @@ COPY --chmod=0755 start.sh        /start.sh
 COPY --chmod=0755 lib/common.sh   /usr/local/lib/common.sh
 
 # Supprimer les retours chariot (pour compatibilité Windows)
-RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/healthcheck.sh
+RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/vpn-selector.sh /usr/local/bin/vpn-startup.sh /usr/local/bin/healthcheck.sh
 
 # Copier la configuration Privoxy et les fichiers de filtres
 COPY --chown=vpn:vpn \

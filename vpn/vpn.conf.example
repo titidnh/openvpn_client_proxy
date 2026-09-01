@@ -1,0 +1,25 @@
+# Exemple de configuration OpenVPN
+# 
+# Remplacez les chemins des certificats et la configuration
+# selon vos paramètres VPN
+
+client
+dev tun
+proto udp
+remote vpn.example.com 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+ca /vpn/ca.crt
+cert /vpn/client.crt
+key /vpn/client.key
+cipher AES-256-CBC
+auth SHA256
+remote-cert-tls server
+verb 3
+mute 20
+route-nopull
+script-security 2
+up /etc/openvpn/up.sh
+down /etc/openvpn/down.sh

@@ -1,0 +1,17 @@
+# Exemple de configuration WireGuard
+#
+# Remplacez les clés par les vôtres
+# PrivateKey: votre clé privée
+# PublicKey: la clé publique du serveur VPN
+
+[Interface]
+PrivateKey = YF1CW2l0tKBWJWkZpHEqZvYBbT0P4c0b1S0dT1f0nFM=
+Address = 10.0.0.2/32
+DNS = 1.1.1.1, 8.8.8.8
+ListenPort = 51820
+
+[Peer]
+PublicKey = vb3UVE0qB0Ku1b4vVJK2hFvMo1Z5L8N9vP2Q5R1S2T=
+AllowedIPs = 0.0.0.0/0
+Endpoint = vpn.example.com:51820
+PersistentKeepalive = 25
