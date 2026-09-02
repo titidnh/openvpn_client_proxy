@@ -1,6 +1,6 @@
-# OpenVPN Client Proxy
+# OpenVPN / WireGuard Client Proxy
 
-> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
+> **Lightweight Docker container** running an OpenVPN or WireGuard client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
 
 ---
 

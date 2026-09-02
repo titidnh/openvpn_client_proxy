@@ -12,10 +12,10 @@
 # ===========================================================================
 # Guard contre le double sourcing
 # ===========================================================================
-if [ -n "${COMMON_SH_LOADED:-}" ]; then
+if [ -n "${COMMON_SH_LOADED+x}" ]; then
     return 0
 fi
-export COMMON_SH_LOADED="true"
+COMMON_SH_LOADED=true
 
 set -euo pipefail
 
@@ -506,7 +506,7 @@ init_environment() {
 # ===========================================================================
 
 # Message de fin de chargement
-if [ "${COMMON_SH_LOADED:-false}" != "true" ]; then
+if [ "${COMMON_SH_LOADED+x}" != "true" ]; then
     COMMON_SH_LOADED=true
     log_json DEBUG "common.sh" "Common functions loaded" "version=${SCRIPT_VERSION}" "date=${SCRIPT_DATE}"
 fi
