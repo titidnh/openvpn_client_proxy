@@ -173,7 +173,7 @@ find_vpn_interface() {
 
     while read -r dev; do
         case "$dev" in
-            tun*|tap*)
+            tun*|tap*|wg*)
                 # Vérifier que l'interface a une adresse IP valide
                 if ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet '; then
                     printf '%s\n' "$dev"

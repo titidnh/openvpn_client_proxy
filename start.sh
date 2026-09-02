@@ -1855,7 +1855,7 @@ restart_vpn_service() {
 
         if check_openvpn_routing; then
             log_json INFO "supervisor" \
-                "openvpn routing restored" \
+                "VPN routing restored" \
                 "pid=${SERVICE_PIDS[vpn]}"
 
             return 0
@@ -2279,7 +2279,7 @@ supervise_all() {
         # -------------------------------------------------------------------
 
         log_json INFO "supervisor" \
-            "waiting for OpenVPN tunnel..."
+            "waiting for VPN tunnel..."
 
         local tun_ready=0
 
