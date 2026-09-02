@@ -73,9 +73,6 @@ start_wireguard() {
         sleep 1
     fi
     
-    # Give DNS some time to stabilize if it just started
-    sleep 3
-    
     # Parse configuration file (skip DNS lines to avoid resolvconf issues in container)
     private_key=$(grep "^PrivateKey" "$config" | awk '{print $3}')
     address=$(grep "^Address" "$config" | awk '{print $3}')
@@ -96,7 +93,7 @@ start_wireguard() {
     local endpoint_ip
     local endpoint_host
     local endpoint_port
-    local resolve_attempts=5
+    local resolve_attempts=3
     local resolve_attempt=0
     
     # Split endpoint into host:port
@@ -107,19 +104,13 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP
+        # Resolve hostname to IP using getent (works via dnsmasq)
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
         
         while [ $resolve_attempt -lt $resolve_attempts ]; do
-            # Try dig first (if available), then fallback to nslookup
-            if command -v dig >/dev/null 2>&1; then
-                endpoint_ip=$(timeout 3 dig +short +timeout=2 +tries=1 "$endpoint_host" @127.0.0.1 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-            elif command -v nslookup >/dev/null 2>&1; then
-                endpoint_ip=$(timeout 3 nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | awk 'NR==2 {print $2}' | head -1)
-            fi
+            endpoint_ip=$(getent hosts "$endpoint_host" 2>/dev/null | awk '{print $1; exit}')
             
             if [ -n "$endpoint_ip" ]; then
-                log_json INFO "start_wireguard" "Endpoint hostname resolved successfully" "host=$endpoint_host" "ip=$endpoint_ip"
                 break
             fi
             
@@ -127,7 +118,7 @@ start_wireguard() {
             
             if [ $resolve_attempt -lt $resolve_attempts ]; then
                 log_json WARN "start_wireguard" "DNS resolution attempt failed, retrying..." "attempt=$resolve_attempt" "host=$endpoint_host"
-                sleep 2
+                sleep 1
             fi
         done
         
