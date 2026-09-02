@@ -60,21 +60,28 @@ start_wireguard() {
     
     log_json INFO "start_wireguard" "Starting WireGuard"
     
-    # Charger la configuration
-    ip link add dev wg0 type wireguard 2>/dev/null || true
-    wg-quick up "$config"
-    
-    # Vérifier que l'interface est up
-    if ip link show wg0 2>/dev/null | grep -q "UP"; then
-        log_json INFO "start_wireguard" \
-            "WireGuard interface is UP" \
-            "interface=wg0"
-        return 0
-    else
-        log_json ERROR "start_wireguard" \
-            "WireGuard interface failed to come UP"
-        return 1
+    # Ensure clean state - remove any existing wg0 interface
+    if ip link show wg0 2>/dev/null; then
+        log_json INFO "start_wireguard" "Cleaning up existing wg0 interface"
+        ip link del dev wg0 2>/dev/null || wg-quick down wg0 2>/dev/null || true
+        sleep 1
     fi
+    
+    # Bring up the interface using wg-quick (it will create the interface)
+    if wg-quick up "$config"; then
+        sleep 1
+        # Verify that the interface is up
+        if ip link show wg0 2>/dev/null | grep -q "UP"; then
+            log_json INFO "start_wireguard" \
+                "WireGuard interface is UP" \
+                "interface=wg0"
+            return 0
+        fi
+    fi
+    
+    log_json ERROR "start_wireguard" \
+        "WireGuard interface failed to come UP"
+    return 1
 }
 
 # ===========================================================================

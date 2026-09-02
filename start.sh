@@ -1816,9 +1816,6 @@ start_openvpn_local() {
 }
 
 start_wireguard_local() {
-    log_json INFO "start_wireguard" \
-        "Starting WireGuard"
-    
     if start_wireguard; then
         # WireGuard interface is now active.
         # Use a dummy process (sleep) to track in SERVICE_PIDS since wg-quick terminates
