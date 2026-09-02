@@ -106,13 +106,17 @@ start_wireguard() {
         # External DNS servers are not accessible until after VPN is established
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
         
-        local resolve_attempts=5
+        # Wait for dnsmasq to be ready (it can take time to start up)
+        sleep 3
+        
+        local resolve_attempts=10
         local resolve_attempt=0
         
         while [ $resolve_attempt -lt $resolve_attempts ]; do
-            endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+            # Use dig with explicit timeout instead of nslookup
+            endpoint_ip=$(timeout 1 dig +short "$endpoint_host" @127.0.0.1 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
             
-            if [ -n "$endpoint_ip" ] && echo "$endpoint_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ -n "$endpoint_ip" ]; then
                 break
             fi
             
@@ -122,7 +126,7 @@ start_wireguard() {
             fi
         done
         
-        if [ -z "$endpoint_ip" ] || ! echo "$endpoint_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if [ -z "$endpoint_ip" ]; then
             log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
             return 1
         fi
