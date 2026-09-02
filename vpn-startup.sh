@@ -74,12 +74,13 @@ start_wireguard() {
     fi
     
     # Parse configuration file (skip DNS lines to avoid resolvconf issues in container)
-    private_key=$(grep "^PrivateKey" "$config" | cut -d' ' -f3)
-    address=$(grep "^Address" "$config" | cut -d' ' -f3)
-    peer_public_key=$(grep "^PublicKey" "$config" | grep -A 100 "\[Peer\]" | grep "^PublicKey" | cut -d' ' -f3)
-    allowed_ips=$(grep "^AllowedIPs" "$config" | cut -d' ' -f3)
-    endpoint=$(grep "^Endpoint" "$config" | cut -d' ' -f3)
-    persistent_keepalive=$(grep "^PersistentKeepalive" "$config" | cut -d' ' -f3)
+    private_key=$(grep "^PrivateKey" "$config" | awk '{print $3}')
+    address=$(grep "^Address" "$config" | awk '{print $3}')
+    # PublicKey under [Peer] section is after the [Peer] marker
+    peer_public_key=$(awk '/^\[Peer\]/,EOF {if (/^PublicKey/) {print $3; exit}}' "$config")
+    allowed_ips=$(awk '/^\[Peer\]/,EOF {if (/^AllowedIPs/) {print $3; exit}}' "$config")
+    endpoint=$(awk '/^\[Peer\]/,EOF {if (/^Endpoint/) {print $3; exit}}' "$config")
+    persistent_keepalive=$(awk '/^\[Peer\]/,EOF {if (/^PersistentKeepalive/) {print $3; exit}}' "$config")
     
     if [ -z "$private_key" ] || [ -z "$address" ] || [ -z "$peer_public_key" ]; then
         log_json ERROR "start_wireguard" \
