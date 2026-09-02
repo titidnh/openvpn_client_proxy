@@ -14,6 +14,8 @@ set -euo pipefail
 source "/usr/local/lib/common.sh"
 
 VPN_DIR="${VPN_DIR:-/vpn}"
+# Use VPN_TYPE from environment, defaulting to openvpn
+# This is set by vpn-selector.sh via export_vpn_config()
 VPN_TYPE="${VPN_TYPE:-openvpn}"
 MAX_RESTART_ATTEMPTS=5
 RESTART_DELAY=5
@@ -102,14 +104,19 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP using configured DNS servers (not localhost which isn't ready yet)
-        # Use DNS_SERVER_1/2 for external hostname resolution before VPN is established
+        # Resolve hostname to IP using local dnsmasq (127.0.0.1) which is already configured
+        # with DNS_SERVER_1 and DNS_SERVER_2. This works even when external DNS is blocked
+        # by the firewall kill switch.
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
         
-        # Try primary DNS server
-        endpoint_ip=$(nslookup "$endpoint_host" "${DNS_SERVER_1:-94.140.14.14}" 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+        # Try using local dnsmasq first (it forwards to DNS_SERVER_1/2)
+        endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
         
-        # If primary fails, try secondary DNS server
+        # If local dnsmasq fails, try direct DNS servers as fallback
+        if [ -z "$endpoint_ip" ]; then
+            endpoint_ip=$(nslookup "$endpoint_host" "${DNS_SERVER_1:-94.140.14.14}" 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+        fi
+        
         if [ -z "$endpoint_ip" ]; then
             endpoint_ip=$(nslookup "$endpoint_host" "${DNS_SERVER_2:-94.140.15.15}" 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
         fi

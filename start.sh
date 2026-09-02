@@ -1838,7 +1838,7 @@ start_wireguard_local() {
     fi
 }
 
-check_openvpn_routing() {
+check_vpn_routing() {
     command_exists ip || return 0
     vpn_tunnel_ready
 }
@@ -1864,7 +1864,7 @@ restart_vpn_service() {
     for i in 1 2 3 4 5; do
         sleep 1
 
-        if check_openvpn_routing; then
+        if check_vpn_routing; then
             log_json INFO "supervisor" \
                 "VPN routing restored" \
                 "pid=${SERVICE_PIDS[vpn]}"
@@ -1874,7 +1874,7 @@ restart_vpn_service() {
     done
 
     log_json ERROR "supervisor" \
-        "openvpn routing still not functional after restart"
+        "VPN routing still not functional after restart (${VPN_TYPE_SELECTED})"
 
     return 1
 }
@@ -2408,7 +2408,7 @@ supervise_all() {
             # fonctionne toujours.
             # ---------------------------------------------------------------
 
-            if ! check_openvpn_routing; then
+            if ! check_vpn_routing; then
                 log_json WARN "supervisor" \
                     "VPN tunnel is down"
 
