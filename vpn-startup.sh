@@ -102,29 +102,9 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP using local DNS (dnsmasq via 127.0.0.1)
-        # External DNS servers are not accessible until after VPN is established
+        # Resolve hostname to IP using nslookup or dig
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
-        
-        # Wait for dnsmasq to be ready (it can take time to start up)
-        sleep 3
-        
-        local resolve_attempts=10
-        local resolve_attempt=0
-        
-        while [ $resolve_attempt -lt $resolve_attempts ]; do
-            # Use dig with explicit timeout instead of nslookup
-            endpoint_ip=$(timeout 1 dig +short "$endpoint_host" @127.0.0.1 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-            
-            if [ -n "$endpoint_ip" ]; then
-                break
-            fi
-            
-            resolve_attempt=$((resolve_attempt + 1))
-            if [ $resolve_attempt -lt $resolve_attempts ]; then
-                sleep 1
-            fi
-        done
+        endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
         
         if [ -z "$endpoint_ip" ]; then
             log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
