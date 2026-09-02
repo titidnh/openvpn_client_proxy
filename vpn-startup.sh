@@ -102,18 +102,27 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP using dig with configured DNS servers
+        # Resolve hostname to IP using local DNS (dnsmasq via 127.0.0.1)
+        # External DNS servers are not accessible until after VPN is established
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
         
-        # Try primary DNS server first (DNS_SERVER_1)
-        endpoint_ip=$(dig +short "$endpoint_host" @"${DNS_SERVER_1:-94.140.14.14}" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        local resolve_attempts=5
+        local resolve_attempt=0
         
-        # If primary fails, try secondary DNS server (DNS_SERVER_2)
-        if [ -z "$endpoint_ip" ]; then
-            endpoint_ip=$(dig +short "$endpoint_host" @"${DNS_SERVER_2:-94.140.15.15}" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-        fi
+        while [ $resolve_attempt -lt $resolve_attempts ]; do
+            endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+            
+            if [ -n "$endpoint_ip" ] && echo "$endpoint_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                break
+            fi
+            
+            resolve_attempt=$((resolve_attempt + 1))
+            if [ $resolve_attempt -lt $resolve_attempts ]; then
+                sleep 1
+            fi
+        done
         
-        if [ -z "$endpoint_ip" ]; then
+        if [ -z "$endpoint_ip" ] || ! echo "$endpoint_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
             log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
             return 1
         fi
