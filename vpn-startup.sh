@@ -102,9 +102,9 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP using nslookup or dig
+        # Resolve hostname to IP using getent (uses libc resolver via dnsmasq)
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
-        endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+        endpoint_ip=$(getent hosts "$endpoint_host" 2>/dev/null | awk '{print $1; exit}')
         
         if [ -z "$endpoint_ip" ]; then
             log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
