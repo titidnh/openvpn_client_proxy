@@ -159,6 +159,15 @@ start_wireguard() {
     # Split 0.0.0.0/0 into two /1 routes to avoid blocking return path through eth0
     if [ "$allowed_ips" = "0.0.0.0/0" ]; then
         log_json INFO "start_wireguard" "Configuring routes for all traffic"
+        
+        # First, add a specific route for the VPN endpoint via the default gateway
+        # This ensures return traffic from the endpoint reaches us back
+        local default_gw=$(ip route show 0.0.0.0/0 | awk '{print $3; exit}')
+        if [ -n "$default_gw" ] && [ "$default_gw" != "*" ]; then
+            ip route add "$endpoint_ip/32" via "$default_gw" 2>/dev/null || true
+            log_json DEBUG "start_wireguard" "Added route for endpoint" "endpoint=$endpoint_ip" "gw=$default_gw"
+        fi
+        
         if ! ip route add 0.0.0.0/1 dev wg0 2>/dev/null; then
             log_json WARN "start_wireguard" "Failed to add route 0.0.0.0/1"
         fi
