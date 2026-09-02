@@ -89,6 +89,32 @@ start_wireguard() {
         return 1
     fi
     
+    # Resolve endpoint hostname to IP if needed
+    local endpoint_ip
+    local endpoint_host
+    local endpoint_port
+    
+    # Split endpoint into host:port
+    endpoint_host="${endpoint%:*}"
+    endpoint_port="${endpoint##*:}"
+    
+    # Check if endpoint_host is already an IP
+    if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        endpoint_ip="$endpoint_host"
+    else
+        # Resolve hostname to IP using nslookup or dig
+        log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
+        endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+        
+        if [ -z "$endpoint_ip" ]; then
+            log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
+            return 1
+        fi
+    fi
+    
+    log_json INFO "start_wireguard" "Endpoint resolved" "host=$endpoint_host" "ip=$endpoint_ip" "port=$endpoint_port"
+    endpoint="${endpoint_ip}:${endpoint_port}"
+    
     # Create and configure WireGuard interface using direct commands (avoid wg-quick DNS management)
     if ! ip link add dev wg0 type wireguard 2>/dev/null; then
         log_json ERROR "start_wireguard" "Failed to create wg0 interface"
