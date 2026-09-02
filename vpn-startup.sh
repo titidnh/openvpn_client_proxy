@@ -116,6 +116,11 @@ start_wireguard() {
         return 1
     fi
     
+    # Set MTU (WireGuard typical is 1420)
+    if ! ip link set mtu 1420 dev wg0 2>/dev/null; then
+        log_json WARN "start_wireguard" "Failed to set MTU - continuing anyway"
+    fi
+    
     if ! ip link set up dev wg0 2>/dev/null; then
         log_json ERROR "start_wireguard" "Failed to bring up interface"
         ip link del dev wg0 2>/dev/null || true
@@ -123,6 +128,24 @@ start_wireguard() {
     fi
     
     sleep 1
+    
+    # Configure routes based on AllowedIPs from peer config
+    # Split 0.0.0.0/0 into two /1 routes to avoid blocking return path through eth0
+    if [ "$allowed_ips" = "0.0.0.0/0" ]; then
+        log_json INFO "start_wireguard" "Configuring routes for all traffic"
+        if ! ip route add 0.0.0.0/1 dev wg0 2>/dev/null; then
+            log_json WARN "start_wireguard" "Failed to add route 0.0.0.0/1"
+        fi
+        if ! ip route add 128.0.0.0/1 dev wg0 2>/dev/null; then
+            log_json WARN "start_wireguard" "Failed to add route 128.0.0.0/1"
+        fi
+    else
+        # Add specific routes for custom AllowedIPs
+        log_json INFO "start_wireguard" "Configuring routes for AllowedIPs" "ips=$allowed_ips"
+        if ! ip route add "$allowed_ips" dev wg0 2>/dev/null; then
+            log_json WARN "start_wireguard" "Failed to add route" "ips=$allowed_ips"
+        fi
+    fi
     
     # Verify that the interface is up
     if ip link show wg0 2>/dev/null | grep -q "UP"; then
@@ -152,6 +175,12 @@ stop_openvpn() {
 # ===========================================================================
 stop_wireguard() {
     log_json INFO "stop_wireguard" "Stopping WireGuard"
+    
+    # Remove routes
+    ip route del 0.0.0.0/1 dev wg0 2>/dev/null || true
+    ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
+    
+    # Remove interface
     ip link del dev wg0 2>/dev/null || true
 }
 

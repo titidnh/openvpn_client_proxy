@@ -503,6 +503,9 @@ cleanup_routes_on_restart() {
 
     timeout 3 ip route del default via 0.0.0.0 2>/dev/null || true
     timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
+    # Clean up WireGuard routes
+    timeout 3 ip route del 0.0.0.0/1 dev wg0 2>/dev/null || true
+    timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
 }
 
 # ===========================================================================
