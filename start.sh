@@ -198,9 +198,12 @@ setup_iptables() {
 
     iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
     iptables -A FORWARD -i tailscale+ -o tap+ -j ACCEPT
+    iptables -A FORWARD -i tailscale+ -o wg+ -j ACCEPT
     iptables -A FORWARD -i tun+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A FORWARD -i tap+ -o tailscale+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     # OUTPUT - interfaces autorisées
@@ -208,6 +211,7 @@ setup_iptables() {
     iptables -A OUTPUT -o lo -j ACCEPT
     iptables -A OUTPUT -o tun+ -j ACCEPT
     iptables -A OUTPUT -o tap+ -j ACCEPT
+    iptables -A OUTPUT -o wg+ -j ACCEPT
     iptables -A OUTPUT -o tailscale+ -j ACCEPT
 
     if [ -n "$docker_network" ]; then
@@ -289,13 +293,12 @@ setup_iptables() {
             "vpn_port=${VPN_PORT}"
             
     elif [ "${VPN_TYPE}" = "wireguard" ]; then
-        # WireGuard - autoriser tout trafic vers wg0
-        iptables -A OUTPUT -o wg0 -j ACCEPT
-        iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE
+        # WireGuard - allow outgoing UDP packets to WireGuard endpoint (port 51820)
+        iptables -A OUTPUT -p udp --dport 51820 -j ACCEPT
         
-        # Autoriser les connexions DNS via WireGuard
-        iptables -A OUTPUT -p udp -o wg0 --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -o wg0 --dport 53 -j ACCEPT
+        # Allow all traffic through wg interface
+        iptables -A OUTPUT -o wg+ -j ACCEPT
+        iptables -t nat -A POSTROUTING -o wg+ -j MASQUERADE
         
         log_json INFO "setup_iptables" \
             "WireGuard firewall rules configured"
@@ -360,9 +363,12 @@ setup_ip6tables() {
 
     ipt6 -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
     ipt6 -A FORWARD -i tailscale+ -o tap+ -j ACCEPT
+    ipt6 -A FORWARD -i tailscale+ -o wg+ -j ACCEPT
     ipt6 -A FORWARD -i tun+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -i tap+ -o tailscale+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ipt6 -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -370,6 +376,7 @@ setup_ip6tables() {
     ipt6 -A OUTPUT -o tun+ -j ACCEPT
     ipt6 -A OUTPUT -o tap+ -j ACCEPT
     ipt6 -A OUTPUT -o tailscale+ -j ACCEPT
+    ipt6 -A OUTPUT -o wg+ -j ACCEPT
 
     if [ -n "$docker6_network" ]; then
         ipt6 -A OUTPUT -d "$docker6_network" -j ACCEPT
@@ -403,6 +410,7 @@ setup_ip6tables() {
 
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
+    ipt6 -t nat -A POSTROUTING -o wg+ -j MASQUERADE
 
     log_json INFO "setup_ip6tables" \
         "IPv6 configured - kill switch active"
