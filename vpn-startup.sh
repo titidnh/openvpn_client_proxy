@@ -168,6 +168,9 @@ start_wireguard() {
             log_json DEBUG "start_wireguard" "Added route for endpoint" "endpoint=$endpoint_ip" "gw=$default_gw"
         fi
         
+        # Remove the default route via docker bridge to make room for /1 routes
+        ip route del default 2>/dev/null || true
+        
         if ! ip route add 0.0.0.0/1 dev wg0 2>/dev/null; then
             log_json WARN "start_wireguard" "Failed to add route 0.0.0.0/1"
         fi
