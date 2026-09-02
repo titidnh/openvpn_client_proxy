@@ -93,8 +93,6 @@ start_wireguard() {
     local endpoint_ip
     local endpoint_host
     local endpoint_port
-    local resolve_attempts=3
-    local resolve_attempt=0
     
     # Split endpoint into host:port
     endpoint_host="${endpoint%:*}"
@@ -104,26 +102,12 @@ start_wireguard() {
     if echo "$endpoint_host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         endpoint_ip="$endpoint_host"
     else
-        # Resolve hostname to IP using getent (works via dnsmasq)
+        # Resolve hostname to IP using nslookup or dig
         log_json INFO "start_wireguard" "Resolving endpoint hostname" "host=$endpoint_host"
-        
-        while [ $resolve_attempt -lt $resolve_attempts ]; do
-            endpoint_ip=$(getent hosts "$endpoint_host" 2>/dev/null | awk '{print $1; exit}')
-            
-            if [ -n "$endpoint_ip" ]; then
-                break
-            fi
-            
-            resolve_attempt=$((resolve_attempt + 1))
-            
-            if [ $resolve_attempt -lt $resolve_attempts ]; then
-                log_json WARN "start_wireguard" "DNS resolution attempt failed, retrying..." "attempt=$resolve_attempt" "host=$endpoint_host"
-                sleep 1
-            fi
-        done
+        endpoint_ip=$(nslookup "$endpoint_host" 127.0.0.1 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
         
         if [ -z "$endpoint_ip" ]; then
-            log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname after $resolve_attempts attempts" "host=$endpoint_host"
+            log_json ERROR "start_wireguard" "Failed to resolve endpoint hostname" "host=$endpoint_host"
             return 1
         fi
     fi
