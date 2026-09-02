@@ -50,6 +50,12 @@ start_openvpn() {
 # ===========================================================================
 start_wireguard() {
     local config="${VPN_DIR}/wg0.conf"
+    local private_key
+    local address
+    local allowed_ips
+    local endpoint
+    local peer_public_key
+    local persistent_keepalive
     
     if [ ! -f "$config" ]; then
         log_json ERROR "start_wireguard" \
@@ -63,20 +69,67 @@ start_wireguard() {
     # Ensure clean state - remove any existing wg0 interface
     if ip link show wg0 2>/dev/null; then
         log_json INFO "start_wireguard" "Cleaning up existing wg0 interface"
-        ip link del dev wg0 2>/dev/null || wg-quick down wg0 2>/dev/null || true
+        ip link del dev wg0 2>/dev/null || true
         sleep 1
     fi
     
-    # Bring up the interface using wg-quick (it will create the interface)
-    if wg-quick up "$config"; then
-        sleep 1
-        # Verify that the interface is up
-        if ip link show wg0 2>/dev/null | grep -q "UP"; then
-            log_json INFO "start_wireguard" \
-                "WireGuard interface is UP" \
-                "interface=wg0"
-            return 0
-        fi
+    # Parse configuration file (skip DNS lines to avoid resolvconf issues in container)
+    private_key=$(grep "^PrivateKey" "$config" | cut -d' ' -f3)
+    address=$(grep "^Address" "$config" | cut -d' ' -f3)
+    peer_public_key=$(grep "^PublicKey" "$config" | grep -A 100 "\[Peer\]" | grep "^PublicKey" | cut -d' ' -f3)
+    allowed_ips=$(grep "^AllowedIPs" "$config" | cut -d' ' -f3)
+    endpoint=$(grep "^Endpoint" "$config" | cut -d' ' -f3)
+    persistent_keepalive=$(grep "^PersistentKeepalive" "$config" | cut -d' ' -f3)
+    
+    if [ -z "$private_key" ] || [ -z "$address" ] || [ -z "$peer_public_key" ]; then
+        log_json ERROR "start_wireguard" \
+            "Missing required config parameters" \
+            "has_key=${private_key:+yes} has_addr=${address:+yes} has_peer=${peer_public_key:+yes}"
+        return 1
+    fi
+    
+    # Create and configure WireGuard interface using direct commands (avoid wg-quick DNS management)
+    if ! ip link add dev wg0 type wireguard 2>/dev/null; then
+        log_json ERROR "start_wireguard" "Failed to create wg0 interface"
+        return 1
+    fi
+    
+    # Set private key
+    if ! echo "$private_key" | wg set wg0 private-key /dev/stdin 2>/dev/null; then
+        log_json ERROR "start_wireguard" "Failed to set private key"
+        ip link del dev wg0 2>/dev/null || true
+        return 1
+    fi
+    
+    # Set peer configuration
+    if ! wg set wg0 peer "$peer_public_key" allowed-ips "$allowed_ips" endpoint "$endpoint" persistent-keepalive "${persistent_keepalive:-0}" 2>/dev/null; then
+        log_json ERROR "start_wireguard" "Failed to set peer configuration"
+        ip link del dev wg0 2>/dev/null || true
+        return 1
+    fi
+    
+    # Assign IP address and bring up interface
+    if ! ip addr add "$address" dev wg0 2>/dev/null; then
+        log_json ERROR "start_wireguard" "Failed to assign address"
+        ip link del dev wg0 2>/dev/null || true
+        return 1
+    fi
+    
+    if ! ip link set up dev wg0 2>/dev/null; then
+        log_json ERROR "start_wireguard" "Failed to bring up interface"
+        ip link del dev wg0 2>/dev/null || true
+        return 1
+    fi
+    
+    sleep 1
+    
+    # Verify that the interface is up
+    if ip link show wg0 2>/dev/null | grep -q "UP"; then
+        log_json INFO "start_wireguard" \
+            "WireGuard interface is UP" \
+            "interface=wg0" \
+            "address=$address"
+        return 0
     fi
     
     log_json ERROR "start_wireguard" \
@@ -98,7 +151,6 @@ stop_openvpn() {
 # ===========================================================================
 stop_wireguard() {
     log_json INFO "stop_wireguard" "Stopping WireGuard"
-    wg-quick down wg0 2>/dev/null || true
     ip link del dev wg0 2>/dev/null || true
 }
 
