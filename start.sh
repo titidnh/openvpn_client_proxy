@@ -29,14 +29,16 @@ init_environment
 # Sélection et configuration VPN
 # ===========================================================================
 source "/usr/local/bin/vpn-selector.sh"
+source "/usr/local/bin/vpn-startup.sh"
 
-if ! vpn_type=$(validate_vpn_type "${VPN_TYPE:-openvpn}"); then
+declare -g VPN_TYPE_SELECTED
+if ! VPN_TYPE_SELECTED=$(validate_vpn_type "${VPN_TYPE:-openvpn}"); then
     log_json ERROR "main" "Failed to validate VPN type"
     exit 1
 fi
 
-export_vpn_config "$vpn_type"
-check_vpn_config_files "$vpn_type" || true
+export_vpn_config "$VPN_TYPE_SELECTED"
+check_vpn_config_files "$VPN_TYPE_SELECTED" || true
 
 # ===========================================================================
 # Configuration globale
@@ -1787,7 +1789,24 @@ NGINXCONF
 # OpenVPN
 # ===========================================================================
 
-start_openvpn() {
+start_vpn_service() {
+    case "$VPN_TYPE_SELECTED" in
+        openvpn)
+            start_openvpn_local
+            ;;
+        wireguard)
+            start_wireguard_local
+            ;;
+        *)
+            log_json ERROR "start_vpn_service" \
+                "Unknown VPN type" \
+                "type=${VPN_TYPE_SELECTED}"
+            return 1
+            ;;
+    esac
+}
+
+start_openvpn_local() {
     log_json INFO "start_openvpn" \
         "Starting OpenVPN"
 
@@ -1796,14 +1815,29 @@ start_openvpn() {
     SERVICE_PIDS[vpn]=$!
 }
 
+start_wireguard_local() {
+    log_json INFO "start_wireguard" \
+        "Starting WireGuard"
+    
+    if start_wireguard; then
+        # WireGuard interface is now active.
+        # Use a dummy process (sleep) to track in SERVICE_PIDS since wg-quick terminates
+        sleep infinity &
+        SERVICE_PIDS[vpn]=$!
+    else
+        SERVICE_PIDS[vpn]=0
+        return 1
+    fi
+}
+
 check_openvpn_routing() {
     command_exists ip || return 0
     vpn_tunnel_ready
 }
 
-restart_openvpn() {
+restart_vpn_service() {
     log_json WARN "supervisor" \
-        "restarting openvpn" \
+        "restarting VPN (${VPN_TYPE_SELECTED})" \
         "pid=${SERVICE_PIDS[vpn]:-unknown}"
 
     kill_if_running "${SERVICE_PIDS[vpn]}"
@@ -1815,7 +1849,7 @@ restart_openvpn() {
     SERVICE_PIDS[vpn]=0
 
     cleanup_routes_on_restart
-    start_openvpn
+    start_vpn_service
 
     local i
 
@@ -2232,7 +2266,7 @@ supervise_all() {
         # VPN
         # -------------------------------------------------------------------
 
-        start_openvpn
+        start_vpn_service
 
         # -------------------------------------------------------------------
         # Services auxiliaires
@@ -2373,7 +2407,7 @@ supervise_all() {
                 rm -f "$VPN_HEALTHY_FILE"
                 METRIC_VPN_UP=0
 
-                if restart_openvpn; then
+                if restart_vpn_service; then
                     setup_return_routes
 
                     if check_vpn_ip &&
