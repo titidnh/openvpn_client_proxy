@@ -26,6 +26,21 @@ source "/usr/local/lib/common.sh"
 init_environment
 
 # ===========================================================================
+# Sélection et configuration VPN
+# ===========================================================================
+source "/usr/local/bin/vpn-selector.sh"
+source "/usr/local/bin/vpn-startup.sh"
+
+declare -g VPN_TYPE_SELECTED
+if ! VPN_TYPE_SELECTED=$(validate_vpn_type "${VPN_TYPE:-openvpn}"); then
+    log_json ERROR "main" "Failed to validate VPN type"
+    exit 1
+fi
+
+export_vpn_config "$VPN_TYPE_SELECTED"
+check_vpn_config_files "$VPN_TYPE_SELECTED" || true
+
+# ===========================================================================
 # Configuration globale
 # ===========================================================================
 
@@ -183,9 +198,12 @@ setup_iptables() {
 
     iptables -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
     iptables -A FORWARD -i tailscale+ -o tap+ -j ACCEPT
+    iptables -A FORWARD -i tailscale+ -o wg+ -j ACCEPT
     iptables -A FORWARD -i tun+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A FORWARD -i tap+ -o tailscale+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     # OUTPUT - interfaces autorisées
@@ -193,6 +211,7 @@ setup_iptables() {
     iptables -A OUTPUT -o lo -j ACCEPT
     iptables -A OUTPUT -o tun+ -j ACCEPT
     iptables -A OUTPUT -o tap+ -j ACCEPT
+    iptables -A OUTPUT -o wg+ -j ACCEPT
     iptables -A OUTPUT -o tailscale+ -j ACCEPT
 
     if [ -n "$docker_network" ]; then
@@ -261,14 +280,33 @@ setup_iptables() {
         iptables -A OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
     fi
 
-    # OpenVPN.
-    iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
+    # VPN Configuration
+    if [ "${VPN_TYPE}" = "openvpn" ]; then
+        # OpenVPN
+        iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
+        iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+        iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
+        
+        log_json INFO "setup_iptables" \
+            "OpenVPN firewall rules configured" \
+            "vpn_proto=${VPN_PROTO}" \
+            "vpn_port=${VPN_PORT}"
+            
+    elif [ "${VPN_TYPE}" = "wireguard" ]; then
+        # WireGuard - allow outgoing UDP packets to WireGuard endpoint (port 51820)
+        iptables -A OUTPUT -p udp --dport 51820 -j ACCEPT
+        
+        # Allow all traffic through wg interface
+        iptables -A OUTPUT -o wg+ -j ACCEPT
+        iptables -t nat -A POSTROUTING -o wg+ -j MASQUERADE
+        
+        log_json INFO "setup_iptables" \
+            "WireGuard firewall rules configured"
+    fi
+    
+    # Propriétaire du groupe vpn (pour les deux)
     iptables -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
     iptables -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
-
-    # NAT.
-    iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
-    iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
 
     log_json INFO "setup_iptables" \
         "IPv4 configured - kill switch active" \
@@ -325,9 +363,12 @@ setup_ip6tables() {
 
     ipt6 -A FORWARD -i tailscale+ -o tun+ -j ACCEPT
     ipt6 -A FORWARD -i tailscale+ -o tap+ -j ACCEPT
+    ipt6 -A FORWARD -i tailscale+ -o wg+ -j ACCEPT
     ipt6 -A FORWARD -i tun+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -i tap+ -o tailscale+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ipt6 -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -335,6 +376,7 @@ setup_ip6tables() {
     ipt6 -A OUTPUT -o tun+ -j ACCEPT
     ipt6 -A OUTPUT -o tap+ -j ACCEPT
     ipt6 -A OUTPUT -o tailscale+ -j ACCEPT
+    ipt6 -A OUTPUT -o wg+ -j ACCEPT
 
     if [ -n "$docker6_network" ]; then
         ipt6 -A OUTPUT -d "$docker6_network" -j ACCEPT
@@ -368,6 +410,7 @@ setup_ip6tables() {
 
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
+    ipt6 -t nat -A POSTROUTING -o wg+ -j MASQUERADE
 
     log_json INFO "setup_ip6tables" \
         "IPv6 configured - kill switch active"
@@ -468,6 +511,9 @@ cleanup_routes_on_restart() {
 
     timeout 3 ip route del default via 0.0.0.0 2>/dev/null || true
     timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
+    # Clean up WireGuard routes
+    timeout 3 ip route del 0.0.0.0/1 dev wg0 2>/dev/null || true
+    timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
 }
 
 # ===========================================================================
@@ -1754,7 +1800,24 @@ NGINXCONF
 # OpenVPN
 # ===========================================================================
 
-start_openvpn() {
+start_vpn_service() {
+    case "$VPN_TYPE_SELECTED" in
+        openvpn)
+            start_openvpn_local
+            ;;
+        wireguard)
+            start_wireguard_local
+            ;;
+        *)
+            log_json ERROR "start_vpn_service" \
+                "Unknown VPN type" \
+                "type=${VPN_TYPE_SELECTED}"
+            return 1
+            ;;
+    esac
+}
+
+start_openvpn_local() {
     log_json INFO "start_openvpn" \
         "Starting OpenVPN"
 
@@ -1763,14 +1826,26 @@ start_openvpn() {
     SERVICE_PIDS[vpn]=$!
 }
 
-check_openvpn_routing() {
+start_wireguard_local() {
+    if start_wireguard; then
+        # WireGuard interface is now active.
+        # Use a dummy process (sleep) to track in SERVICE_PIDS since wg-quick terminates
+        sleep infinity &
+        SERVICE_PIDS[vpn]=$!
+    else
+        SERVICE_PIDS[vpn]=0
+        return 1
+    fi
+}
+
+check_vpn_routing() {
     command_exists ip || return 0
     vpn_tunnel_ready
 }
 
-restart_openvpn() {
+restart_vpn_service() {
     log_json WARN "supervisor" \
-        "restarting openvpn" \
+        "restarting VPN (${VPN_TYPE_SELECTED})" \
         "pid=${SERVICE_PIDS[vpn]:-unknown}"
 
     kill_if_running "${SERVICE_PIDS[vpn]}"
@@ -1782,16 +1857,16 @@ restart_openvpn() {
     SERVICE_PIDS[vpn]=0
 
     cleanup_routes_on_restart
-    start_openvpn
+    start_vpn_service
 
     local i
 
     for i in 1 2 3 4 5; do
         sleep 1
 
-        if check_openvpn_routing; then
+        if check_vpn_routing; then
             log_json INFO "supervisor" \
-                "openvpn routing restored" \
+                "VPN routing restored" \
                 "pid=${SERVICE_PIDS[vpn]}"
 
             return 0
@@ -1799,7 +1874,7 @@ restart_openvpn() {
     done
 
     log_json ERROR "supervisor" \
-        "openvpn routing still not functional after restart"
+        "VPN routing still not functional after restart (${VPN_TYPE_SELECTED})"
 
     return 1
 }
@@ -2199,7 +2274,7 @@ supervise_all() {
         # VPN
         # -------------------------------------------------------------------
 
-        start_openvpn
+        start_vpn_service
 
         # -------------------------------------------------------------------
         # Services auxiliaires
@@ -2215,7 +2290,7 @@ supervise_all() {
         # -------------------------------------------------------------------
 
         log_json INFO "supervisor" \
-            "waiting for OpenVPN tunnel..."
+            "waiting for VPN tunnel..."
 
         local tun_ready=0
 
@@ -2333,14 +2408,14 @@ supervise_all() {
             # fonctionne toujours.
             # ---------------------------------------------------------------
 
-            if ! check_openvpn_routing; then
+            if ! check_vpn_routing; then
                 log_json WARN "supervisor" \
                     "VPN tunnel is down"
 
                 rm -f "$VPN_HEALTHY_FILE"
                 METRIC_VPN_UP=0
 
-                if restart_openvpn; then
+                if restart_vpn_service; then
                     setup_return_routes
 
                     if check_vpn_ip &&

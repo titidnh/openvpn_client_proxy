@@ -78,6 +78,13 @@ services:
 
     environment:
       # -----------------------------------------------------------------------
+      # Configuration VPN - Choisir: "openvpn" ou "wireguard"
+      # -----------------------------------------------------------------------
+      VPN_TYPE: "${VPN_TYPE:-openvpn}"
+      OPENVPN_ENABLED: "${OPENVPN_ENABLED:-true}"
+      WIREGUARD_ENABLED: "${WIREGUARD_ENABLED:-false}"
+
+      # -----------------------------------------------------------------------
       # DNS Classique (ENABLE_DOT=false, par défaut)
       # -----------------------------------------------------------------------
       ENABLE_DOT: "false"

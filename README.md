@@ -1,6 +1,6 @@
-# OpenVPN Client Proxy
+# OpenVPN / WireGuard Client Proxy
 
-> **Lightweight Docker container** running an OpenVPN client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
+> **Lightweight Docker container** running an OpenVPN or WireGuard client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
 
 ---
 
@@ -324,7 +324,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | Variable | Default | Description |
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
-| `DNS_SERVER_2` | `84.200.69.80` | Secondary upstream DNS resolver. |
+| `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Family — blocks ads and adult content). |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
 | `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth. Uses bcrypt hashing via `htpasswd`. |
 | `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup. |
@@ -704,7 +704,7 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 | Metrics endpoint (`socat`) died (if metrics enabled) | Logged only — non-critical |
 | DoT IP refresh loop died | Logged only — refreshed on next full restart cycle |
 
-Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **60s**. The counter resets after a successful monitoring cycle.
+Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **120s**. The counter resets after a successful monitoring cycle.
 
 ---
 
@@ -720,10 +720,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 `healthcheck.sh` runs the following checks in order:
 
 1. **Sentinel file** — `/tmp/vpn_healthy` must exist. The supervisor writes it once the tunnel is confirmed up, and removes it on failure.
-2. **VPN server reachability** — reads `remote` and `proto` from `vpn.conf` and probes the VPN endpoint via `nc` (TCP or UDP).
-3. **Fallback via Privoxy** — if the VPN probe is inconclusive, attempts an HTTP request through `http://127.0.0.1:3128`. Success confirms the tunnel and proxy are both working.
+2. **OpenVPN process** — verifies `openvpn` is running.
+3. **Local DNS resolution** — tests DNS resolution via `127.0.0.1`.
+4. **External HTTP proxy connectivity** — tests real external URLs via Privoxy with fallback chain:
+   - Primary: Google Connectivity Check (`connectivitycheck.gstatic.com/generate_204`) — returns 204 if accessible.
+   - Fallback #1: Cloudflare (`one.one.one.one/cdn-cgi/trace`).
+   - Fallback #2: HTTP HEAD request to `example.com`.
+   - Fallback #3: Simple port connectivity via `nc`.
 
-Everything is self-contained — `nc`, `curl`, and `openvpn` are all installed in the image.
+All checks are self-contained — `nc`, `curl`, and `openvpn` are all installed in the image.
 
 ---
 

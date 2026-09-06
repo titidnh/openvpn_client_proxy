@@ -12,53 +12,53 @@
 ###############################################################################
 
 ##
-## ACTIVER TOUS LES FILTRES SUR TOUT LE TRAFIC
+## PROFILS DE FILTRAGE (PROXY_PROFILE)
 ##
-## Ces filtres sont conçus pour améliorer la confidentialité en :
-## - Supprimant les paramètres de tracking (UTM, etc.)
-## - Bloquant les trackers JavaScript
-## - Réduisant l'empreinte numérique (fingerprinting)
-## - Supprimant les cookies de consentement
-## - Bloquant les pixels de tracking
+## PROXY_PROFILE=normal   (défaut) - Filtrage modéré pour compatibilité maximum
+## PROXY_PROFILE=strict   - Filtrage agressif pour confidentialité maximale
 ##
-{ \
-  +filter{remove-proxy-headers} \
-  +filter{strip-utm-params} \
-  +filter{strip-tracking-params} \
-  +filter{remove-js-trackers} \
-  +filter{anti-fingerprint} \
-  +filter{strip-cookie-consent} \
-  +filter{remove-tracking-pixels-2026} \
-  +filter{strip-telemetry-js-2026} \
-  +filter{strip-consent-washing-2026} \
-  +filter{block-ads-js-aggressive-2026} \
-}
-/
+## Changez le profil avec: docker run -e PROXY_PROFILE=strict ...
+##
 
 ##
-## EXCEPTIONS : DÉSACTIVER LE FILTRAGE SUR CERTAINS DOMAINES
+## PROFIL NORMAL (défaut) - Filtrage compatible & efficace
+## Bloque tracking et publicités sans casser les sites web
 ##
-## Décommentez les sections suivantes pour désactiver le filtrage sur
-## des domaines spécifiques qui pourraient être cassés par le filtrage.
+{ -filter{remove-js-trackers} -filter{anti-fingerprint} }
+/
+
+# Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
+# À remplir au besoin - ex: streaming, banques, e-commerce
+# 
+# Syntaxe pour ajouter une exception:
+#   Les trois lignes suivantes (décommentées):
+#     { -filter{remove-js-trackers} -filter{anti-fingerprint} }
+#     .domaine-sensible.com
+#     .autre-domaine.local
+
 ##
-## Exemple : désactiver le filtrage pour votre application interne
+## PROFIL STRICT - À activer via PROXY_PROFILE=strict
+## Filtrage maximal : bloque aussi les JS trackers et fingerprinting
+## ⚠️  Peut casser certains sites web (streaming, réseaux sociaux, etc.)
 ##
-# { -filter{remove-js-trackers} -filter{anti-fingerprint} }
-# .lelibre.local
-# .monapp.interne
+# NOTE: Ne s'applique que si PROXY_PROFILE=strict est défini
+# (À configurer au démarrage du conteneur)
+
+# NOTE: Pour ajouter des exceptions en mode normal, suivez le format ci-dessus
 
 ##
 ## BLOCAGE PERSONNEL SUPPLÉMENTAIRE
 ##
 ## Ajoutez vos propres domaines à bloquer ici.
-## Format: { +block{NOM_DU_BLOC} }
-##        NOM_DU_DOMAINE
+## Format: décommentez et modifiez les lignes ci-dessous:
+##   { +block{NOM_DU_BLOC} }
+##   .domaine-a-bloquer.com
+##   .autre-domaine.com
 ##
-## Exemple :
-##
-# { +block{Perso} }
-# .domaine-a-bloquer.com
-# .autre-domaine.com
+## Exemple commenté:
+## Les lignes suivantes (décommentées) bloqueraient domaine-a-bloquer.com:
+##   domaine-a-bloquer.com
+##   autre-domaine.com
 
 ##
 ## ===========================================================================
@@ -108,24 +108,24 @@
 ## ===========================================================================
 ##
 ## Bloquer tous les domaines contenant "tracking" ou "analytics"
+## Syntaxe (décommentée): { +block{Tracking} }
+## Puis ajouter les domaines:
+##   /tracking/
+##   /analytics/
 ##
-# { +block{Tracking} }
-# /tracking/
-# /analytics/
-
 ## Bloquer les requêtes vers des pays spécifiques (via IP)
+## Syntaxe (décommentée): { +block{GeoBlock} }
+## Puis ajouter les domaines:
+##   .cn
+##   .ru
+##   .us
 ##
-# { +block{GeoBlock} }
-# .cn
-# .ru
-# .us
-
 ## Désactiver le filtrage pour les mises à jour logicielles
-##
-# { -filter{all} }
-# .windowsupdate.com
-# .update.microsoft.com
-# .google.com/update
+## Syntaxe (décommentée): { -filter{all} }
+## Puis ajouter les domaines:
+##   .windowsupdate.com
+##   .update.microsoft.com
+##   .google.com/update
 
 ##
 ## FIN DU FICHIER

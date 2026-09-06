@@ -87,7 +87,8 @@ s/^X-Session-Recording:.*\n//im
 s/^X-Form-Tracking:.*\n//im
 s/^X-Session-Replay:.*\n//im
 
-# Sales Intelligence & B2B Headers (2026)\ns/^X-Account-Id:.*\n//im
+# Sales Intelligence & B2B Headers (2026)
+s/^X-Account-Id:.*\n//im
 s/^X-Intent-Score:.*\n//im
 s/^X-Lead-Score:.*\n//im
 s/^X-Buying-Signal:.*\n//im

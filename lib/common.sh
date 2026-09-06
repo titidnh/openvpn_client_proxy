@@ -9,6 +9,14 @@
 # Licence: MIT (même licence que le projet parent)
 # ===========================================================================
 
+# ===========================================================================
+# Guard contre le double sourcing
+# ===========================================================================
+if [ -n "${COMMON_SH_LOADED+x}" ]; then
+    return 0
+fi
+COMMON_SH_LOADED=true
+
 set -euo pipefail
 
 # ===========================================================================
@@ -165,7 +173,7 @@ find_vpn_interface() {
 
     while read -r dev; do
         case "$dev" in
-            tun*|tap*)
+            tun*|tap*|wg*)
                 # Vérifier que l'interface a une adresse IP valide
                 if ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet '; then
                     printf '%s\n' "$dev"
@@ -319,7 +327,7 @@ wait_for_process() {
 # Fonctions de configuration OpenVPN
 # ===========================================================================
 
-# Extrait le port et le protocole depuis la configuration OpenVPN
+# Extract port and protocol from VPN configuration (OpenVPN or WireGuard)
 # Usage: get_vpn_port_proto [CONFIG_FILE]
 get_vpn_port_proto() {
     local conf="${1:-$DEFAULT_VPN_CONF}"
@@ -327,8 +335,16 @@ get_vpn_port_proto() {
     VPN_PORT="$DEFAULT_VPN_PORT"
     VPN_PROTO="$DEFAULT_VPN_PROTO"
     
+    # If VPN_TYPE is wireguard, set WireGuard-specific values
+    if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
+        VPN_PORT="51820"
+        VPN_PROTO="udp"
+        return 0
+    fi
+    
+    # Otherwise, extract from OpenVPN configuration
     if [ -f "$conf" ]; then
-        # Extraire le port depuis la directive remote
+        # Extract port from remote directive
         VPN_PORT=$(awk '
             /^remote / {
                 for (i=1; i<=NF; i++)
@@ -337,7 +353,7 @@ get_vpn_port_proto() {
             }' "$conf" | head -1)
         VPN_PORT=${VPN_PORT:-$DEFAULT_VPN_PORT}
         
-        # Extraire le protocole
+        # Extract protocol
         VPN_PROTO=$(awk '/^proto /{print $2; exit}' "$conf")
         VPN_PROTO=${VPN_PROTO:-$DEFAULT_VPN_PROTO}
     fi
@@ -490,7 +506,7 @@ init_environment() {
 # ===========================================================================
 
 # Message de fin de chargement
-if [ "${COMMON_SH_LOADED:-false}" != "true" ]; then
+if [ "${COMMON_SH_LOADED+x}" != "true" ]; then
     COMMON_SH_LOADED=true
     log_json DEBUG "common.sh" "Common functions loaded" "version=${SCRIPT_VERSION}" "date=${SCRIPT_DATE}"
 fi

@@ -50,32 +50,51 @@ check_dns_local() {
     test_dns_resolution "$PROXY_TEST_HOST" "127.0.0.1"
 }
 
-# Vérifie que le proxy HTTP fonctionne
-# Usage: check_http_proxy
-# Vérifie que le proxy HTTP fonctionne
-# Usage: check_http_proxy
-# Vérifie que le proxy HTTP fonctionne
+# Vérifie que le proxy HTTP fonctionne avec un test réel via une URL externe
 # Usage: check_http_proxy
 check_http_proxy() {
     local proxy_port
     proxy_port=$(get_privoxy_port)
     
-    # ✅ Vérification locale uniquement
+    # 1) Vérifier que le proxy écoute
     if ! nc -z -w 2 127.0.0.1 "$proxy_port" 2>/dev/null; then
         log_json ERROR "healthcheck" "privoxy not listening on $proxy_port"
         return 1
     fi
     
-    # Test basique: vérifier que ça répond
-    if timeout 3 curl -s -x "http://127.0.0.1:${proxy_port}" \
-                       --connect-timeout 2 \
-                       -o /dev/null \
-                       "http://127.0.0.1/internal-test" 2>/dev/null; then
+    # 2) Test réel via proxy avec une URL externe fiable (Google Connectivity Check)
+    # Cette URL retourne 204 No Content si accessible, idéal pour healthcheck
+    if timeout 5 curl -s -f \
+        -x "http://127.0.0.1:${proxy_port}" \
+        --connect-timeout 3 \
+        --max-time 5 \
+        -o /dev/null \
+        "http://connectivitycheck.gstatic.com/generate_204" 2>/dev/null; then
         return 0
     fi
     
-    # Si curl échoue, au minimum vérifier qu'on peut se connecter
+    # 3) Fallback #1: Essayer Cloudflare connectivity check
+    if timeout 5 curl -s -f \
+        -x "http://127.0.0.1:${proxy_port}" \
+        --connect-timeout 3 \
+        --max-time 5 \
+        -o /dev/null \
+        "http://one.one.one.one/cdn-cgi/trace" 2>/dev/null; then
+        return 0
+    fi
+    
+    # 4) Fallback #2: Si aucun test externe ne fonctionne, au minimum vérifier
+    # que le proxy répond à une requête HTTP simple
+    if timeout 3 curl -s -i \
+        -x "http://127.0.0.1:${proxy_port}" \
+        --connect-timeout 2 \
+        http://example.com/ 2>/dev/null | grep -q "HTTP"; then
+        return 0
+    fi
+    
+    # 5) Dernier recours: vérifier juste que le port répond
     if nc -z -w 2 127.0.0.1 "$proxy_port" 2>/dev/null; then
+        log_json WARN "healthcheck" "proxy port open but external connectivity test failed - may be firewall/route issue"
         return 0
     fi
     
