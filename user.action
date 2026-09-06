@@ -32,8 +32,7 @@
   +filter{remove-tracking-pixels-2026} \
   +filter{strip-telemetry-js-2026} \
   -filter{remove-js-trackers} \
-  -filter{anti-fingerprint} \
-  -filter{block-ads-js-aggressive-2026}
+  -filter{anti-fingerprint}
 }
 /
 
@@ -42,7 +41,7 @@
 # 
 # Syntaxe pour ajouter une exception:
 #   Les trois lignes suivantes (décommentées):
-#     { -filter{remove-js-trackers} -filter{anti-fingerprint} -filter{block-ads-js-aggressive-2026} }
+#     { -filter{remove-js-trackers} -filter{anti-fingerprint} }
 #     .domaine-sensible.com
 #     .autre-domaine.local
 
@@ -60,14 +59,15 @@
 ## BLOCAGE PERSONNEL SUPPLÉMENTAIRE
 ##
 ## Ajoutez vos propres domaines à bloquer ici.
-## Format: { +block{NOM_DU_BLOC} }
-##        NOM_DU_DOMAINE
+## Format: décommentez et modifiez les lignes ci-dessous:
+##   { +block{NOM_DU_BLOC} }
+##   .domaine-a-bloquer.com
+##   .autre-domaine.com
 ##
-## Exemple :
-##
-# { +block{Perso} }
-# .domaine-a-bloquer.com
-# .autre-domaine.com
+## Exemple commenté:
+## Les lignes suivantes (décommentées) bloqueraient domaine-a-bloquer.com:
+##   domaine-a-bloquer.com
+##   autre-domaine.com
 
 ##
 ## ===========================================================================
@@ -117,24 +117,24 @@
 ## ===========================================================================
 ##
 ## Bloquer tous les domaines contenant "tracking" ou "analytics"
+## Syntaxe (décommentée): { +block{Tracking} }
+## Puis ajouter les domaines:
+##   /tracking/
+##   /analytics/
 ##
-# { +block{Tracking} }
-# /tracking/
-# /analytics/
-
 ## Bloquer les requêtes vers des pays spécifiques (via IP)
+## Syntaxe (décommentée): { +block{GeoBlock} }
+## Puis ajouter les domaines:
+##   .cn
+##   .ru
+##   .us
 ##
-# { +block{GeoBlock} }
-# .cn
-# .ru
-# .us
-
 ## Désactiver le filtrage pour les mises à jour logicielles
-##
-# { -filter{all} }
-# .windowsupdate.com
-# .update.microsoft.com
-# .google.com/update
+## Syntaxe (décommentée): { -filter{all} }
+## Puis ajouter les domaines:
+##   .windowsupdate.com
+##   .update.microsoft.com
+##   .google.com/update
 
 ##
 ## FIN DU FICHIER
