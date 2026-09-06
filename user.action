@@ -24,7 +24,7 @@
 ## PROFIL NORMAL (défaut) - Filtrage compatible & efficace
 ## Bloque tracking et publicités sans casser les sites web
 ##
-{
+{ \
   +filter{remove-proxy-headers} \
   +filter{strip-utm-params} \
   +filter{strip-tracking-params} \
