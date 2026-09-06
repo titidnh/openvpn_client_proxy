@@ -35,7 +35,7 @@
   -filter{anti-fingerprint} \
   -filter{block-ads-js-aggressive-2026}
 }
-.*
+/
 
 # Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
 # À remplir au besoin - ex: streaming, banques, e-commerce
