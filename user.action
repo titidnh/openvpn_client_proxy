@@ -39,14 +39,12 @@
 
 # Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
 # À remplir au besoin - ex: streaming, banques, e-commerce
-# Format exemple :
-# { \
-#   -filter{remove-js-trackers} \
-#   -filter{anti-fingerprint} \
-#   -filter{block-ads-js-aggressive-2026} \
-# }
-# .domaine-sensible.com
-# .autre-domaine.local
+# 
+# Syntaxe pour ajouter une exception:
+#   Les trois lignes suivantes (décommentées):
+#     { -filter{remove-js-trackers} -filter{anti-fingerprint} -filter{block-ads-js-aggressive-2026} }
+#     .domaine-sensible.com
+#     .autre-domaine.local
 
 ##
 ## PROFIL STRICT - À activer via PROXY_PROFILE=strict
