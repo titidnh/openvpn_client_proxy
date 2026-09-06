@@ -24,16 +24,7 @@
 ## PROFIL NORMAL (défaut) - Filtrage compatible & efficace
 ## Bloque tracking et publicités sans casser les sites web
 ##
-{ \
-  +filter{remove-proxy-headers} \
-  +filter{strip-utm-params} \
-  +filter{strip-tracking-params} \
-  +filter{strip-cookie-consent} \
-  +filter{remove-tracking-pixels-2026} \
-  +filter{strip-telemetry-js-2026} \
-  -filter{remove-js-trackers} \
-  -filter{anti-fingerprint}
-}
+{ -filter{remove-js-trackers} -filter{anti-fingerprint} }
 /
 
 # Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
