@@ -76,6 +76,7 @@ ENV ENABLE_TAILSCALE=false \
     DNS_SERVER_2="94.140.15.15" \
     PROXY_USER="" \
     PROXY_PASS="" \
+    PROXY_PROFILE="normal" \
     ENABLE_DOT=false \
     DOT_DNS_SERVERS="tls://dns.adguard-dns.com" \
     ENABLE_DNSSEC=false \
