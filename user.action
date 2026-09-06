@@ -24,16 +24,18 @@
 ## PROFIL NORMAL (défaut) - Filtrage compatible & efficace
 ## Bloque tracking et publicités sans casser les sites web
 ##
-.* # Appliquer au trafic global
+.*
 {
   +filter{remove-proxy-headers} \
   +filter{strip-utm-params} \
   +filter{strip-tracking-params} \
   +filter{strip-cookie-consent} \
   +filter{remove-tracking-pixels-2026} \
-  +filter{strip-telemetry-js-2026}
+  +filter{strip-telemetry-js-2026} \
+  -filter{remove-js-trackers} \
+  -filter{anti-fingerprint} \
+  -filter{block-ads-js-aggressive-2026}
 }
-/
 
 # Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
 # À remplir au besoin - ex: streaming, banques, e-commerce
@@ -51,7 +53,8 @@
 ## Filtrage maximal : bloque aussi les JS trackers et fingerprinting
 ## ⚠️  Peut casser certains sites web (streaming, réseaux sociaux, etc.)
 ##
-.* # Ne s'applique que si PROXY_PROFILE=strict est défini
+# NOTE: Ne s'applique que si PROXY_PROFILE=strict est défini
+# (À configurer au démarrage du conteneur)
 
 # NOTE: Pour ajouter des exceptions en mode normal, suivez le format ci-dessus
 
