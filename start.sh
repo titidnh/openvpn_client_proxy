@@ -500,12 +500,12 @@ setup_proxy_routing() {
         return 0
     fi
 
-    # Add default route to the proxy routing table via main interface
-    ip route add default via "$main_gateway" table 100 2>/dev/null || true
+    # Keep proxy routing table in sync with current gateway/interface.
+    ip route replace default via "$main_gateway" dev "$main_iface" table 100 2>/dev/null || true
 
     # Route marked packets via proxy routing table with high priority
     # so it wins over source-based rules (e.g. table 10).
-    if ! ip rule show | grep -q "fwmark 0x1 lookup proxy_rt\|fwmark 0x1 lookup 100"; then
+    if ! ip rule show | grep -q "pref 100 .*fwmark 0x1 .*lookup proxy_rt\|pref 100 .*fwmark 0x1 .*lookup 100"; then
         ip rule add pref 100 fwmark 0x1 lookup 100 2>/dev/null || true
     fi
 
