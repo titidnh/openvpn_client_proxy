@@ -462,8 +462,12 @@ setup_proxy_routing() {
     log_json INFO "setup_proxy_routing" \
         "Configuring proxy routing to force responses via physical interface"
 
-    # Mark incoming proxy traffic so we can route responses correctly
+    # Mark incoming proxy traffic (client -> proxy:3128)
     iptables -t mangle -A PREROUTING -p tcp --dport "$PROXY_PORT" -j MARK --set-mark 0x1
+    
+    # Mark outgoing proxy responses (proxy:3128 -> client)
+    # This ensures responses from proxy exit via eth0, not through VPN tunnel
+    iptables -t mangle -A OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1
 
     # Create a new routing table for marked traffic
     # Use table 100 (avoid conflicts with default tables 0-252)
@@ -494,7 +498,7 @@ setup_proxy_routing() {
     ip rule add fwmark 0x1 lookup 100 2>/dev/null || true
 
     log_json INFO "setup_proxy_routing" \
-        "Proxy routing configured" \
+        "Proxy routing configured - marked incoming (dport) and outgoing (sport) traffic" \
         "gateway=${main_gateway}" \
         "interface=${main_iface}" \
         "mark=0x1" \
