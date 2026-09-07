@@ -462,12 +462,21 @@ setup_proxy_routing() {
     log_json INFO "setup_proxy_routing" \
         "Configuring proxy routing to force responses via physical interface"
 
-    # Mark incoming proxy traffic (client -> proxy:3128)
-    iptables -t mangle -A PREROUTING -p tcp --dport "$PROXY_PORT" -j MARK --set-mark 0x1
-    
-    # Mark outgoing proxy responses (proxy:3128 -> client)
-    # This ensures responses from proxy exit via eth0, not through VPN tunnel
-    iptables -t mangle -A OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1
+    # Track proxy client connections in conntrack and mark response packets.
+    # Using CONNMARK is more reliable than only matching source port in OUTPUT.
+    if ! iptables -t mangle -C PREROUTING -p tcp --dport "$PROXY_PORT" -j CONNMARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A PREROUTING -p tcp --dport "$PROXY_PORT" -j CONNMARK --set-mark 0x1
+    fi
+
+    # Restore packet mark from connection mark for locally generated responses.
+    if ! iptables -t mangle -C OUTPUT -m connmark --mark 0x1 -j MARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A OUTPUT -m connmark --mark 0x1 -j MARK --set-mark 0x1
+    fi
+
+    # Fallback: directly mark packets emitted from proxy port.
+    if ! iptables -t mangle -C OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1
+    fi
 
     # Create a new routing table for marked traffic
     # Use table 100 (avoid conflicts with default tables 0-252)
@@ -494,11 +503,14 @@ setup_proxy_routing() {
     # Add default route to the proxy routing table via main interface
     ip route add default via "$main_gateway" table 100 2>/dev/null || true
 
-    # Route marked packets via proxy routing table
-    ip rule add fwmark 0x1 lookup 100 2>/dev/null || true
+    # Route marked packets via proxy routing table with high priority
+    # so it wins over source-based rules (e.g. table 10).
+    if ! ip rule show | grep -q "fwmark 0x1 lookup proxy_rt\|fwmark 0x1 lookup 100"; then
+        ip rule add pref 100 fwmark 0x1 lookup 100 2>/dev/null || true
+    fi
 
     log_json INFO "setup_proxy_routing" \
-        "Proxy routing configured - marked incoming (dport) and outgoing (sport) traffic" \
+        "Proxy routing configured - connmark + fwmark policy active" \
         "gateway=${main_gateway}" \
         "interface=${main_iface}" \
         "mark=0x1" \
