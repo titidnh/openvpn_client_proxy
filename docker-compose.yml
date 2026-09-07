@@ -110,8 +110,9 @@ services:
       # -----------------------------------------------------------------------
       # Pinning de certificat pour DoT (optionnel, nécessite ENABLE_DOT=true)
       # Montez le bundle via la section volumes avant de l'activer
+      # Format: chemin absolu dans le conteneur vers le bundle PEM
       # -----------------------------------------------------------------------
-      # DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
+      DOT_TLS_CERT_BUNDLE: ""
 
       # -----------------------------------------------------------------------
       # Rafraîchissement dynamique des IPs DoT (défaut: 3600s, 0 = désactivé)
@@ -120,8 +121,9 @@ services:
 
       # -----------------------------------------------------------------------
       # Split DNS (optionnel) - "domain=resolver[:port]" séparés par des virgules
+      # Format: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
       # -----------------------------------------------------------------------
-      # DNS_SPLIT: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
+      DNS_SPLIT: ""
 
       # -----------------------------------------------------------------------
       # Port du proxy HTTP (défaut: 3128)
@@ -178,14 +180,14 @@ services:
       ALLOW_EXTERNAL_PROXY_ACCESS: "false"
 
       # -----------------------------------------------------------------------
-      # Tailscale (optionnel)
+      # Tailscale (optionnel) - pour router le trafic Tailscale via le VPN
       # -----------------------------------------------------------------------
       ENABLE_TAILSCALE: "false"
-      # TAILSCALE_AUTHKEY: "tskey-auth-xxxx"
-      # TAILSCALE_HOSTNAME: "openvpn-proxy"
-      # TAILSCALE_ACCEPT_ROUTES: "false"
-      # TAILSCALE_ADVERTISE_EXIT_NODE: "false"
-      # TAILSCALE_FLAGS: ""
+      TAILSCALE_AUTHKEY: ""
+      TAILSCALE_HOSTNAME: "openvpn-proxy"
+      TAILSCALE_ACCEPT_ROUTES: "false"
+      TAILSCALE_ADVERTISE_EXIT_NODE: "false"
+      TAILSCALE_FLAGS: ""
 
       # -----------------------------------------------------------------------
       # Paramètres de healthcheck
@@ -195,6 +197,14 @@ services:
       PROXY_TEST_HOST: "connectivitycheck.gstatic.com"
       PROXY_TEST_URL: "http://connectivitycheck.gstatic.com/generate_204"
       SKIP_HEALTHCHECK_FIRST_MINUTES: "2"
+
+      # -----------------------------------------------------------------------
+      # Paramètres avancés (rarement modifiés)
+      # -----------------------------------------------------------------------
+      TAILSCALE_RUN_DIR: "/var/run/tailscale"
+      VPN_TYPE: "openvpn"
+      OPENVPN_ENABLED: "true"
+      WIREGUARD_ENABLED: "false"
 
     # Paramètres système nécessaires
     sysctls:
