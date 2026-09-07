@@ -232,6 +232,14 @@ setup_iptables() {
         iptables -A OUTPUT -d "$docker_network" -j ACCEPT
     fi
 
+    # Proxy responses (allow replies back when external access enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        iptables -A OUTPUT -p tcp --sport "$PROXY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        log_json INFO "setup_iptables" \
+            "Proxy response traffic allowed via eth0" \
+            "port=${PROXY_PORT}"
+    fi
+
     # Métriques
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 9100 -j ACCEPT
 
@@ -366,6 +374,11 @@ setup_ip6tables() {
         ipt6 -A INPUT -s "$docker6_network" -j ACCEPT
     fi
 
+    # External proxy access (if explicitly enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        ipt6 -A INPUT -p tcp --dport "$PROXY_PORT" -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT
+    fi
+
     ipt6 -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -p icmpv6 -j ACCEPT
     ipt6 -A FORWARD -i lo -j ACCEPT
@@ -394,6 +407,11 @@ setup_ip6tables() {
 
     if [ -n "$docker6_network" ]; then
         ipt6 -A OUTPUT -d "$docker6_network" -j ACCEPT
+    fi
+
+    # Proxy responses (allow replies back when external access enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        ipt6 -A OUTPUT -p tcp --sport "$PROXY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     fi
 
     ipt6 -A OUTPUT -p tcp -d ::1 --dport 9100 -j ACCEPT
@@ -428,6 +446,75 @@ setup_ip6tables() {
 
     log_json INFO "setup_ip6tables" \
         "IPv6 configured - kill switch active"
+}
+
+# ===========================================================================
+# Advanced proxy routing - force proxy responses via physical interface
+# ===========================================================================
+
+setup_proxy_routing() {
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" != "true" ]; then
+        log_json INFO "setup_proxy_routing" \
+            "Skipped - ALLOW_EXTERNAL_PROXY_ACCESS is not true"
+        return 0
+    fi
+
+    log_json INFO "setup_proxy_routing" \
+        "Configuring proxy routing to force responses via physical interface"
+
+    # Track proxy client connections in conntrack and mark response packets.
+    # Using CONNMARK is more reliable than only matching source port in OUTPUT.
+    if ! iptables -t mangle -C PREROUTING -p tcp --dport "$PROXY_PORT" -j CONNMARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A PREROUTING -p tcp --dport "$PROXY_PORT" -j CONNMARK --set-mark 0x1
+    fi
+
+    # Restore packet mark from connection mark for locally generated responses.
+    if ! iptables -t mangle -C OUTPUT -m connmark --mark 0x1 -j MARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A OUTPUT -m connmark --mark 0x1 -j MARK --set-mark 0x1
+    fi
+
+    # Fallback: directly mark packets emitted from proxy port.
+    if ! iptables -t mangle -C OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1 2>/dev/null; then
+        iptables -t mangle -A OUTPUT -p tcp --sport "$PROXY_PORT" -j MARK --set-mark 0x1
+    fi
+
+    # Create a new routing table for marked traffic
+    # Use table 100 (avoid conflicts with default tables 0-252)
+    # Ensure the rt_tables directory and file exist
+    mkdir -p /etc/iproute2
+    touch /etc/iproute2/rt_tables
+    
+    if ! grep -q "^100" /etc/iproute2/rt_tables 2>/dev/null; then
+        echo "100 proxy_rt" >> /etc/iproute2/rt_tables 2>/dev/null || true
+    fi
+
+    # Get the main gateway and interface (usually eth0)
+    local main_gateway
+    local main_iface
+    main_gateway=$(ip route show | grep "^default" | grep -v "tun\|tap\|wg" | awk '{print $3}' | head -1)
+    main_iface=$(ip route show | grep "^default" | grep -v "tun\|tap\|wg" | awk '{print $5}' | head -1)
+
+    if [ -z "$main_gateway" ] || [ -z "$main_iface" ]; then
+        log_json WARN "setup_proxy_routing" \
+            "Could not determine main gateway or interface - skipping advanced routing"
+        return 0
+    fi
+
+    # Keep proxy routing table in sync with current gateway/interface.
+    ip route replace default via "$main_gateway" dev "$main_iface" table 100 2>/dev/null || true
+
+    # Route marked packets via proxy routing table with high priority
+    # so it wins over source-based rules (e.g. table 10).
+    if ! ip rule show | grep -q "pref 100 .*fwmark 0x1 .*lookup proxy_rt\|pref 100 .*fwmark 0x1 .*lookup 100"; then
+        ip rule add pref 100 fwmark 0x1 lookup 100 2>/dev/null || true
+    fi
+
+    log_json INFO "setup_proxy_routing" \
+        "Proxy routing configured - connmark + fwmark policy active" \
+        "gateway=${main_gateway}" \
+        "interface=${main_iface}" \
+        "mark=0x1" \
+        "table=100"
 }
 
 # ===========================================================================
@@ -2289,6 +2376,7 @@ supervise_all() {
 
         setup_iptables
         setup_ip6tables
+        setup_proxy_routing
 
         # -------------------------------------------------------------------
         # Proxy
