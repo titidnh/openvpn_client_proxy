@@ -110,8 +110,9 @@ services:
       # -----------------------------------------------------------------------
       # Pinning de certificat pour DoT (optionnel, nécessite ENABLE_DOT=true)
       # Montez le bundle via la section volumes avant de l'activer
+      # Format: chemin absolu dans le conteneur vers le bundle PEM
       # -----------------------------------------------------------------------
-      # DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
+      DOT_TLS_CERT_BUNDLE: ""
 
       # -----------------------------------------------------------------------
       # Rafraîchissement dynamique des IPs DoT (défaut: 3600s, 0 = désactivé)
@@ -120,8 +121,27 @@ services:
 
       # -----------------------------------------------------------------------
       # Split DNS (optionnel) - "domain=resolver[:port]" séparés par des virgules
+      # Format: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
       # -----------------------------------------------------------------------
-      # DNS_SPLIT: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
+      DNS_SPLIT: ""
+
+      # -----------------------------------------------------------------------
+      # Port du proxy HTTP (défaut: 3128)
+      # -----------------------------------------------------------------------
+      # PROXY_PORT: "3128"
+      #
+      # Sans authentification (PROXY_USER/PROXY_PASS vides):
+      #   Privoxy écoute sur 0.0.0.0:${PROXY_PORT}
+      #
+      # Avec authentification (PROXY_USER et PROXY_PASS définis):
+      #   - Privoxy écoute en interne sur 127.0.0.1:$((PROXY_PORT + 1))
+      #   - nginx écoute en externe sur 0.0.0.0:${PROXY_PORT} avec HTTP Basic Auth
+      #
+      # Exemples:
+      #   PROXY_PORT="8080" → sans auth: 0.0.0.0:8080, avec auth: nginx 0.0.0.0:8080 → Privoxy 127.0.0.1:8081
+      #   PROXY_PORT="3128" → sans auth: 0.0.0.0:3128, avec auth: nginx 0.0.0.0:3128 → Privoxy 127.0.0.1:3129
+      # -----------------------------------------------------------------------
+      PROXY_PORT: "3128"
 
       # -----------------------------------------------------------------------
       # Authentification proxy (optionnel) - active nginx devant avec HTTP Basic Auth
@@ -140,14 +160,34 @@ services:
       DROP_CAPS: "false"
 
       # -----------------------------------------------------------------------
-      # Tailscale (optionnel)
+      # Accès proxy externe (défaut: false = port fermé sauf réseau Docker)
+      # -----------------------------------------------------------------------
+      # ALLOW_EXTERNAL_PROXY_ACCESS: "false"
+      # 
+      # Par défaut (false): le port du proxy (PROXY_PORT, par défaut 3128) n'est accessible que depuis:
+      #   - Le réseau Docker interne (autres conteneurs)
+      #   - Les connexions établies (ESTABLISHED,RELATED)
+      #
+      # Si true: le port du proxy est accessible depuis n'importe quelle interface
+      # (firewall permissif pour les nouvelles connexions TCP au port proxy)
+      #
+      # ATTENTION: N'activez que si vous avez confiance en votre réseau physique!
+      #
+      # Cas d'usage:
+      #   - Accès au proxy depuis d'autres machines du réseau local (RPi2 → RPi1)
+      #   - Accès au proxy via SSH tunneling depuis des hôtes externes
+      # -----------------------------------------------------------------------
+      ALLOW_EXTERNAL_PROXY_ACCESS: "false"
+
+      # -----------------------------------------------------------------------
+      # Tailscale (optionnel) - pour router le trafic Tailscale via le VPN
       # -----------------------------------------------------------------------
       ENABLE_TAILSCALE: "false"
-      # TAILSCALE_AUTHKEY: "tskey-auth-xxxx"
-      # TAILSCALE_HOSTNAME: "openvpn-proxy"
-      # TAILSCALE_ACCEPT_ROUTES: "false"
-      # TAILSCALE_ADVERTISE_EXIT_NODE: "false"
-      # TAILSCALE_FLAGS: ""
+      TAILSCALE_AUTHKEY: ""
+      TAILSCALE_HOSTNAME: "openvpn-proxy"
+      TAILSCALE_ACCEPT_ROUTES: "false"
+      TAILSCALE_ADVERTISE_EXIT_NODE: "false"
+      TAILSCALE_FLAGS: ""
 
       # -----------------------------------------------------------------------
       # Paramètres de healthcheck
@@ -157,6 +197,14 @@ services:
       PROXY_TEST_HOST: "connectivitycheck.gstatic.com"
       PROXY_TEST_URL: "http://connectivitycheck.gstatic.com/generate_204"
       SKIP_HEALTHCHECK_FIRST_MINUTES: "2"
+
+      # -----------------------------------------------------------------------
+      # Paramètres avancés (rarement modifiés)
+      # -----------------------------------------------------------------------
+      TAILSCALE_RUN_DIR: "/var/run/tailscale"
+      VPN_TYPE: "openvpn"
+      OPENVPN_ENABLED: "true"
+      WIREGUARD_ENABLED: "false"
 
     # Paramètres système nécessaires
     sysctls:
