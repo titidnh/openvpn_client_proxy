@@ -140,6 +140,26 @@ services:
       DROP_CAPS: "false"
 
       # -----------------------------------------------------------------------
+      # Accès proxy externe (défaut: false = port fermé sauf réseau Docker)
+      # -----------------------------------------------------------------------
+      # ALLOW_EXTERNAL_PROXY_ACCESS: "false"
+      # 
+      # Par défaut (false): le port du proxy (3128) n'est accessible que depuis:
+      #   - Le réseau Docker interne (autres conteneurs)
+      #   - Les connexions établies (ESTABLISHED,RELATED)
+      #
+      # Si true: le port du proxy est accessible depuis n'importe quelle interface
+      # (firewall permissif pour les nouvelles connexions TCP au port proxy)
+      #
+      # ATTENTION: N'activez que si vous avez confiance en votre réseau physique!
+      #
+      # Cas d'usage:
+      #   - Accès au proxy depuis d'autres machines du réseau local (RPi2 → RPi1)
+      #   - Accès au proxy via SSH tunneling depuis des hôtes externes
+      # -----------------------------------------------------------------------
+      ALLOW_EXTERNAL_PROXY_ACCESS: "false"
+
+      # -----------------------------------------------------------------------
       # Tailscale (optionnel)
       # -----------------------------------------------------------------------
       ENABLE_TAILSCALE: "false"

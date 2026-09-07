@@ -90,6 +90,7 @@ validate_environment() {
         "ENABLE_DNSSEC"
         "ENABLE_METRICS"
         "DROP_CAPS"
+        "ALLOW_EXTERNAL_PROXY_ACCESS"
         "TAILSCALE_ACCEPT_ROUTES"
         "TAILSCALE_ADVERTISE_EXIT_NODE"
     )
@@ -185,6 +186,18 @@ setup_iptables() {
 
     if [ -n "$docker_network" ]; then
         iptables -A INPUT -s "$docker_network" -j ACCEPT
+    fi
+
+    # External proxy access (if explicitly enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        iptables -A INPUT -p tcp --dport "$PROXY_PORT" -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT
+        log_json INFO "setup_iptables" \
+            "Proxy port open to external access" \
+            "port=${PROXY_PORT}"
+    else
+        log_json INFO "setup_iptables" \
+            "Proxy port restricted to Docker network only" \
+            "port=${PROXY_PORT}"
     fi
 
     # FORWARD

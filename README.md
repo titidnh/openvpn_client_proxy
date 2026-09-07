@@ -30,6 +30,7 @@
 - [Docker Compose Examples](#docker-compose-examples)
 - [Build](#build)
 - [Using the Proxy](#using-the-proxy)
+- [Firewall & Network Access Control](#firewall--network-access-control)
 - [Troubleshooting](#troubleshooting)
 - [Project File Reference](#project-file-reference)
 - [Roadmap](#roadmap)
@@ -347,6 +348,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `DNS_SPLIT` | *(empty)* | Comma-separated list of `domain=resolver[:port]` entries for split DNS. Routes those domains to an internal resolver instead of the default upstream. Works in both DoT and plain modes. Example: `corp.local=10.0.0.53,internal.net=10.0.1.53:5353` |
 | `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint on `127.0.0.1:9100`. The port is loopback-only (iptables enforced). |
 | `DROP_CAPS` | `false` | Set to `true` to drop all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after all services have started. |
+| `ALLOW_EXTERNAL_PROXY_ACCESS` | `false` | Set to `true` to allow external connections to the proxy port (3128). By default, the port is only accessible from the Docker network. Enable this only if you trust your network and need to access the proxy from other physical hosts (e.g., cross-RPi proxy access). ⚠️ **Firewall-permissive mode** — only use if you understand the security implications. |
 
 ---
 
@@ -1039,6 +1041,112 @@ print(r.text)  # → your VPN exit IP
 
 ---
 
+## Firewall & Network Access Control
+
+### Default Behavior: Proxy Only Accessible Locally
+
+By default, the HTTP proxy (port `3128`) is **firewall-restricted** and only accessible from:
+
+- **Same Docker network**: Other containers on the host
+- **Established connections**: Return traffic from existing connections (`ESTABLISHED,RELATED` states)
+
+This is a **security-by-default** design. External traffic to port `3128` is blocked by the container's iptables rules.
+
+#### Symptom: Cannot Access Proxy from Another Physical Host
+
+```
+Host A (RPi1): Container running, proxy at 192.168.1.100:3128 ✓ (local access works)
+Host B (RPi2): Tries to curl --proxy http://192.168.1.100:3128 ✗ FAILS
+```
+
+The connection is rejected at Host A's firewall because Host B's IP is outside the Docker network subnet.
+
+### Solution: Enable External Proxy Access
+
+Set `ALLOW_EXTERNAL_PROXY_ACCESS=true` to allow connections from any interface:
+
+#### Docker CLI
+
+```bash
+docker run \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -e ALLOW_EXTERNAL_PROXY_ACCESS=true \
+  -v ./vpn:/vpn:ro \
+  -p 3128:3128 \
+  titidnh/openvpn_client_proxy:latest
+```
+
+#### Docker Compose
+
+```yaml
+environment:
+  ALLOW_EXTERNAL_PROXY_ACCESS: "true"
+```
+
+Now the proxy is accessible from other hosts on your network:
+
+```bash
+# From Host B (RPi2)
+curl --proxy http://192.168.1.100:3128 https://api.ipify.org
+# ✓ Returns VPN's exit IP
+```
+
+### iptables Rules Applied
+
+**When `ALLOW_EXTERNAL_PROXY_ACCESS=false` (default):**
+
+```
+iptables -P INPUT DROP
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -s <docker_network> -j ACCEPT  # Only Docker network
+```
+
+→ Result: External hosts are rejected.
+
+**When `ALLOW_EXTERNAL_PROXY_ACCESS=true`:**
+
+```
+iptables -P INPUT DROP
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -s <docker_network> -j ACCEPT
+iptables -A INPUT -p tcp --dport 3128 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT  # ← NEW rule
+```
+
+→ Result: External hosts can open new TCP connections to port `3128`.
+
+### ⚠️ Security Considerations
+
+**Only enable `ALLOW_EXTERNAL_PROXY_ACCESS=true` if:**
+
+1. Your network is **trusted** (e.g., isolated home network, VPN-protected corporate network)
+2. You understand that **anyone with network access** to your host can use the proxy
+3. The proxy itself is protected by **authentication** (set `PROXY_USER` + `PROXY_PASS`) if exposed to untrusted networks
+
+**Do NOT enable this on:**
+
+- Public WiFi networks
+- Cloud instances with public IPs
+- DMZs or exposed networks
+
+### Verifying the Firewall State
+
+Check if the proxy port is open:
+
+```bash
+# From inside the container
+docker exec <container> iptables -L INPUT -n | grep 3128
+
+# From a remote host
+nc -zv 192.168.1.100 3128
+# open: means ALLOW_EXTERNAL_PROXY_ACCESS=true (or similar rule present)
+# closed: means default firewall (restricted to Docker network)
+```
+
+---
+
 ## Troubleshooting
 
 ### The container starts but `curl` returns no IP / connection refused
@@ -1046,6 +1154,7 @@ print(r.text)  # → your VPN exit IP
 1. Check that the VPN tunnel is up: `docker logs vpn_proxy | grep "public IP via VPN"`
 2. Verify the sentinel file exists: `docker exec vpn_proxy ls /tmp/vpn_healthy`
 3. Confirm the proxy is listening: `docker exec vpn_proxy nc -z 127.0.0.1 3128 && echo OK`
+
 
 ### `407 Proxy Authentication Required`
 
