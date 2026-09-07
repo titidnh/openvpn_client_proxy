@@ -232,6 +232,14 @@ setup_iptables() {
         iptables -A OUTPUT -d "$docker_network" -j ACCEPT
     fi
 
+    # Proxy responses (allow replies back when external access enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        iptables -A OUTPUT -p tcp --sport "$PROXY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        log_json INFO "setup_iptables" \
+            "Proxy response traffic allowed via eth0" \
+            "port=${PROXY_PORT}"
+    fi
+
     # Métriques
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 9100 -j ACCEPT
 
@@ -366,6 +374,11 @@ setup_ip6tables() {
         ipt6 -A INPUT -s "$docker6_network" -j ACCEPT
     fi
 
+    # External proxy access (if explicitly enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        ipt6 -A INPUT -p tcp --dport "$PROXY_PORT" -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT
+    fi
+
     ipt6 -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A FORWARD -p icmpv6 -j ACCEPT
     ipt6 -A FORWARD -i lo -j ACCEPT
@@ -394,6 +407,11 @@ setup_ip6tables() {
 
     if [ -n "$docker6_network" ]; then
         ipt6 -A OUTPUT -d "$docker6_network" -j ACCEPT
+    fi
+
+    # Proxy responses (allow replies back when external access enabled)
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ]; then
+        ipt6 -A OUTPUT -p tcp --sport "$PROXY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     fi
 
     ipt6 -A OUTPUT -p tcp -d ::1 --dport 9100 -j ACCEPT
