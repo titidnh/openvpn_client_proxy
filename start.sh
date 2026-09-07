@@ -449,6 +449,53 @@ setup_ip6tables() {
 }
 
 # ===========================================================================
+# Advanced proxy routing - force proxy responses via physical interface
+# ===========================================================================
+
+setup_proxy_routing() {
+    if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" != "true" ]; then
+        return 0
+    fi
+
+    log_json INFO "setup_proxy_routing" \
+        "Configuring proxy routing to force responses via physical interface"
+
+    # Mark incoming proxy traffic so we can route responses correctly
+    iptables -t mangle -A PREROUTING -p tcp --dport "$PROXY_PORT" -j MARK --set-mark 0x1
+
+    # Create a new routing table for marked traffic
+    # Use table 100 (avoid conflicts with default tables 0-252)
+    if ! grep -q "^100" /etc/iproute2/rt_tables 2>/dev/null; then
+        echo "100 proxy_rt" >> /etc/iproute2/rt_tables 2>/dev/null || true
+    fi
+
+    # Get the main gateway and interface (usually eth0)
+    local main_gateway
+    local main_iface
+    main_gateway=$(ip route show | grep "^default" | grep -v "tun\|tap\|wg" | awk '{print $3}' | head -1)
+    main_iface=$(ip route show | grep "^default" | grep -v "tun\|tap\|wg" | awk '{print $5}' | head -1)
+
+    if [ -z "$main_gateway" ] || [ -z "$main_iface" ]; then
+        log_json WARN "setup_proxy_routing" \
+            "Could not determine main gateway or interface - skipping advanced routing"
+        return 0
+    fi
+
+    # Add default route to the proxy routing table via main interface
+    ip route add default via "$main_gateway" table 100 2>/dev/null || true
+
+    # Route marked packets via proxy routing table
+    ip rule add fwmark 0x1 lookup 100 2>/dev/null || true
+
+    log_json INFO "setup_proxy_routing" \
+        "Proxy routing configured" \
+        "gateway=${main_gateway}" \
+        "interface=${main_iface}" \
+        "mark=0x1" \
+        "table=100"
+}
+
+# ===========================================================================
 # Routes
 # ===========================================================================
 
@@ -2307,6 +2354,7 @@ supervise_all() {
 
         setup_iptables
         setup_ip6tables
+        setup_proxy_routing
 
         # -------------------------------------------------------------------
         # Proxy
