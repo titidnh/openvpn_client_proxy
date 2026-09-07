@@ -454,6 +454,8 @@ setup_ip6tables() {
 
 setup_proxy_routing() {
     if [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" != "true" ]; then
+        log_json INFO "setup_proxy_routing" \
+            "Skipped - ALLOW_EXTERNAL_PROXY_ACCESS is not true"
         return 0
     fi
 
