@@ -107,10 +107,11 @@ validate_environment() {
         fi
     done
 
-    if [ -n "${PROXY_PORT:-}" ]; then
-        validate_port "PROXY_PORT" "$PROXY_PORT" ||
-            export PROXY_PORT="$DEFAULT_PROXY_PORT"
+    PROXY_PORT="${PROXY_PORT:-$DEFAULT_PROXY_PORT}"
+    if ! validate_port "PROXY_PORT" "$PROXY_PORT"; then
+        PROXY_PORT="$DEFAULT_PROXY_PORT"
     fi
+    export PROXY_PORT
 
     if [ -n "${DNS_SERVER_1:-}" ]; then
         validate_ip "DNS_SERVER_1" "$DNS_SERVER_1" ||
@@ -1691,21 +1692,31 @@ configure_privoxy_auth() {
 
     local user="${PROXY_USER:-}"
     local pass="${PROXY_PASS:-}"
+    local privoxy_port
+    local privoxy_addr
 
     if [ -n "$user" ] && [ -n "$pass" ]; then
+        # With auth: privoxy on internal loopback
+        privoxy_port=$((PROXY_PORT + 1))
+        privoxy_addr="127.0.0.1"
+
         sed -i \
-            's|^listen-address .*|listen-address 127.0.0.1:3129|' \
+            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
             "$PRIVOXY_CONF"
 
         log_json INFO "configure_privoxy_auth" \
-            "auth enabled - privoxy on 127.0.0.1:3129"
+            "auth enabled - privoxy on ${privoxy_addr}:${privoxy_port}"
     else
+        # Without auth: privoxy on all interfaces
+        privoxy_port="$PROXY_PORT"
+        privoxy_addr="0.0.0.0"
+
         sed -i \
-            's|^listen-address .*|listen-address 0.0.0.0:3128|' \
+            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
             "$PRIVOXY_CONF"
 
         log_json INFO "configure_privoxy_auth" \
-            "no auth - privoxy on 0.0.0.0:3128"
+            "no auth - privoxy on ${privoxy_addr}:${privoxy_port}"
     fi
 }
 
@@ -1736,7 +1747,7 @@ start_nginx_auth() {
             "nginx not found - falling back to no-auth"
 
         sed -i \
-            's|^listen-address .*|listen-address 0.0.0.0:3128|' \
+            "s|^listen-address .*|listen-address 0.0.0.0:${PROXY_PORT}|" \
             "$PRIVOXY_CONF"
 
         return 0
@@ -1750,9 +1761,10 @@ start_nginx_auth() {
     chmod 600 "$htpasswd_file"
 
     local i
+    local privoxy_internal_port=$((PROXY_PORT + 1))
 
     for i in 1 2 3 4 5; do
-        if nc -z -w 1 127.0.0.1 3129 >/dev/null 2>&1; then
+        if nc -z -w 1 127.0.0.1 "$privoxy_internal_port" >/dev/null 2>&1; then
             break
         fi
 
@@ -1761,7 +1773,9 @@ start_nginx_auth() {
 
     mkdir -p /run/nginx /var/log/nginx
 
-    cat > /etc/nginx/nginx_proxy_auth.conf <<'NGINXCONF'
+    local privoxy_internal_port=$((PROXY_PORT + 1))
+
+    cat > /etc/nginx/nginx_proxy_auth.conf <<NGINXCONF
 worker_processes 1;
 error_log /dev/null crit;
 pid /run/nginx/nginx_proxy_auth.pid;
@@ -1778,17 +1792,17 @@ http {
     proxy_send_timeout 60s;
 
     server {
-        listen 0.0.0.0:3128;
+        listen 0.0.0.0:${PROXY_PORT};
 
         auth_basic "Proxy Authentication Required";
         auth_basic_user_file /etc/nginx/.proxy_htpasswd;
 
         location / {
-            proxy_pass http://127.0.0.1:3129;
+            proxy_pass http://127.0.0.1:${privoxy_internal_port};
             proxy_http_version 1.1;
 
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header Connection "";
             proxy_set_header Authorization "";
         }
@@ -1805,8 +1819,8 @@ NGINXCONF
     log_json INFO "start_nginx_auth" \
         "started" \
         "pid=${SERVICE_PIDS[nginx]}" \
-        "frontend=0.0.0.0:3128" \
-        "backend=127.0.0.1:3129"
+        "frontend=0.0.0.0:${PROXY_PORT}" \
+        "backend=127.0.0.1:$((PROXY_PORT + 1))"
 }
 
 # ===========================================================================

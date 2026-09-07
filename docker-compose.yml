@@ -124,6 +124,24 @@ services:
       # DNS_SPLIT: "corp.local=10.0.0.53,internal.net=10.0.1.53:5353"
 
       # -----------------------------------------------------------------------
+      # Port du proxy HTTP (défaut: 3128)
+      # -----------------------------------------------------------------------
+      # PROXY_PORT: "3128"
+      #
+      # Sans authentification (PROXY_USER/PROXY_PASS vides):
+      #   Privoxy écoute sur 0.0.0.0:${PROXY_PORT}
+      #
+      # Avec authentification (PROXY_USER et PROXY_PASS définis):
+      #   - Privoxy écoute en interne sur 127.0.0.1:$((PROXY_PORT + 1))
+      #   - nginx écoute en externe sur 0.0.0.0:${PROXY_PORT} avec HTTP Basic Auth
+      #
+      # Exemples:
+      #   PROXY_PORT="8080" → sans auth: 0.0.0.0:8080, avec auth: nginx 0.0.0.0:8080 → Privoxy 127.0.0.1:8081
+      #   PROXY_PORT="3128" → sans auth: 0.0.0.0:3128, avec auth: nginx 0.0.0.0:3128 → Privoxy 127.0.0.1:3129
+      # -----------------------------------------------------------------------
+      PROXY_PORT: "3128"
+
+      # -----------------------------------------------------------------------
       # Authentification proxy (optionnel) - active nginx devant avec HTTP Basic Auth
       # -----------------------------------------------------------------------
       PROXY_USER: ""
@@ -144,7 +162,7 @@ services:
       # -----------------------------------------------------------------------
       # ALLOW_EXTERNAL_PROXY_ACCESS: "false"
       # 
-      # Par défaut (false): le port du proxy (3128) n'est accessible que depuis:
+      # Par défaut (false): le port du proxy (PROXY_PORT, par défaut 3128) n'est accessible que depuis:
       #   - Le réseau Docker interne (autres conteneurs)
       #   - Les connexions établies (ESTABLISHED,RELATED)
       #
