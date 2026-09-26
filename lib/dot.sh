@@ -1,4 +1,296 @@
 #!/bin/bash
+# DoT-related helpers extracted from start.sh
+
+dot_ip_map_set() {
+    local host="$1"
+    local ip="$2"
+    local tmp
+
+    DOT_HOST_IP_MAP["$host"]="$ip"
+
+    tmp=$(temp_file "dot_ip_map")
+
+    if [ -f "$DOT_IP_MAP_FILE" ]; then
+        grep -v "^${host}=" "$DOT_IP_MAP_FILE" > "$tmp" || true
+    fi
+
+    echo "${host}=${ip}" >> "$tmp"
+    mv -f "$tmp" "$DOT_IP_MAP_FILE"
+}
+
+dot_ip_map_get() {
+    local host="$1"
+
+    if [ -n "${DOT_HOST_IP_MAP[$host]:-}" ]; then
+        echo "${DOT_HOST_IP_MAP[$host]}"
+    elif [ -f "$DOT_IP_MAP_FILE" ]; then
+        grep "^${host}=" "$DOT_IP_MAP_FILE" |
+            cut -d= -f2- |
+            tail -1
+    fi
+}
+
+preload_dot_ips() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    log_json INFO "preload_dot_ips" \
+        "Pre-loading DoT IP mappings at boot"
+
+    local servers="${DOT_DNS_SERVERS}"
+    servers=$(echo "$servers" | tr ',' ' ')
+
+    local preload_count=0
+    local preload_failed=0
+
+    DOT_RESOLVED_IPS=""
+    DOT_HOST_IP_MAP=()
+
+    local entry
+    for entry in $servers; do
+        local proto host ips ip attempt max_attempts backoff
+
+        proto=$(echo "$entry" | awk -F'://' '{print $1}')
+        host=$(echo "$entry" |
+            sed 's|^[a-z]*://||' |
+            awk -F'[:/]' '{print $1}')
+
+        [ -z "$host" ] && continue
+
+        ips=""
+        max_attempts=5
+        backoff=1
+        for attempt in $(seq 1 "$max_attempts"); do
+            ips=$(resolve_hostname_all \
+                "$host" \
+                "$DNS_SERVER_1" \
+                "$DNS_SERVER_2" 2>/dev/null || true)
+
+            if [ -n "$ips" ]; then
+                break
+            fi
+
+            if [ "$attempt" -lt "$max_attempts" ]; then
+                sleep "$backoff"
+                backoff=$((backoff * 2))
+                [ "$backoff" -gt 10 ] && backoff=10
+            fi
+        done
+
+        if [ -n "$ips" ]; then
+            local first_ip=1
+            local all_ips=""
+            local ip_count=0
+
+            while IFS= read -r ip; do
+                [ -z "$ip" ] && continue
+
+                ipt_add_853 "$ip"
+
+                DOT_RESOLVED_IPS="${DOT_RESOLVED_IPS}${ip} "
+                all_ips="${all_ips}${ip} "
+                ip_count=$((ip_count + 1))
+
+                if [ "$first_ip" -eq 1 ]; then
+                    DOT_HOST_IP_MAP["$host"]="$ip"
+                    first_ip=0
+                fi
+
+                dot_ip_map_set "$host" "$ip"
+
+                log_json INFO "preload_dot_ips" \
+                    "pre-loaded DoT hostname IP" \
+                    "host=${host}" \
+                    "ip=${ip}" \
+                    "proto=${proto}"
+            done <<< "$ips"
+
+            preload_count=$((preload_count + ip_count))
+
+            if [ "$ip_count" -gt 1 ]; then
+                log_json INFO "preload_dot_ips" \
+                    "pre-loaded multiple IPs for hostname" \
+                    "host=${host}" \
+                    "ip_count=${ip_count}"
+            fi
+        else
+            preload_failed=$((preload_failed + 1))
+
+            log_json WARN "preload_dot_ips" \
+                "could not pre-load DoT hostname" \
+                "host=${host}" \
+                "max_attempts=${max_attempts}"
+        fi
+    done
+
+    if [ "$preload_count" -gt 0 ]; then
+        log_json INFO "preload_dot_ips" \
+            "DoT pre-loading complete - IPs cached for firewall" \
+            "total_ips=${preload_count}" \
+            "failed_hostnames=${preload_failed}"
+    else
+        log_json WARN "preload_dot_ips" \
+            "DoT pre-loading failed - no IPs resolved" \
+            "failed_hostnames=${preload_failed}"
+    fi
+}
+
+_dot_refresh_loop() {
+    local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
+
+    log_json INFO "dot_refresh" \
+        "Starting periodic IP refresh" \
+        "interval=${interval}s"
+
+    while true; do
+        sleep "$interval"
+
+        local dot_changed=0
+        local servers="${DOT_DNS_SERVERS}"
+
+        servers=$(echo "$servers" | tr ',' ' ')
+
+        local entry
+        for entry in $servers; do
+            local host new_ips old_ips
+
+            host=$(echo "$entry" | sed 's|^[a-z]*://||' | awk -F'[:/]' '{print $1}')
+
+            [ -z "$host" ] && continue
+
+            new_ips=$(resolve_hostname_all \
+                "$host" \
+                "$DNS_SERVER_1" \
+                "$DNS_SERVER_2")
+
+            old_ips=$(grep "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null | cut -d= -f2- | sort | tr '\n' ' ' || true)
+
+            if [ -z "$new_ips" ]; then
+                log_json WARN "dot_refresh" \
+                    "re-resolve failed" \
+                    "host=${host}"
+                continue
+            fi
+
+            new_ips_sorted=$(echo "$new_ips" | sort | tr '\n' ' ')
+            old_ips_sorted=$(echo "$old_ips" | sort)
+
+            if [ "$new_ips_sorted" = "$old_ips_sorted" ]; then
+                log_json INFO "dot_refresh" \
+                    "IPs unchanged" \
+                    "host=${host}" \
+                    "ip_count=$(echo "$new_ips" | wc -l)"
+                continue
+            fi
+
+            log_json INFO "dot_refresh" \
+                "IP(s) changed - preparing refresh" \
+                "host=${host}" \
+                "old_count=$(echo "$old_ips" | wc -w)" \
+                "new_count=$(echo "$new_ips" | wc -l)"
+
+            if configure_unbound; then
+                local ub_pid
+
+                ub_pid=$(pidof unbound | awk '{print $1}' || true)
+
+                if [ -n "$ub_pid" ]; then
+                    log_json INFO "dot_refresh" \
+                        "Reloading unbound after IP(s) change" \
+                        "pid=${ub_pid}" \
+                        "host=${host}"
+
+                    kill -HUP "$ub_pid" 2>/dev/null || true
+
+                    local reload_ok=0
+                    local reload_max_wait=10
+                    local reload_attempt
+
+                    for reload_attempt in $(seq 1 "$reload_max_wait"); do
+                        sleep 1
+
+                        if ! kill -0 "$ub_pid" 2>/dev/null; then
+                            log_json WARN "dot_refresh" \
+                                "unbound died during reload" \
+                                "host=${host}"
+                            break
+                        fi
+
+                        if test_unbound_dns_robust; then
+                            reload_ok=1
+                            break
+                        fi
+                    done
+
+                    if [ "$reload_ok" -eq 1 ]; then
+                        dot_changed=1
+
+                        local stale_ip
+                        for stale_ip in $old_ips; do
+                            if ! printf '%s\n' "$new_ips" | grep -qx "$stale_ip"; then
+                                ipt_del_853 "$stale_ip"
+
+                                log_json INFO "dot_refresh" \
+                                    "removed stale 853 rule" \
+                                    "host=${host}" \
+                                    "ip=${stale_ip}"
+                            fi
+                        done
+
+                        {
+                            grep -v "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null || true
+                            echo "$new_ips" | while read -r ip; do
+                                [ -n "$ip" ] && echo "${host}=${ip}"
+                            done
+                        } > "${DOT_IP_MAP_FILE}.tmp"
+                        mv -f "${DOT_IP_MAP_FILE}.tmp" "$DOT_IP_MAP_FILE"
+
+                        log_json INFO "dot_refresh" \
+                            "unbound reloaded successfully" \
+                            "pid=${ub_pid}" \
+                            "host=${host}" \
+                            "new_ip_count=$(echo "$new_ips" | wc -l)"
+                    else
+                        log_json WARN "dot_refresh" \
+                            "unbound reload validation timeout" \
+                            "host=${host}"
+                    fi
+                else
+                    log_json WARN "dot_refresh" \
+                        "unbound not running while refreshing config"
+                fi
+            else
+                log_json WARN "dot_refresh" \
+                    "failed to regenerate unbound config after DoT IP change"
+            fi
+        done
+
+        if [ "$dot_changed" -eq 1 ]; then
+            log_json INFO "dot_refresh" \
+                "DoT IP refresh complete" \
+                "changed=1"
+        fi
+    done
+}
+
+start_dot_ip_refresh() {
+    [ "${ENABLE_DOT:-false}" = "true" ] || return 0
+
+    local interval="${DOT_IP_REFRESH_INTERVAL:-3600}"
+
+    log_json INFO "dot_refresh" \
+        "starting periodic IP refresh" \
+        "interval=${interval}s"
+
+    _dot_refresh_loop &
+
+    SERVICE_PIDS[dot_refresh]=$!
+
+    log_json INFO "dot_refresh" \
+        "refresh loop started" \
+        "pid=${SERVICE_PIDS[dot_refresh]}"
+}
+
+*** End Patch#!/bin/bash
 # ============================================================================
 # lib/dot.sh - DNS over TLS (DoT) and Unbound management
 # Extracted from start.sh
