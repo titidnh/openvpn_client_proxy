@@ -24,13 +24,19 @@ jobs:
 
       - name: shfmt check (list files needing formatting)
         run: |
-          shfmt -l . | tee shfmt.out
-          if [ -s shfmt.out ]; then
-            echo "shfmt found formatting issues:" && cat shfmt.out
+          echo "=== Checking shell script formatting ==="
+          FILES_NEED_FORMAT=$(shfmt -l . 2>/dev/null || echo "")
+          
+          if [ -n "$FILES_NEED_FORMAT" ]; then
+            echo "❌ The following files need formatting:"
+            echo "$FILES_NEED_FORMAT"
             exit 1
           fi
+          
+          echo "✅ All files are properly formatted"
 
       - name: shellcheck
         run: |
-          # Find shell scripts and run shellcheck
+          echo "=== Running ShellCheck ==="
           find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck -x || exit 1
+          echo "✅ ShellCheck passed"
