@@ -828,7 +828,7 @@ start_unbound() {
     sleep 1
 
     unbound -d -c "$UNBOUND_CONF" &
-    SERVICE_PIDS[unbound]=$!
+    SERVICE_PIDS["unbound"]=$!
 
     local max_wait=10
 
@@ -844,10 +844,10 @@ start_unbound() {
     local i
 
     for i in $(seq 1 "$max_wait"); do
-        if ! kill -0 "${SERVICE_PIDS[unbound]}" 2>/dev/null; then
+        if ! kill -0 "${SERVICE_PIDS["unbound"]}" 2>/dev/null; then
             log_json WARN "start_unbound" \
                 "unbound exited during startup" \
-                "pid=${SERVICE_PIDS[unbound]}"
+                "pid=${SERVICE_PIDS["unbound"]}"
             break
         fi
 
@@ -868,13 +868,13 @@ start_unbound() {
 
         log_json INFO "start_unbound" \
             "started - DoT active" \
-            "pid=${SERVICE_PIDS[unbound]}" \
+            "pid=${SERVICE_PIDS["unbound"]}" \
             "port=5053"
     else
         log_json WARN "start_unbound" \
             "unbound not ready after startup window" \
             "timeout=${max_wait}s" \
-            "pid=${SERVICE_PIDS[unbound]:-unknown}"
+            "pid=${SERVICE_PIDS["unbound"]:-unknown}"
 
         METRIC_DOT_ACTIVE=0
     fi
@@ -885,7 +885,7 @@ restart_unbound_if_needed() {
         return 0
     fi
 
-    if ! kill -0 "${SERVICE_PIDS[unbound]}" 2>/dev/null; then
+    if ! kill -0 "${SERVICE_PIDS["unbound"]}" 2>/dev/null; then
         log_json WARN "supervisor" \
             "unbound process died - restarting immediately"
 
@@ -895,13 +895,13 @@ restart_unbound_if_needed() {
         configure_unbound || return 1
 
         unbound -d -c "$UNBOUND_CONF" &
-        SERVICE_PIDS[unbound]=$!
+        SERVICE_PIDS["unbound"]=$!
 
         reconfigure_dnsmasq_to_unbound
 
         log_json INFO "supervisor" \
             "unbound restarted" \
-            "pid=${SERVICE_PIDS[unbound]}"
+            "pid=${SERVICE_PIDS["unbound"]}"
 
         return 1
     fi
@@ -916,7 +916,7 @@ restart_unbound_if_needed() {
         configure_unbound || return 1
 
         unbound -d -c "$UNBOUND_CONF" &
-        SERVICE_PIDS[unbound]=$!
+        SERVICE_PIDS["unbound"]=$!
 
         reconfigure_dnsmasq_to_unbound
 
@@ -1099,11 +1099,11 @@ start_dot_ip_refresh() {
 
     _dot_refresh_loop &
 
-    SERVICE_PIDS[dot_refresh]=$!
+    SERVICE_PIDS["dot_refresh"]=$!
 
     log_json INFO "dot_refresh" \
         "refresh loop started" \
-        "pid=${SERVICE_PIDS[dot_refresh]}"
+        "pid=${SERVICE_PIDS["dot_refresh"]}"
 }
 
 # ===========================================================================
@@ -1182,7 +1182,7 @@ HANDLER
             TCP-LISTEN:9100,bind=127.0.0.1,reuseaddr,fork \
             EXEC:/tmp/metrics_handler.sh &
 
-        SERVICE_PIDS[metrics]=$!
+        SERVICE_PIDS["metrics"]=$!
     else
         (
             while true; do
@@ -1192,7 +1192,7 @@ HANDLER
             done
         ) &
 
-        SERVICE_PIDS[metrics]=$!
+        SERVICE_PIDS["metrics"]=$!
 
         log_json WARN "start_metrics" \
             "socat not found, using nc fallback (one request at a time)"
@@ -1200,7 +1200,7 @@ HANDLER
 
     log_json INFO "start_metrics" \
         "metrics endpoint started" \
-        "pid=${SERVICE_PIDS[metrics]}" \
+        "pid=${SERVICE_PIDS["metrics"]}" \
         "addr=127.0.0.1:9100"
 }
 
@@ -1381,7 +1381,7 @@ start_dnsmasq() {
         --conf-file="$DNSMASQ_CONF" \
         --log-facility=- &
 
-    SERVICE_PIDS[dnsmasq]=$!
+    SERVICE_PIDS["dnsmasq"]=$!
 
     local bound=0
     local i
@@ -1542,7 +1542,7 @@ start_privoxy() {
         --no-daemon \
         "$PRIVOXY_CONF" &
 
-    SERVICE_PIDS[privoxy]=$!
+    SERVICE_PIDS["privoxy"]=$!
 }
 
 start_nginx_auth() {
@@ -1626,11 +1626,11 @@ NGINXCONF
         -c /etc/nginx/nginx_proxy_auth.conf \
         -g 'daemon off;' &
 
-    SERVICE_PIDS[nginx]=$!
+    SERVICE_PIDS["nginx"]=$!
 
     log_json INFO "start_nginx_auth" \
         "started" \
-        "pid=${SERVICE_PIDS[nginx]}" \
+        "pid=${SERVICE_PIDS["nginx"]}" \
         "frontend=0.0.0.0:${PROXY_PORT}" \
         "backend=127.0.0.1:$((PROXY_PORT + 1))"
 }
@@ -1662,7 +1662,7 @@ start_openvpn_local() {
 
     /usr/local/bin/openvpn.sh &
 
-    SERVICE_PIDS[vpn]=$!
+    SERVICE_PIDS["vpn"]=$!
 }
 
 start_wireguard_local() {
@@ -1670,9 +1670,9 @@ start_wireguard_local() {
         # WireGuard interface is now active.
         # Use a dummy process (sleep) to track in SERVICE_PIDS since wg-quick terminates
         sleep infinity &
-        SERVICE_PIDS[vpn]=$!
+        SERVICE_PIDS["vpn"]=$!
     else
-        SERVICE_PIDS[vpn]=0
+        SERVICE_PIDS["vpn"]=0
         return 1
     fi
 }
@@ -1685,15 +1685,15 @@ check_vpn_routing() {
 restart_vpn_service() {
     log_json WARN "supervisor" \
         "restarting VPN (${VPN_TYPE_SELECTED})" \
-        "pid=${SERVICE_PIDS[vpn]:-unknown}"
+        "pid=${SERVICE_PIDS["vpn"]:-unknown}"
 
-    kill_if_running "${SERVICE_PIDS[vpn]}"
+    kill_if_running "${SERVICE_PIDS["vpn"]}"
 
-    if [ -n "${SERVICE_PIDS[vpn]}" ]; then
-        wait "${SERVICE_PIDS[vpn]}" 2>/dev/null || true
+    if [ -n "${SERVICE_PIDS["vpn"]}" ]; then
+        wait "${SERVICE_PIDS["vpn"]}" 2>/dev/null || true
     fi
 
-    SERVICE_PIDS[vpn]=0
+    SERVICE_PIDS["vpn"]=0
 
     cleanup_routes_on_restart
     start_vpn_service
@@ -1706,7 +1706,7 @@ restart_vpn_service() {
         if check_vpn_routing; then
             log_json INFO "supervisor" \
                 "VPN routing restored" \
-                "pid=${SERVICE_PIDS[vpn]}"
+                "pid=${SERVICE_PIDS["vpn"]}"
 
             return 0
         fi
@@ -1910,7 +1910,7 @@ start_tailscale() {
         >/var/log/tailscaled.log 2>&1 &
 
     export TAILSCALE_SOCKET="$TAILSCALE_RUN_DIR/tailscaled.sock"
-    SERVICE_PIDS[tailscaled]=$!
+    SERVICE_PIDS["tailscaled"]=$!
 
     local waited=0
 
@@ -2071,10 +2071,10 @@ supervise_all() {
                     "DNS services (unbound/dnsmasq) not ready - retrying"
 
                 kill_if_running "${SERVICE_PIDS[dnsmasq]}"
-                kill_if_running "${SERVICE_PIDS[unbound]}"
+                kill_if_running "${SERVICE_PIDS["unbound"]}"
 
                 SERVICE_PIDS[dnsmasq]=0
-                SERVICE_PIDS[unbound]=0
+                SERVICE_PIDS["unbound"]=0
 
                 sleep 5
 
@@ -2207,14 +2207,14 @@ supervise_all() {
 
         log_json INFO "supervisor" \
             "all services running" \
-            "vpn=${SERVICE_PIDS[vpn]}" \
+            "vpn=${SERVICE_PIDS["vpn"]}" \
             "dnsmasq=${SERVICE_PIDS[dnsmasq]:-unknown}" \
-            "privoxy=${SERVICE_PIDS[privoxy]:-unknown}" \
-            "nginx_auth=${SERVICE_PIDS[nginx]:-disabled}" \
-            "unbound=${SERVICE_PIDS[unbound]:-disabled}" \
-            "metrics=${SERVICE_PIDS[metrics]:-disabled}" \
-            "dot_refresh=${SERVICE_PIDS[dot_refresh]:-disabled}" \
-            "blocklist_refresh=${SERVICE_PIDS[blocklist_refresh]:-disabled}"
+            "privoxy=${SERVICE_PIDS["privoxy"]:-unknown}" \
+            "nginx_auth=${SERVICE_PIDS["nginx"]:-disabled}" \
+            "unbound=${SERVICE_PIDS["unbound"]:-disabled}" \
+            "metrics=${SERVICE_PIDS["metrics"]:-disabled}" \
+            "dot_refresh=${SERVICE_PIDS["dot_refresh"]:-disabled}" \
+            "blocklist_refresh=${SERVICE_PIDS["blocklist_refresh"]:-disabled}"
 
         # -------------------------------------------------------------------
         # Stabilisation initiale
@@ -2360,7 +2360,7 @@ supervise_all() {
             # ---------------------------------------------------------------
 
             if [ "$fail" -eq 0 ] &&
-                ! is_process_running "${SERVICE_PIDS[vpn]}"; then
+                ! is_process_running "${SERVICE_PIDS["vpn"]}"; then
 
                 log_json ERROR "supervisor" \
                     "openvpn process died"
@@ -2394,9 +2394,9 @@ supervise_all() {
             # ---------------------------------------------------------------
 
             if [ "$fail" -eq 0 ] &&
-                [ "${SERVICE_PIDS[nginx]}" -ne 0 ]; then
+                [ "${SERVICE_PIDS["nginx"]}" -ne 0 ]; then
 
-                if ! is_process_running "${SERVICE_PIDS[nginx]}"; then
+                if ! is_process_running "${SERVICE_PIDS["nginx"]}"; then
                     log_json ERROR "supervisor" \
                         "nginx auth proxy died"
 
@@ -2416,7 +2416,7 @@ supervise_all() {
             if [ "$fail" -eq 0 ] &&
                 [ "${ENABLE_DOT:-false}" = "true" ]; then
 
-                if ! is_process_running "${SERVICE_PIDS[unbound]}"; then
+                if ! is_process_running "${SERVICE_PIDS["unbound"]}"; then
                     log_json ERROR "supervisor" \
                         "unbound process died"
 
@@ -2455,9 +2455,9 @@ supervise_all() {
             # ---------------------------------------------------------------
 
             if [ "$fail" -eq 0 ] &&
-                [ "${SERVICE_PIDS[tailscaled]}" -ne 0 ]; then
+                [ "${SERVICE_PIDS["tailscaled"]}" -ne 0 ]; then
 
-                if ! is_process_running "${SERVICE_PIDS[tailscaled]}"; then
+                if ! is_process_running "${SERVICE_PIDS["tailscaled"]}"; then
                     log_json ERROR "supervisor" \
                         "tailscaled process died"
 
@@ -2523,24 +2523,24 @@ supervise_all() {
         # On arrête uniquement les processus dont le superviseur connaît
         # le PID afin d'éviter de tuer le superviseur ou un autre service.
 
-        kill_if_running "${SERVICE_PIDS[vpn]}"
-        kill_if_running "${SERVICE_PIDS[privoxy]}"
-        kill_if_running "${SERVICE_PIDS[nginx]}"
+        kill_if_running "${SERVICE_PIDS["vpn"]}"
+        kill_if_running "${SERVICE_PIDS["privoxy"]}"
+        kill_if_running "${SERVICE_PIDS["nginx"]}"
         kill_if_running "${SERVICE_PIDS[dnsmasq]}"
-        kill_if_running "${SERVICE_PIDS[tailscaled]}"
-        kill_if_running "${SERVICE_PIDS[unbound]}"
+        kill_if_running "${SERVICE_PIDS["tailscaled"]}"
+        kill_if_running "${SERVICE_PIDS["unbound"]}"
 
         # Attendre proprement les processus.
         local pids_to_wait=""
 
         local pid
         for pid in \
-            "${SERVICE_PIDS[vpn]}" \
-            "${SERVICE_PIDS[privoxy]}" \
-            "${SERVICE_PIDS[nginx]}" \
+            "${SERVICE_PIDS["vpn"]}" \
+            "${SERVICE_PIDS["privoxy"]}" \
+            "${SERVICE_PIDS["nginx"]}" \
             "${SERVICE_PIDS[dnsmasq]}" \
-            "${SERVICE_PIDS[tailscaled]}" \
-            "${SERVICE_PIDS[unbound]}"; do
+            "${SERVICE_PIDS["tailscaled"]}" \
+            "${SERVICE_PIDS["unbound"]}"; do
 
             if [ -n "$pid" ] && [ "$pid" -ne 0 ]; then
                 pids_to_wait="$pids_to_wait $pid"
@@ -2556,12 +2556,12 @@ supervise_all() {
         cleanup_routes_on_restart
 
         # Réinitialiser les PIDs.
-        SERVICE_PIDS[vpn]=0
-        SERVICE_PIDS[privoxy]=0
-        SERVICE_PIDS[nginx]=0
+        SERVICE_PIDS["vpn"]=0
+        SERVICE_PIDS["privoxy"]=0
+        SERVICE_PIDS["nginx"]=0
         SERVICE_PIDS[dnsmasq]=0
-        SERVICE_PIDS[tailscaled]=0
-        SERVICE_PIDS[unbound]=0
+        SERVICE_PIDS["tailscaled"]=0
+        SERVICE_PIDS["unbound"]=0
 
         DOT_RESOLVED_IPS=""
         unset DOT_HOST_IP_MAP
@@ -2654,3 +2654,4 @@ log_json INFO "start.sh" \
 mkdir -p "$METRICS_DIR"
 
 supervise_all
+
