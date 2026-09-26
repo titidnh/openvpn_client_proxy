@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **DNS Blocklist** (optional feature):
+  - New environment variables: `ENABLE_DNS_BLOCKLIST`, `DNS_BLOCKLIST_URLS`, `DNS_BLOCKLIST_REFRESH_INTERVAL`, `DNS_BLOCKLIST_MIN_AGE`, `DNS_BLOCKLIST_ALLOWLIST`
+  - Download and compile DNS blocklists from multiple sources (hosts, adblock, raw formats)
+  - Integration with dnsmasq and unbound with automatic reload
+  - Cache management with configurable TTL and refresh interval
+  - Fallback mechanism when blocklist download fails
+
+### Fixed
+- **DoT Stability**: Improved DNS-over-TLS resolver IP rotation
+  - Added idempotent firewall rules for port 853 (DoT)
+  - Immediate rule application on DoT resolver IP resolution
+  - Purge of obsolete port 853 rules during refresh cycles
+
+### Changed
+- **DNS Configuration**: Behavior may be more strict when DoT + blocklist are enabled
+  - Expect stricter domain filtering in DNS responses
+
+---
+
 ## [2.0.0] - 2026-08-09
 
 ### Code Quality Improvements
