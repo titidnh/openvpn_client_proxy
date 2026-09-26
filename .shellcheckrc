@@ -2,6 +2,8 @@
 # Disable specific warnings that are intentionally used in this codebase
 
 # SC1091: Not following sourced files (runtime paths like /usr/local/lib/)
+# SC2015: A && B || C pattern (intentional, used throughout codebase)
+# SC2034: Variable appears unused (used in other sourced modules)
 # SC2154: Referenced but not assigned (env vars)
 # SC2046: Quote to avoid word splitting
 # SC2206: Quote to avoid word splitting in array
@@ -12,4 +14,4 @@
 # SC2115: Argument mismatch with mv/rm
 # SC2048: Word splitting in arrays
 # SC2181: Check exit code directly
-disable=SC1091,SC2154,SC2046,SC2206,SC2086,SC2166,SC2162,SC2254,SC2115,SC2048,SC2181
+disable=SC1091,SC2015,SC2034,SC2154,SC2046,SC2206,SC2086,SC2166,SC2162,SC2254,SC2115,SC2048,SC2181
