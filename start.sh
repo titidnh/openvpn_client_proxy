@@ -2644,6 +2644,9 @@ trap cleanup INT TERM
 # Point d'entrée principal
 # ===========================================================================
 
+# Initialiser les variables d'environnement avec leurs valeurs par défaut
+init_environment
+
 log_json INFO "start.sh" \
     "Starting openvpn_client_proxy" \
     "version=2.1.0"

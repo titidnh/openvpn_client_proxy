@@ -33,6 +33,7 @@ readonly DEFAULT_VPN_CONF="${DEFAULT_VPN_DIR}/vpn.conf"
 readonly DEFAULT_RESOLV_CONF="/etc/resolv.conf"
 readonly DEFAULT_DNSMASQ_CONF="/etc/dnsmasq.conf"
 readonly DEFAULT_PRIVOXY_CONF="/etc/privoxy/privoxy.config"
+readonly DEFAULT_METRICS_DIR="/var/tmp/metrics"
 
 # DNS par défaut (AdGuard DNS - toujours valide en 2026)
 readonly DEFAULT_DNS_SERVER_1="94.140.14.14"
@@ -506,6 +507,7 @@ init_environment() {
     # Chemins
     : "${conf:=$DEFAULT_VPN_CONF}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
+    : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
 }
 
 # ===========================================================================
