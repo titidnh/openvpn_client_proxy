@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # ============================================================================
 # lib/dot.sh - DNS over TLS (DoT) and Unbound management
 # Extracted from start.sh
@@ -772,3 +772,4 @@ start_dot_ip_refresh() {
         "refresh loop started" \
         "pid=${SERVICE_PIDS[dot_refresh]}"
 }
+
