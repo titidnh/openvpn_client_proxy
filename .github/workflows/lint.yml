@@ -1,0 +1,36 @@
+name: Shell lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint:
+    name: shfmt + shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck wget
+          # Install shfmt (mvdan/sh) latest known release
+          SHFMT_VER="v3.7.1"
+          wget -qO /usr/local/bin/shfmt https://github.com/mvdan/sh/releases/download/${SHFMT_VER}/shfmt_${SHFMT_VER}_linux_amd64
+          chmod +x /usr/local/bin/shfmt
+
+      - name: shfmt check (list files needing formatting)
+        run: |
+          shfmt -l . | tee shfmt.out
+          if [ -s shfmt.out ]; then
+            echo "shfmt found formatting issues:" && cat shfmt.out
+            exit 1
+          fi
+
+      - name: shellcheck
+        run: |
+          # Find shell scripts and run shellcheck
+          find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck -x || exit 1
