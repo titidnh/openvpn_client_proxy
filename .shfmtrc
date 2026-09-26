@@ -1,0 +1,9 @@
+# shfmt configuration for consistent shell script formatting
+# -i: indent size (4 spaces)
+# -bn: binary operators at beginning of line
+# -ci: indent switch cases
+# -sr: space after redirect operators
+--indent=4
+--binary-next-line
+--case-indent
+--space-redirects

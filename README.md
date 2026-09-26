@@ -19,6 +19,7 @@
 - [Network Kill Switch](#network-kill-switch)
 - [DNS Leak Protection](#dns-leak-protection)
 - [DNS-over-TLS (Optional)](#dns-over-tls-optional)
+- [DNS Blocklist (Optional)](#dns-blocklist-optional)
 - [Split DNS (Optional)](#split-dns-optional)
 - [Prometheus Metrics (Optional)](#prometheus-metrics-optional)
 - [Structured JSON Logs](#structured-json-logs)
@@ -346,6 +347,11 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `ENABLE_DNSSEC` | `false` | Set to `true` to enable strict DNSSEC validation in unbound. Initialises the root trust anchor via `unbound-anchor`. Leave `false` for zones that are not DNSSEC-signed. |
 | `DOT_TLS_CERT_BUNDLE` | *(system CA)* | Path to a PEM bundle for TLS certificate verification of DoT servers. Defaults to Alpine's system bundle. Mount a restricted bundle for certificate pinning (e.g. `-v ./my-ca.pem:/vpn/dot-ca.pem:ro` then `DOT_TLS_CERT_BUNDLE=/vpn/dot-ca.pem`). |
 | `DOT_IP_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of DoT server hostnames. If an IP changes, iptables rules are updated atomically. Set to `0` to disable. |
+| `ENABLE_DNS_BLOCKLIST` | `false` | Set to `true` to enable optional DNS blocklist support. Downloads, compiles, and periodically refreshes blocklists from `DNS_BLOCKLIST_URLS`. |
+| `DNS_BLOCKLIST_URLS` | *(empty)* | Space or comma-separated list of blocklist URLs (supports `hosts`, `adblock`, and raw newline-delimited formats). Example: `https://raw.githubusercontent.com/.../hosts.txt https://adaway.org/hosts.txt`. Used only when `ENABLE_DNS_BLOCKLIST=true`. |
+| `DNS_BLOCKLIST_REFRESH_INTERVAL` | `86400` | Seconds between automatic blocklist refresh cycles (default: 24 hours). Set to `0` to disable periodic refresh. |
+| `DNS_BLOCKLIST_MIN_AGE` | `3600` | Minimum age (in seconds) of a cached blocklist before attempting a refresh. Prevents thrashing on network errors. |
+| `DNS_BLOCKLIST_ALLOWLIST` | *(empty)* | Comma or newline-separated list of domains to whitelist (prevent from being blocked by the DNS blocklist). Example: `example.com,trusted.local`. |
 | `DNS_SPLIT` | *(empty)* | Comma-separated list of `domain=resolver[:port]` entries for split DNS. Routes those domains to an internal resolver instead of the default upstream. Works in both DoT and plain modes. Example: `corp.local=10.0.0.53,internal.net=10.0.1.53:5353` |
 | `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint on `127.0.0.1:9100`. The port is loopback-only (iptables enforced). |
 | `DROP_CAPS` | `false` | Set to `true` to drop all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after all services have started. |
@@ -518,6 +524,160 @@ docker exec <container> nslookup example.com 8.8.8.8
 
 # Should work — via local chain: dnsmasq → unbound → DoT
 docker exec <container> nslookup example.com 127.0.0.1
+```
+
+---
+
+## DNS Blocklist (Optional)
+
+DNS-level blocklisting adds an extra layer of protection by sinkhole-blocking known ad/tracking/malware domains at the DNS level. Instead of returning the real IP address, dnsmasq/unbound returns a local IP (usually `127.0.0.1` or `0.0.0.0`), causing client requests to the blocked domain to fail immediately.
+
+### Architecture with DNS Blocklist enabled
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        Docker Container                          │
+│                                                                  │
+│  App → dnsmasq → Blocklist rules (hosts/adblock/raw) → response │
+│        │                                                         │
+│        └─ If DoT enabled → unbound :5053 ──TLS:853──→ DoT srv   │
+│                                                                  │
+│  iptables: DNS blocklist + VPN tunnel enforcement + leaks block  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- Blocklists are downloaded and compiled into multiple formats: `hosts`, `adblock`, and raw domain lists
+- dnsmasq loads the compiled list and immediately responds with a sinkhole IP
+- **Works in both plain DNS and DoT modes**
+- Supports automatic periodic refresh with configurable interval and cache TTL
+- Includes allowlist mechanism to prevent false positives (domains that should NOT be blocked)
+- Graceful fallback if blocklist download fails
+
+### Supported Blocklist Formats
+
+| Format | Example Source | Syntax |
+|---|---|---|
+| **hosts** | `/etc/hosts` style | `0.0.0.0 domain.com` or `127.0.0.1 domain.com` |
+| **adblock** | `uBlock Origin` compatible | `domain.com^` or `domain.com` (one per line) |
+| **raw list** | Newline-delimited domains | `domain.com` (plain domain name, one per line) |
+
+### Enabling DNS Blocklist
+
+```bash
+docker run \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -e ENABLE_DNS_BLOCKLIST=true \
+  -e DNS_BLOCKLIST_URLS="https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts" \
+  -v ./vpn:/vpn:ro \
+  -p 3128:3128 \
+  titidnh/openvpn_client_proxy:latest
+```
+
+Or in Docker Compose:
+
+```yaml
+environment:
+  ENABLE_DNS_BLOCKLIST: "true"
+  DNS_BLOCKLIST_URLS: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+```
+
+### Multiple blocklist sources
+
+Pass multiple URLs separated by spaces or commas. dnsmasq will compile and deduplicate all sources:
+
+```yaml
+DNS_BLOCKLIST_URLS: >
+  https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+  https://adaway.org/hosts.txt
+  https://malwaredomains.com/files/justdomains
+```
+
+### Allowlist — Preventing false positives
+
+If the blocklist incorrectly blocks a legitimate domain, add it to the allowlist:
+
+```yaml
+DNS_BLOCKLIST_ALLOWLIST: "example.com,trusted-cdn.local"
+```
+
+The allowlist is checked **after** the blocklist is compiled. Entries support wildcards:
+
+```yaml
+DNS_BLOCKLIST_ALLOWLIST: >
+  trusted.local
+  *.internal.corp
+  example.com
+```
+
+### Refresh cycle behavior
+
+The blocklist refresh runs every `DNS_BLOCKLIST_REFRESH_INTERVAL` seconds (default: 86400 = 24 hours):
+
+1. **Download**: Fetch all URLs from `DNS_BLOCKLIST_URLS` in parallel
+2. **Guard rails**: Enforce minimum list size (prevent blank/partial downloads), validate domain syntax
+3. **Compile**: Merge all sources into dnsmasq-compatible format (deduplication + allowlist exclusion)
+4. **Reload**: Signal dnsmasq/unbound to reload configuration **without** restarting
+5. **Cache**: On download failure, fallback to the cached copy (if available and not older than `DNS_BLOCKLIST_MIN_AGE`)
+
+### Refresh interval tuning
+
+```yaml
+# Default: 24 hours
+DNS_BLOCKLIST_REFRESH_INTERVAL: "86400"
+
+# Aggressive: every 6 hours
+DNS_BLOCKLIST_REFRESH_INTERVAL: "21600"
+
+# Conservative: every 7 days
+DNS_BLOCKLIST_REFRESH_INTERVAL: "604800"
+
+# Disable periodic refresh (only load once at startup)
+DNS_BLOCKLIST_REFRESH_INTERVAL: "0"
+```
+
+### Cache and minimum age
+
+```yaml
+# Prevent refresh attempts if the cached list is less than 1 hour old
+# (useful when download fails frequently)
+DNS_BLOCKLIST_MIN_AGE: "3600"
+
+# Disable cache TTL (always attempt refresh)
+DNS_BLOCKLIST_MIN_AGE: "0"
+```
+
+### Checking blocklist status
+
+After startup, check if the blocklist loaded successfully:
+
+```sh
+docker logs <container> | grep "blocklist\|dns_blocklist"
+# → {"component":"dns_blocklist","msg":"loaded ...domains","count":"50000"}
+```
+
+Inspect the compiled blocklist inside the container:
+
+```sh
+# View first 20 entries
+docker exec <container> head -20 /tmp/blocklist.hosts
+
+# Count unique domains
+docker exec <container> wc -l /tmp/blocklist.hosts
+```
+
+Test that blocking works:
+
+```sh
+# Should resolve to localhost (blocked)
+docker exec <container> nslookup ads.google.com 127.0.0.1
+# → Server:  127.0.0.1
+# → Address: 127.0.0.1#53
+# → Name: ads.google.com
+# → Address: 0.0.0.0    ← Sinkhole response
+
+# Should resolve normally (not blocked)
+docker exec <container> nslookup google.com 127.0.0.1
 ```
 
 ---
@@ -891,6 +1051,100 @@ services:
       DROP_CAPS: "true"
 ```
 
+### With DNS Blocklist (strict filtering)
+
+```yaml
+services:
+  vpnproxy:
+    image: titidnh/openvpn_client_proxy:latest
+    container_name: vpn_proxy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 192M   # Blocklist compilation requires extra memory
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    volumes:
+      - ./vpn:/vpn:ro
+      - blocklist-cache:/tmp  # Optional: persist compiled blocklists across restarts
+    ports:
+      - "127.0.0.1:3128:3128"
+    environment:
+      # DNS Blocklist configuration
+      ENABLE_DNS_BLOCKLIST: "true"
+      DNS_BLOCKLIST_URLS: >
+        https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+        https://adaway.org/hosts.txt
+      DNS_BLOCKLIST_REFRESH_INTERVAL: "86400"    # Daily refresh
+      DNS_BLOCKLIST_MIN_AGE: "3600"              # At least 1 hour old to refresh
+      DNS_BLOCKLIST_ALLOWLIST: "trusted.local,example.com"
+
+volumes:
+  blocklist-cache:
+```
+
+### Full — DoT + DNS Blocklist + Tailscale exit node
+
+```yaml
+services:
+  vpnproxy:
+    image: titidnh/openvpn_client_proxy:latest
+    container_name: vpn_proxy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+    volumes:
+      - ./vpn:/vpn:ro
+      - tailscale-state:/var/lib/tailscale
+      - blocklist-cache:/tmp
+    ports:
+      - "3128:3128"
+    environment:
+      # DoT + DNSSEC
+      ENABLE_DOT: "true"
+      DOT_DNS_SERVERS: "tls://dns.adguard-dns.com"
+      DOT_IP_REFRESH_INTERVAL: "3600"
+      ENABLE_DNSSEC: "false"
+
+      # DNS Blocklist
+      ENABLE_DNS_BLOCKLIST: "true"
+      DNS_BLOCKLIST_URLS: >
+        https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+        https://adaway.org/hosts.txt
+      DNS_BLOCKLIST_REFRESH_INTERVAL: "86400"
+      DNS_BLOCKLIST_ALLOWLIST: "trusted.local"
+
+      # Tailscale exit node
+      ENABLE_TAILSCALE: "true"
+      TAILSCALE_AUTHKEY: "tskey-auth-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      TAILSCALE_HOSTNAME: "my-vpn-exit-node"
+      TAILSCALE_ADVERTISE_EXIT_NODE: "true"
+
+      # Proxy auth
+      PROXY_USER: "alice"
+      PROXY_PASS: "s3cr3t!"
+
+      # Metrics
+      ENABLE_METRICS: "true"
+      DROP_CAPS: "true"
+
+volumes:
+  tailscale-state:
+  blocklist-cache:
+```
+
 ### Full — OpenVPN + Proxy auth + Tailscale exit node
 
 ```yaml
@@ -1244,6 +1498,108 @@ Check the generated unbound config:
 docker exec <container> cat /etc/unbound/unbound.conf
 docker exec <container> unbound-checkconf /etc/unbound/unbound.conf
 ```
+
+### DNS Blocklist not blocking / failed to load
+
+Check if the blocklist loaded successfully:
+
+```sh
+docker logs <container> | grep "blocklist\|dns_blocklist"
+# → {"component":"dns_blocklist","msg":"loaded 50000 domains"}
+```
+
+Verify the blocklist files were created:
+
+```sh
+# Check if compiled blocklist exists
+docker exec <container> ls -lh /tmp/blocklist.*
+
+# View a sample of domains
+docker exec <container> head -20 /tmp/blocklist.hosts
+```
+
+If the blocklist exists but domains are not being blocked:
+
+1. **Verify dnsmasq reloaded the config**:
+   ```sh
+   docker exec <container> cat /etc/dnsmasq.conf | grep "addn-hosts"
+   ```
+
+2. **Test a known blocked domain**:
+   ```sh
+   docker exec <container> nslookup ads.google.com 127.0.0.1
+   # Should return 0.0.0.0 or 127.0.0.1 (sinkhole response)
+   ```
+
+3. **Check if the domain is in the allowlist**:
+   ```sh
+   docker exec <container> grep -F "example.com" /tmp/blocklist.allowlist
+   ```
+
+### DNS Blocklist download failure / cache fallback
+
+If blocklist URLs are unreachable, the container falls back to cached copies. Check logs:
+
+```sh
+docker logs <container> | grep -i "download\|cache\|blocklist"
+# → {"component":"dns_blocklist","msg":"download failed, using cache from 2025-01-15T10:23:01Z"}
+```
+
+To manually retry the download:
+
+```sh
+docker exec <container> curl -sL -o /tmp/test.list "https://example.com/blocklist.txt"
+docker exec <container> wc -l /tmp/test.list
+```
+
+If all blocklist URLs fail to download:
+
+1. Check container internet connectivity:
+   ```sh
+   docker exec <container> curl -sL https://www.google.com -I
+   ```
+
+2. Check if the URLs are reachable:
+   ```sh
+   docker exec <container> curl -sL -I "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+   ```
+
+3. Disable blocklist and confirm other DNS functions work:
+   ```yaml
+   ENABLE_DNS_BLOCKLIST: "false"
+   ```
+
+### DNS Blocklist too large / memory issues
+
+If the compiled blocklist is very large (>100MB), consider:
+
+1. **Use fewer sources**:
+   ```yaml
+   DNS_BLOCKLIST_URLS: "https://adaway.org/hosts.txt"
+   ```
+
+2. **Increase container memory**:
+   ```yaml
+   deploy:
+     resources:
+       limits:
+         memory: 256M
+   ```
+
+3. **Monitor compiled list size**:
+   ```sh
+   docker exec <container> du -h /tmp/blocklist.*
+   ```
+
+### False positives — legitimate domain blocked
+
+Add the domain to the allowlist and restart/refresh:
+
+```yaml
+DNS_BLOCKLIST_ALLOWLIST: "trusted.local,example.com,cdn.trusted.com"
+```
+
+The allowlist is recompiled on the next refresh cycle (or immediately on container restart).
 
 ### DNSSEC failures (`SERVFAIL` on valid domains)
 

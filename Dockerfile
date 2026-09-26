@@ -82,6 +82,11 @@ ENV ENABLE_TAILSCALE=false \
     ENABLE_DNSSEC=false \
     DOT_TLS_CERT_BUNDLE="" \
     DOT_IP_REFRESH_INTERVAL=3600 \
+    ENABLE_DNS_BLOCKLIST=false \
+    DNS_BLOCKLIST_URLS="https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts" \
+    DNS_BLOCKLIST_REFRESH_INTERVAL=86400 \
+    DNS_BLOCKLIST_MIN_AGE=3600 \
+    DNS_BLOCKLIST_ALLOWLIST="" \
     DNS_SPLIT="" \
     ENABLE_METRICS=false \
     DROP_CAPS=false \
@@ -150,11 +155,16 @@ COPY --chmod=0755 vpn-startup.sh  /usr/local/bin/vpn-startup.sh
 COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh        /start.sh
 
-# Copier la bibliothèque de fonctions communes
-COPY --chmod=0755 lib/common.sh   /usr/local/lib/common.sh
+# Copier les bibliothèques de fonctions
+COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
+COPY --chmod=0755 lib/dns_blocklist.sh /usr/local/lib/dns_blocklist.sh
+COPY --chmod=0755 lib/firewall.sh     /usr/local/lib/firewall.sh
+COPY --chmod=0755 lib/dot.sh          /usr/local/lib/dot.sh
+COPY --chmod=0755 lib/supervisor.sh   /usr/local/lib/supervisor.sh
+COPY --chmod=0755 lib/dns_runtime.sh  /usr/local/lib/dns_runtime.sh
 
-# Supprimer les retours chariot (pour compatibilité Windows)
-RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/vpn-selector.sh /usr/local/bin/vpn-startup.sh /usr/local/bin/healthcheck.sh
+# Supprimer les retours chariot (pour compatibilité Windows CRLF → LF)
+RUN find /usr/local/bin /usr/local/lib /start.sh -type f \( -name '*.sh' -o -name 'start.sh' \) -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
 # Copier la configuration Privoxy et les fichiers de filtres
 COPY --chown=vpn:vpn \
