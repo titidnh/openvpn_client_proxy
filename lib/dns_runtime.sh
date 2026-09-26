@@ -170,8 +170,22 @@ wait_for_dns_ready() {
 }
 
 reconfigure_dnsmasq_to_unbound() {
+    local old_pid="${SERVICE_PIDS[dnsmasq]:-0}"
+
     log_json INFO "reconfigure_dnsmasq" "Reconfiguring dnsmasq to use unbound"
-    kill_if_running "${SERVICE_PIDS[dnsmasq]}"
+
+    if [ -n "$old_pid" ] && [ "$old_pid" != "0" ] && is_process_running "$old_pid"; then
+        kill_if_running "$old_pid"
+
+        if ! wait_for_process "$old_pid" 10; then
+            log_json WARN "reconfigure_dnsmasq" \
+                "dnsmasq did not exit cleanly - forcing shutdown" \
+                "pid=${old_pid}"
+            kill -9 "$old_pid" 2>/dev/null || true
+            wait_for_process "$old_pid" 5 || true
+        fi
+    fi
+
     SERVICE_PIDS[dnsmasq]=0
     start_dnsmasq
 }

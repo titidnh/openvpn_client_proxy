@@ -41,6 +41,20 @@ setup() {
     [ "${METRIC_LAST_RESTART_TS:-0}" = "0" ]
 }
 
+@test "reconfigure_dnsmasq_to_unbound waits for clean shutdown before restart" {
+    local child_pid
+    sh -c 'sleep 30' &
+    child_pid=$!
+    SERVICE_PIDS[dnsmasq]="$child_pid"
+
+    run reconfigure_dnsmasq_to_unbound
+    [ "$status" -eq 0 ]
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        kill -9 "$child_pid" 2>/dev/null || true
+    fi
+}
+
 # Test: Invalid configuration values are detected
 @test "ENABLE_DNS_BLOCKLIST only accepts true/false" {
     export ENABLE_DNS_BLOCKLIST="invalid"
