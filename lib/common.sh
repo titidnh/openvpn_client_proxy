@@ -542,6 +542,12 @@ init_environment() {
     : "${conf:=$DEFAULT_VPN_CONF}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
     : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
+    : "${RESOLV_CONF:=$DEFAULT_RESOLV_CONF}"
+    : "${DOT_IP_MAP_FILE:=/tmp/dot_ip_map}"
+    : "${DOT_FORWARD_ADDRS_FILE:=/tmp/dot_forward_addrs}"
+    : "${UNBOUND_CONF:=/etc/unbound/unbound.conf}"
+    : "${DNS_BLOCKLIST_COMPILED_UNBOUND:=/tmp/dns_blocklist_unbound.conf}"
+    : "${DNS_BLOCKLIST_COMPILED_DNSMASQ:=/tmp/dns_blocklist_dnsmasq.conf}"
 }
 
 # ===========================================================================
