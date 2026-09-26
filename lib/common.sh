@@ -492,6 +492,13 @@ init_environment() {
     # DoT
     : "${DOT_DNS_SERVERS:=tls://dns.adguard-dns.com,tls://dns.quad9.net}"
     : "${DOT_IP_REFRESH_INTERVAL:=3600}"
+
+    # Blocage DNS pub/tracking
+    : "${ENABLE_DNS_BLOCKLIST:=false}"
+    : "${DNS_BLOCKLIST_URLS:=https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts}"
+    : "${DNS_BLOCKLIST_REFRESH_INTERVAL:=86400}"
+    : "${DNS_BLOCKLIST_MIN_AGE:=3600}"
+    : "${DNS_BLOCKLIST_ALLOWLIST:=}"
     
     # Healthcheck
     : "${SKIP_HEALTHCHECK_FIRST_MINUTES:=2}"
