@@ -358,6 +358,6 @@ supervise_all() {
         log_json INFO "supervisor" "stabilization wait ${sleep_s}s" "attempt=${attempt}"
         sleep "$sleep_s"
 
-        SKIP_HEALTHCHECK_FIRST_MINUTES=$(( (${SKIP_HEALTHCHECK_FIRST_MINUTES:-0} + 5) ))
+        SKIP_HEALTHCHECK_FIRST_MINUTES=$(( ${SKIP_HEALTHCHECK_FIRST_MINUTES:-0} + 5 ))
     done
 }
