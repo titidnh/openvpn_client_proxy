@@ -1,4 +1,31 @@
 #!/bin/bash
+# lib/dns_blocklist.sh - DNS blocklist pipeline (skeleton)
+# Functions are defined only if not already present to allow gradual extraction.
+
+if ! declare -F download_blocklist >/dev/null 2>&1; then
+download_blocklist() {
+    log_json INFO "dns_blocklist" "download_blocklist placeholder"
+    # TODO: implement download logic (support hosts/adblock/raw)
+    return 0
+}
+fi
+
+if ! declare -F compile_blocklist >/dev/null 2>&1; then
+compile_blocklist() {
+    log_json INFO "dns_blocklist" "compile_blocklist placeholder"
+    # TODO: implement compilation into dnsmasq/unbound include files
+    return 0
+}
+fi
+
+if ! declare -F start_blocklist_refresh >/dev/null 2>&1; then
+start_blocklist_refresh() {
+    log_json INFO "dns_blocklist" "start_blocklist_refresh placeholder"
+    # TODO: spawn periodic refresh loop
+    return 0
+}
+fi
+#!/bin/bash
 #
 # dns_blocklist.sh - DNS Blocklist management module
 # 
