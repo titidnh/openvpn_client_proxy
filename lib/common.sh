@@ -531,10 +531,13 @@ init_environment() {
     : "${PROXY_PASS:=}"
     : "${PROXY_PROFILE:=normal}"
     : "${ALLOW_EXTERNAL_PROXY_ACCESS:=false}"
+    : "${PROXY_TEST_HOST:=$DEFAULT_PROXY_TEST_HOST}"
+    : "${PROXY_TEST_URL:=$DEFAULT_PROXY_TEST_URL}"
     
     # DNS
     : "${DNS_SERVER_1:=$DEFAULT_DNS_SERVER_1}"
     : "${DNS_SERVER_2:=$DEFAULT_DNS_SERVER_2}"
+    : "${DNS_PORT:=$DEFAULT_DNS_PORT}"
     : "${HEALTHCHECK_IP:=$DEFAULT_HEALTHCHECK_IP}"
     : "${ROUTE_TEST_IP:=$DEFAULT_ROUTE_TEST_IP}"
     
@@ -542,6 +545,7 @@ init_environment() {
     : "${ENABLE_DOT:=false}"
     : "${DOT_DNS_SERVERS:=tls://dns.adguard-dns.com,tls://dns.quad9.net}"
     : "${DOT_IP_REFRESH_INTERVAL:=3600}"
+    : "${DOT_PORT:=$DEFAULT_DOT_PORT}"
     : "${ENABLE_DNSSEC:=false}"
     : "${DOT_TLS_CERT_BUNDLE:=}"
     : "${DNS_SPLIT:=}"
@@ -566,15 +570,19 @@ init_environment() {
     
     # Metrics
     : "${ENABLE_METRICS:=false}"
+    : "${METRICS_PORT:=$DEFAULT_METRICS_PORT}"
     
     # Security
     : "${DROP_CAPS:=false}"
     
-    # Chemins
+    # Directories and file paths
+    : "${VPN_DIR:=$DEFAULT_VPN_DIR}"
     : "${conf:=$DEFAULT_VPN_CONF}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
     : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
     : "${RESOLV_CONF:=$DEFAULT_RESOLV_CONF}"
+    : "${DNSMASQ_CONF:=$DEFAULT_DNSMASQ_CONF}"
+    : "${PRIVOXY_CONF:=$DEFAULT_PRIVOXY_CONF}"
     : "${DOT_IP_MAP_FILE:=/tmp/dot_ip_map}"
     : "${DOT_FORWARD_ADDRS_FILE:=/tmp/dot_forward_addrs}"
     : "${UNBOUND_CONF:=/etc/unbound/unbound.conf}"
