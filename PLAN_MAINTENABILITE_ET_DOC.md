@@ -352,6 +352,78 @@ Definition of Done:
 - Chaque commit = 1 objectif unique = 1 rollback possible.
 - Ne jamais melanger: style + logique + refactor.
 
+### Checklist pre-commit (a executer avant chaque PR)
+
+- Verifier: `git status` affiche uniquement les fichiers prevus.
+- Verifier: `git diff --staged --name-only` montre seulement les fichiers attends pour le commit.
+- Verifier: aucune modification EOL non desiree: `git ls-files -z | xargs -0 dos2unix --check` (ou outil equivalent).
+- Linter local: `shellcheck` sur les scripts modifies.
+- Format: `shfmt -w` sur les scripts modifies.
+- Tests unitaires rapides: `bats tests/*.bats` ou scripts de test pertinents.
+- Documentation: README/CHANGELOG mis a jour si necessaire.
+- Commit message: suivre la convention (ex: `chore:`, `feat:`, `fix:`, `refactor:`) et separer EOL chore des autres changements.
+
+### Commandes Git utiles pour la normalisation EOL (workflow)
+
+- Ajouter `.gitattributes` a la racine:
+
+```
+* text=auto
+*.sh text eol=lf
+*.md text eol=lf
+Dockerfile text eol=lf
+```
+
+- Nettoyer l'index apres ajout de `.gitattributes` (sans modifier le working tree):
+
+```
+git add .gitattributes
+git rm --cached -r .
+git add --all
+git commit -m "chore: normalize line endings (LF)"
+```
+
+- Si vous avez decrits des fichiers specifiques a revert du changement EOL accidentel:
+
+```
+git checkout -- path/to/file
+```
+
+- Verification finale avant push:
+
+```
+git show --name-only --pretty="" HEAD
+git status --porcelain
+```
+
+### Notes pratiques
+
+- Ne pas inclure d'autres modifications dans le meme commit que la normalisation EOL.
+- Si vous travaillez sur Windows, configurer votre editeur pour LF par defaut et partager `.editorconfig`.
+- Ajouter une verification CI qui detecte le mix EOL/logique et echoue le pipeline si present.
+
+### Etapes pour normaliser le repo localement (exemple)
+
+1. S'assurer que vous avez commit toutes vos modifications locales ou shelvez-les temporairement (`git stash`).
+2. Ajouter et committer les fichiers de configuration EOL:
+
+```
+git add .gitattributes .editorconfig
+git commit -m "chore: add gitattributes and editorconfig for LF"
+```
+
+3. Nettoyer l'index et reappliquer les fichiers avec la normalization sans toucher le working tree:
+
+```
+git rm --cached -r .
+git add --all
+git commit -m "chore: normalize line endings (LF)"
+```
+
+4. Si vous aviez des changements non commit, reappliquez-les (`git stash pop`) et resolvez les conflits si necessaire.
+
+
+
 ---
 
 ## 5) Matrice de risques et controles
