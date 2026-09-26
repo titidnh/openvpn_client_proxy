@@ -31,6 +31,16 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "metrics variables are initialized safely under strict mode" {
+    init_environment
+
+    [ "${METRIC_VPN_UP:-0}" = "0" ]
+    [ "${METRIC_RESTART_COUNT:-0}" = "0" ]
+    [ "${METRIC_DOT_ACTIVE:-0}" = "0" ]
+    [ "${METRIC_START_TS:-0}" -gt 0 ]
+    [ "${METRIC_LAST_RESTART_TS:-0}" = "0" ]
+}
+
 # Test: Invalid configuration values are detected
 @test "ENABLE_DNS_BLOCKLIST only accepts true/false" {
     export ENABLE_DNS_BLOCKLIST="invalid"

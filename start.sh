@@ -16,19 +16,25 @@ source "/usr/local/lib/supervisor.sh"
 # ===========================================================================
 
 update_metrics() {
-    printf '%s\n' "${METRIC_VPN_UP}" \
+    local vpn_up="${METRIC_VPN_UP:-0}"
+    local restart_count="${METRIC_RESTART_COUNT:-0}"
+    local dot_active="${METRIC_DOT_ACTIVE:-0}"
+    local start_ts="${METRIC_START_TS:-$(date +%s)}"
+    local last_restart_ts="${METRIC_LAST_RESTART_TS:-0}"
+
+    printf '%s\n' "$vpn_up" \
         > "${METRICS_DIR}/metric_vpn_up" 2>/dev/null || true
 
-    printf '%s\n' "${METRIC_RESTART_COUNT}" \
+    printf '%s\n' "$restart_count" \
         > "${METRICS_DIR}/metric_restart_count" 2>/dev/null || true
 
-    printf '%s\n' "${METRIC_DOT_ACTIVE}" \
+    printf '%s\n' "$dot_active" \
         > "${METRICS_DIR}/metric_dot_active" 2>/dev/null || true
 
-    printf '%s\n' "${METRIC_START_TS}" \
+    printf '%s\n' "$start_ts" \
         > "${METRICS_DIR}/metric_start_ts" 2>/dev/null || true
 
-    printf '%s\n' "${METRIC_LAST_RESTART_TS}" \
+    printf '%s\n' "$last_restart_ts" \
         > "${METRICS_DIR}/metric_last_restart_ts" 2>/dev/null || true
 }
 
