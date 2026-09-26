@@ -474,40 +474,7 @@ cleanup_routes_on_restart() {
     timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
 }
 
-
-    if grep -Fq "127.0.0.11" "$RESOLV_CONF" 2>/dev/null; then
-        iptables -A OUTPUT -d 127.0.0.11 -j ACCEPT
-        iptables -A OUTPUT -p udp -d 127.0.0.11 --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
-    fi
-
-    if [ "${VPN_TYPE}" = "openvpn" ]; then
-        iptables -A OUTPUT -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
-        iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
-        iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
-
-        log_json INFO "setup_iptables" \
-            "OpenVPN firewall rules configured" \
-            "vpn_proto=${VPN_PROTO}" \
-            "vpn_port=${VPN_PORT}"
-    elif [ "${VPN_TYPE}" = "wireguard" ]; then
-        iptables -A OUTPUT -p udp --dport 51820 -j ACCEPT
-
-        iptables -A OUTPUT -o wg+ -j ACCEPT
-        iptables -t nat -A POSTROUTING -o wg+ -j MASQUERADE
-
-        log_json INFO "setup_iptables" \
-            "WireGuard firewall rules configured"
-    fi
-
-    iptables -A OUTPUT -p tcp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
-    iptables -A OUTPUT -p udp -m owner --gid-owner vpn -j ACCEPT 2>/dev/null || true
-
-    log_json INFO "setup_iptables" \
-        "IPv4 configured - kill switch active" \
-        "vpn_proto=${VPN_PROTO}" \
-        "vpn_port=${VPN_PORT}"
-}
+# Note: duplicate iptables block removed here (was mistakenly inserted)
 
 setup_ip6tables() {
     log_json INFO "setup_ip6tables" "Configuring IPv6 firewall"
