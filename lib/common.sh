@@ -518,6 +518,20 @@ write_file() {
 # Initialise les variables d'environnement avec des valeurs par défaut
 # Usage: init_environment
 init_environment() {
+    # VPN configuration
+    : "${VPN_TYPE:=openvpn}"
+    : "${OPENVPN_ENABLED:=true}"
+    : "${WIREGUARD_ENABLED:=false}"
+    : "${VPN_PROTO:=$DEFAULT_VPN_PROTO}"
+    : "${VPN_PORT:=$DEFAULT_VPN_PORT}"
+    
+    # Proxy configuration
+    : "${PROXY_PORT:=$DEFAULT_PROXY_PORT}"
+    : "${PROXY_USER:=}"
+    : "${PROXY_PASS:=}"
+    : "${PROXY_PROFILE:=normal}"
+    : "${ALLOW_EXTERNAL_PROXY_ACCESS:=false}"
+    
     # DNS
     : "${DNS_SERVER_1:=$DEFAULT_DNS_SERVER_1}"
     : "${DNS_SERVER_2:=$DEFAULT_DNS_SERVER_2}"
@@ -525,8 +539,12 @@ init_environment() {
     : "${ROUTE_TEST_IP:=$DEFAULT_ROUTE_TEST_IP}"
     
     # DoT
+    : "${ENABLE_DOT:=false}"
     : "${DOT_DNS_SERVERS:=tls://dns.adguard-dns.com,tls://dns.quad9.net}"
     : "${DOT_IP_REFRESH_INTERVAL:=3600}"
+    : "${ENABLE_DNSSEC:=false}"
+    : "${DOT_TLS_CERT_BUNDLE:=}"
+    : "${DNS_SPLIT:=}"
 
     # Blocage DNS pub/tracking
     : "${ENABLE_DNS_BLOCKLIST:=false}"
@@ -537,6 +555,20 @@ init_environment() {
     
     # Healthcheck
     : "${SKIP_HEALTHCHECK_FIRST_MINUTES:=2}"
+    
+    # Tailscale
+    : "${ENABLE_TAILSCALE:=false}"
+    : "${TAILSCALE_AUTHKEY:=}"
+    : "${TAILSCALE_FLAGS:=}"
+    : "${TAILSCALE_ACCEPT_ROUTES:=false}"
+    : "${TAILSCALE_HOSTNAME:=openvpn-client-proxy}"
+    : "${TAILSCALE_ADVERTISE_EXIT_NODE:=false}"
+    
+    # Metrics
+    : "${ENABLE_METRICS:=false}"
+    
+    # Security
+    : "${DROP_CAPS:=false}"
     
     # Chemins
     : "${conf:=$DEFAULT_VPN_CONF}"
