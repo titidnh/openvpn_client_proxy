@@ -158,9 +158,11 @@ COPY --chmod=0755 start.sh        /start.sh
 # Copier les bibliothèques de fonctions
 COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
 COPY --chmod=0755 lib/dns_blocklist.sh /usr/local/lib/dns_blocklist.sh
+COPY --chmod=0755 lib/firewall.sh     /usr/local/lib/firewall.sh
+COPY --chmod=0755 lib/dot.sh          /usr/local/lib/dot.sh
 
 # Supprimer les retours chariot (pour compatibilité Windows)
-RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/vpn-selector.sh /usr/local/bin/vpn-startup.sh /usr/local/bin/healthcheck.sh /usr/local/lib/common.sh /usr/local/lib/dns_blocklist.sh
+RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/vpn-selector.sh /usr/local/bin/vpn-startup.sh /usr/local/bin/healthcheck.sh /usr/local/lib/common.sh /usr/local/lib/dns_blocklist.sh /usr/local/lib/firewall.sh /usr/local/lib/dot.sh
 
 # Copier la configuration Privoxy et les fichiers de filtres
 COPY --chown=vpn:vpn \
