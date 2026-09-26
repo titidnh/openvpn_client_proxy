@@ -18,4 +18,5 @@
 # SC2181: Check exit code directly
 # SC2317: Command appears unreachable (false positive due to complex control flow)
 # SC2323: Unnecessary parentheses in arithmetic (style preference)
-disable=SC1091,SC2015,SC2018,SC2019,SC2034,SC2154,SC2046,SC2206,SC2086,SC2166,SC2162,SC2254,SC2115,SC2048,SC2181,SC2317,SC2323
+# SC2153: Possible misspelling of variables (env vars and dynamic assignments)
+disable=SC1091,SC2015,SC2018,SC2019,SC2034,SC2153,SC2154,SC2046,SC2206,SC2086,SC2166,SC2162,SC2254,SC2115,SC2048,SC2181,SC2317,SC2323
