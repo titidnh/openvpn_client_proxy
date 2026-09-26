@@ -4,8 +4,8 @@
 # Superviseur principal
 # ===========================================================================
 
-source "/usr/local/lib/supervisor.sh"
 source "/usr/local/lib/common.sh"
+source "/usr/local/lib/supervisor.sh"
 source "/usr/local/lib/firewall.sh"
 source "/usr/local/lib/dns_runtime.sh"
 

@@ -127,6 +127,40 @@ validate_port() {
     return 1
 }
 
+# Valide l'ensemble des variables d'environnement critiques
+# Usage: validate_environment
+validate_environment() {
+    local validation_failed=0
+
+    # Valider les ports
+    validate_number "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
+    validate_port "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
+
+    # Valider les serveurs DNS
+    if [ -n "${DNS_SERVER_1:-}" ]; then
+        validate_ip "DNS_SERVER_1" "$DNS_SERVER_1" || validation_failed=1
+    fi
+    
+    if [ -n "${DNS_SERVER_2:-}" ]; then
+        validate_ip "DNS_SERVER_2" "$DNS_SERVER_2" || validation_failed=1
+    fi
+
+    # Valider les booléens
+    validate_boolean "ENABLE_DOT" "${ENABLE_DOT:-false}" || validation_failed=1
+    validate_boolean "ENABLE_DNS_BLOCKLIST" "${ENABLE_DNS_BLOCKLIST:-false}" || validation_failed=1
+    validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
+
+    if [ "$validation_failed" -eq 1 ]; then
+        log_json WARN "validate_environment" \
+            "Some environment variables are invalid - check logs above"
+        return 1
+    fi
+
+    log_json INFO "validate_environment" \
+        "All environment variables validated successfully"
+    return 0
+}
+
 # ===========================================================================
 # Logging JSON structuré (compatible avec start.sh)
 # ===========================================================================
