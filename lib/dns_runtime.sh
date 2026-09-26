@@ -110,6 +110,46 @@ start_dnsmasq() {
     fi
 }
 
+start_dnsmasq_classic() {
+    log_json INFO "start_dnsmasq_classic" \
+        "Starting dnsmasq (classic upstreams)"
+
+    local old_enable_dot="${ENABLE_DOT:-false}"
+    local retry
+    local max_retries=3
+
+    export ENABLE_DOT="false"
+
+    # Quick reachability probe of primary upstream DNS before starting.
+    for retry in $(seq 1 "$max_retries"); do
+        local dns_ok=0
+
+        if command_exists timeout; then
+            if timeout 3 bash -c "echo > /dev/tcp/${DNS_SERVER_1}/53" 2>/dev/null || \
+               timeout 3 bash -c ": > /dev/udp/${DNS_SERVER_1}/53" 2>/dev/null; then
+                dns_ok=1
+            fi
+        else
+            # If timeout is not available, do not block startup on probe.
+            dns_ok=1
+        fi
+
+        if [ "$dns_ok" -eq 1 ] || [ "$retry" -ge "$max_retries" ]; then
+            break
+        fi
+
+        log_json WARN "start_dnsmasq_classic" \
+            "upstream DNS not responding, retry in 2s" \
+            "dns_server=${DNS_SERVER_1}" \
+            "retry=${retry}/${max_retries}"
+        sleep 2
+    done
+
+    start_dnsmasq
+
+    export ENABLE_DOT="$old_enable_dot"
+}
+
 wait_for_dns_ready() {
     local max_wait="${1:-30}"
 
