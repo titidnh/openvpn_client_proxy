@@ -1,3 +1,22 @@
+# Enforce LF for text files
+* text=auto
+
+# Shell scripts and Markdown should use LF
+*.sh text eol=lf
+*.md text eol=lf
+Dockerfile text eol=lf
+
+# Ensure common config files are normalized
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
 # Force LF everywhere - no mixing
 * text=auto
 *.sh text eol=lf
