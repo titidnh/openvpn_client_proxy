@@ -1,24 +1,4 @@
 #!/bin/bash
-# lib/supervisor.sh - Supervisor orchestration skeleton
-# The real `supervise_all` and `cleanup` will be migrated here.
-
-if ! declare -F supervise_all >/dev/null 2>&1; then
-supervise_all() {
-    log_json INFO "supervisor" "supervise_all placeholder"
-    # TODO: orchestrate service startups in order and watch PIDs
-    # Example: init_environment; start_privoxy; start_dnsmasq; start_vpn_service; supervise loop
-    return 0
-}
-fi
-
-if ! declare -F cleanup >/dev/null 2>&1; then
-cleanup() {
-    log_json INFO "supervisor" "cleanup placeholder"
-    # TODO: implement graceful shutdown and kill children
-    return 0
-}
-fi
-#!/bin/bash
 # Supervisor orchestration extracted from start.sh
 
 supervise_all() {

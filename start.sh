@@ -8,6 +8,7 @@ source "/usr/local/lib/common.sh"
 source "/usr/local/lib/supervisor.sh"
 source "/usr/local/lib/firewall.sh"
 source "/usr/local/lib/dns_runtime.sh"
+source "/usr/local/lib/dns_blocklist.sh"
 
 supervise_all() {
 
@@ -2643,6 +2644,14 @@ trap cleanup INT TERM
 # ===========================================================================
 # Point d'entrée principal
 # ===========================================================================
+
+# Keep start.sh as orchestrator: ensure extracted module implementations
+# from /usr/local/lib override legacy in-file definitions when both exist.
+source "/usr/local/lib/firewall.sh"
+source "/usr/local/lib/dns_runtime.sh"
+source "/usr/local/lib/dns_blocklist.sh"
+source "/usr/local/lib/dot.sh"
+source "/usr/local/lib/supervisor.sh"
 
 # Initialiser les variables d'environnement avec leurs valeurs par défaut
 init_environment

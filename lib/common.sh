@@ -524,6 +524,7 @@ init_environment() {
     : "${WIREGUARD_ENABLED:=false}"
     : "${VPN_PROTO:=$DEFAULT_VPN_PROTO}"
     : "${VPN_PORT:=$DEFAULT_VPN_PORT}"
+    : "${VPN_TYPE_SELECTED:=${VPN_TYPE}}"
     
     # Proxy configuration
     : "${PROXY_PORT:=$DEFAULT_PROXY_PORT}"
@@ -577,7 +578,8 @@ init_environment() {
     
     # Directories and file paths
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"
-    : "${conf:=$DEFAULT_VPN_CONF}"
+    : "${VPN_CONF:=$DEFAULT_VPN_CONF}"
+    : "${conf:=$VPN_CONF}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
     : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
     : "${RESOLV_CONF:=$DEFAULT_RESOLV_CONF}"
@@ -588,6 +590,24 @@ init_environment() {
     : "${UNBOUND_CONF:=/etc/unbound/unbound.conf}"
     : "${DNS_BLOCKLIST_COMPILED_UNBOUND:=/tmp/dns_blocklist_unbound.conf}"
     : "${DNS_BLOCKLIST_COMPILED_DNSMASQ:=/tmp/dns_blocklist_dnsmasq.conf}"
+    : "${DNS_BLOCKLIST_RAW_DIR:=/tmp/dns_blocklist_raw}"
+    : "${DNS_BLOCKLIST_STATE_FILE:=/tmp/dns_blocklist_last_download}"
+
+    # Global maps/counters must be initialized for strict mode (set -u).
+    declare -gA SERVICE_PIDS
+    declare -gA DOT_HOST_IP_MAP
+
+    : "${DOT_RESOLVED_IPS:=}"
+
+    SERVICE_PIDS[vpn]="${SERVICE_PIDS[vpn]:-0}"
+    SERVICE_PIDS[privoxy]="${SERVICE_PIDS[privoxy]:-0}"
+    SERVICE_PIDS[nginx]="${SERVICE_PIDS[nginx]:-0}"
+    SERVICE_PIDS[dnsmasq]="${SERVICE_PIDS[dnsmasq]:-0}"
+    SERVICE_PIDS[unbound]="${SERVICE_PIDS[unbound]:-0}"
+    SERVICE_PIDS[tailscaled]="${SERVICE_PIDS[tailscaled]:-0}"
+    SERVICE_PIDS[metrics]="${SERVICE_PIDS[metrics]:-0}"
+    SERVICE_PIDS[dot_refresh]="${SERVICE_PIDS[dot_refresh]:-0}"
+    SERVICE_PIDS[blocklist_refresh]="${SERVICE_PIDS[blocklist_refresh]:-0}"
 }
 
 # ===========================================================================
