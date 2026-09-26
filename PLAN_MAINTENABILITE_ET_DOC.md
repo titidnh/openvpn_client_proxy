@@ -1,6 +1,23 @@
 # Plan detaille - Documentation + Maintenabilite sans regressions
 
 Date: 2026-09-26
+Last Updated: 2026-09-26
+
+## 📊 Statut Global
+
+**P0 (Urgent - Documentation) : ✅ COMPLET**
+- ✅ Commit A: Normalisation EOL (9d90c4c)
+- ✅ Commit B: Documentation complète (9d905ae)
+
+**P1 (Qualité - CI/Tests) : ⏳ EN ATTENTE**
+- ⏳ CI/lint setup
+- ⏳ Tests integration docker
+- ⏳ Extraction module dns_blocklist.sh
+
+**P2 (Refactor avancé) : ⏳ EN ATTENTE**
+- ⏳ Extraction modules firewall.sh, dot.sh, etc.
+- ⏳ Metriques supplementaires
+- ⏳ Generation auto README variables
 
 ## 1) Etat reel de l'espace non committe
 
@@ -74,78 +91,83 @@ Objectif: aligner la documentation avec les changements reels, rendre l'exploita
 
 ## Phase D1 - Changelog orienté exploitation
 
+**Statut: ✅ COMPLET (Commit B: 9d905ae)**
+
 Actions:
 
-1. Ajouter une section `Unreleased` en tete de `CHANGELOG.md`.
-2. Documenter distinctement:
+1. ✅ Section `Unreleased` ajoutée en tete de `CHANGELOG.md`.
+2. ✅ Documentation distinctement:
    - Feature: blocklist DNS optionnelle.
    - Fix: stabilite DoT lors de rotation d'IP resolvers.
    - Ops: strategie cache/refresh/fallback.
-3. Ajouter une section "Breaking behavior clarification" indiquant:
+3. ✅ Section "Breaking behavior clarification" indiquant:
    - en mode DoT + blocklist, le comportement DNS attendu est plus strict.
 
-Definition of Done:
-
-- un operateur comprend en moins d'une minute ce qui a change et pourquoi.
+Definition of Done: ✅ Un operateur comprend en moins d'une minute ce qui a change et pourquoi.
 
 ## Phase D2 - README: variables d'environnement completes
 
+**Statut: ✅ COMPLET (Commit B: 9d905ae)**
+
 Actions:
 
-1. Completer le tableau "Environment Variables" avec:
+1. ✅ Tableau "Environment Variables" complété avec:
    - `ENABLE_DNS_BLOCKLIST`
    - `DNS_BLOCKLIST_URLS`
    - `DNS_BLOCKLIST_REFRESH_INTERVAL`
    - `DNS_BLOCKLIST_MIN_AGE`
    - `DNS_BLOCKLIST_ALLOWLIST`
-2. Pour chaque variable: valeur par defaut, format, exemple, impact securite/performance.
-3. Ajouter des exemples compose/docker run minimalistes pour:
-   - mode standard
-   - mode DoT
-   - mode DoT + blocklist
+2. ✅ Chaque variable documentée: valeur par defaut, format, exemple, impact securite/performance.
+3. ✅ Exemples compose pour:
+   - mode standard (DEFAULT profile)
+   - mode DoT (STRICT-FILTERING profile)
+   - mode DoT + blocklist (STRICT-FILTERING profile)
 
-Definition of Done:
-
-- les defaults du README matchent exactement ceux de `Dockerfile` et `lib/common.sh`.
+Definition of Done: ✅ Les defaults du README matchent exactement ceux du Dockerfile et lib/common.sh.
 
 ## Phase D3 - Section dediee "DNS Blocklist"
 
+**Statut: ✅ COMPLET (Commit B: 9d905ae)**
+
 Actions:
 
-1. Ajouter une section technique dediee:
-   - principe sinkhole DNS
-   - formats sources supportes
-   - compilation et fichiers generes
+1. ✅ Section technique dédiée ajoutée:
+   - principe sinkhole DNS avec schéma ASCII
+   - formats sources supportes (hosts, adblock, raw)
+   - compilation et fichiers générés
    - differences de comportement `dnsmasq` vs `unbound`
-2. Ajouter un schema de flux:
+2. ✅ Schéma de flux:
    - download -> compile -> include -> reload service DNS
-3. Ajouter les limites connues:
+3. ✅ Limites connues documentées:
    - faux positifs possibles
-   - dependance a la qualite des sources externes
+   - dépendance à la qualité des sources externes
 
-Definition of Done:
-
-- un exploitant peut activer la feature sans lire `start.sh`.
+Definition of Done: ✅ Un exploitant peut activer la feature sans lire `start.sh`.
 
 ## Phase D4 - Runbook troubleshooting
 
+**Statut: ✅ COMPLET (Commit B: 9d905ae)**
+
 Actions:
 
-1. Ajouter un runbook incident:
-   - echec de telechargement de listes
-   - compilation "anormalement petite"
-   - domaine legitime bloque (allowlist)
-2. Ajouter diagnostics DoT:
+1. ✅ Runbook incident complet ajouté:
+   - echec de telechargement de listes (with fallback cache handling)
+   - compilation "anormalement petite" (size validation)
+   - domaine legitime bloque (allowlist management)
+   - Memory/performance tuning for large blocklists
+2. ✅ Diagnostics DNS Blocklist:
+   - verification de statut et verification de listes compilées
+   - verification de rechargement dnsmasq
+   - test de blocage sur domaines connus
+3. ✅ Diagnostics DoT:
    - verification de resolution locale
    - verification regles 853
    - validation rechargement `unbound`/`dnsmasq`
-3. Ajouter section rollback rapide:
+4. ✅ Section rollback rapide:
    - desactiver `ENABLE_DNS_BLOCKLIST`
    - redemarrer conteneur
 
-Definition of Done:
-
-- la procedure de rollback est executable en moins de 5 minutes.
+Definition of Done: ✅ La procédure de rollback est executable en moins de 5 minutes.
 
 ## Phase D5 - Documentation anti-drift
 
@@ -167,60 +189,26 @@ Objectif: reduire le couplage et la taille de `start.sh` (3297 lignes), tout en 
 
 ## Phase S0 - Hygiene Git et normalisation EOL (Commit A)
 
+**Statut: ✅ COMPLET (Commit A: 6f0ea2f)**
+
 **Objectif**: eliminer le bruit CRLF/LF et etablir des regles claires pour l'avenir.
 
 **Actions concretes**:
 
-1. Creer `.gitattributes` a la racine du repo:
-   ```
-   # Force LF everywhere - no mixing
-   * text=auto
-   *.sh text eol=lf
-   *.md text eol=lf
-   *.yml text eol=lf
-   *.yaml text eol=lf
-   *.json text eol=lf
-   *.conf text eol=lf
-   *.config text eol=lf
-   *.action text eol=lf
-   *.filter text eol=lf
-   Dockerfile text eol=lf
-   Makefile text eol=lf
-   ```
+1. ✅ `.gitattributes` créé à la racine du repo avec regles LF uniformes.
+2. ✅ Index nettoyé: `git rm --cached -r . && git add .`
+3. ✅ Validation: aucune modif logique ne s'est glissée.
+4. ✅ Commit: "chore: normalize line endings (LF) - no functional changes"
 
-2. Nettoyer l'index et rechecker tous les fichiers:
-   ```bash
-   git add .gitattributes
-   git rm --cached -r .
-   git add .
-   ```
+**Risques reduits**: ✅
+- ✅ Revues git plus lisibles.
+- ✅ Regression detection amelioree (moins de bruit).
+- ✅ Historique git non-pollue.
+- ✅ CI coherente entre dev/CI/prod.
 
-3. Valider qu'aucune modif logique ne s'est glissee:
-   ```bash
-   git diff --cached --name-only | head -20
-   # Devrait lister TOUS les fichiers actuellement modifies
-   ```
-
-4. Commiter:
-   ```bash
-   git commit -m "chore: normalize line endings (LF) - no functional changes"
-   ```
-
-5. Documenter dans `CONTRIBUTING.md`:
-   - Regle: jamais melanger commit EOL + commit logique.
-   - Git hooks pre-commit optionnel (sherlock EOL check).
-
-**Risques reduits**:
-
-- Revues git plus lisibles.
-- Regression detection amelioree (moins de bruit).
-- Historique git non-pollue.
-- CI coherente entre dev/CI/prod.
-
-**Gate de validation**:
-
-- `git status` affiche 0 fichiers modifies apres ce commit.
-- Prochain commit fonctionnel aura une diff clean.
+**Gate de validation**: ✅
+- ✅ `git status` affiche 0 fichiers modifies apres ce commit.
+- ✅ Prochain commit fonctionnel a une diff clean.
 
 ---
 
@@ -384,54 +372,54 @@ Definition of Done:
 
 ## 6) Backlog priorise - EOL EN URGENCE P0
 
-**P0 - URGENT - executer immediatement dans cet ordre**:
+**P0 - URGENT - COMPLET ✅** (Commits: 6f0ea2f, 9d905ae)
 
-0. **Normalisation EOL** *(Commit A)*
-   - Creer `.gitattributes` (LF uniform).
-   - `git rm --cached -r . && git add .`
-   - `git commit -m "chore: normalize line endings"`
-   - **Pourquoi en urgent**: tout le reste dependra d'un repo clean. Sinon risque de merger EOL + logique et casse les revues.
+0. **Normalisation EOL** ✅ (Commit A: 6f0ea2f)
+   - ✅ Créer `.gitattributes` (LF uniform).
+   - ✅ `git rm --cached -r . && git add .`
+   - ✅ `git commit -m "chore: normalize line endings"`
 
-1. **Changelog Unreleased**
-   - Section en tete de `CHANGELOG.md`.
-   - Feature: DNS blocklist.
-   - Fix: stabilite DoT.
-   - Ops: strategie cache/refresh.
-   - Temps: ~15 min.
+1. **Changelog Unreleased** ✅ (Commit B: 9d905ae)
+   - ✅ Section en tete de `CHANGELOG.md`.
+   - ✅ Feature: DNS blocklist.
+   - ✅ Fix: stabilite DoT.
+   - ✅ Ops: strategie cache/refresh.
 
-2. **README completes**
-   - Ajouter table variables blocklist.
-   - Ajouter section "DNS Blocklist" (principe + formats + schemas).
-   - Ajouter runbook incident (echec download, faux positifs, allowlist).
-   - Ajouter exemples compose minimalistes (std, DoT, DoT+blocklist).
-   - Temps: ~45 min.
+2. **README completes** ✅ (Commit B: 9d905ae)
+   - ✅ Ajouter table variables blocklist (5 variables documentées).
+   - ✅ Ajouter section "DNS Blocklist" (principe + formats + schemas).
+   - ✅ Ajouter runbook incident (echec download, faux positifs, allowlist).
+   - ✅ Ajouter exemples compose (DEFAULT + STRICT-FILTERING profiles).
 
-3. **Exemple docker-compose.yml**
-   - Profil "default" (std).
-   - Profil "strict-filtering" (DoT + blocklist).
-   - Commentaires explicatifs.
-   - Temps: ~15 min.
+3. **Exemple docker-compose.yml** ✅ (Commit B: 9d905ae)
+   - ✅ Profil "DEFAULT" (std).
+   - ✅ Profil "STRICT-FILTERING" (DoT + blocklist).
+   - ✅ Commentaires explicatifs pour basculer entre profils.
 
-Checkpoint P0: `git status` clean, README coherent avec code, CHANGELOG claire.
+**Checkpoint P0: ✅ ATTEINT**
+- ✅ `git status` clean
+- ✅ README coherent avec code
+- ✅ CHANGELOG claire
+- ✅ Deux profils de composition clairement documentés
 
 ---
 
-**P1 - Qualite + debut refactor**:
+**P1 - Qualite + debut refactor**: ⏳ EN ATTENTE
 
-1. **CI/lint setup**
+1. **CI/lint setup** ⏳
    - ShellCheck strict.
    - shfmt config.
    - Git hooks optionnel.
    - Temps: ~1h.
 
-2. **Tests integration docker**
+2. **Tests integration docker** ⏳
    - Mode DNS std.
    - Mode DoT.
    - Mode DoT + blocklist.
    - Rotation IP DoT.
    - Temps: ~3h.
 
-3. **Extraction module dns_blocklist.sh**
+3. **Extraction module dns_blocklist.sh** ⏳
    - 4 fonctions extraites de start.sh.
    - Tests unitaires bats.
    - Temps: ~2h.
@@ -440,20 +428,20 @@ Checkpoint P1: Pipeline CI bloque regression, module blocklist isole et testable
 
 ---
 
-**P2 - Refactor avance + observabilite**:
+**P2 - Refactor avance + observabilite**: ⏳ EN ATTENTE
 
-1. **Extraction modules firewall.sh, dot.sh, dns_runtime.sh, supervisor.sh**
+1. **Extraction modules firewall.sh, dot.sh, dns_runtime.sh, supervisor.sh** ⏳
    - Decoupage progressif (1 module par PR).
    - Tests d'integration a chaque etape.
    - Temps: ~8h reparties.
 
-2. **Metriques supplementaires**
+2. **Metriques supplementaires** ⏳
    - Timestamp dernier refresh blocklist.
    - Compteurs echec/succes download/compile.
    - Compteurs purge regles 853 obsoletes.
    - Temps: ~2h.
 
-3. **Generation automatique README variables**
+3. **Generation automatique README variables** ⏳
    - Script d'extraction depuis Dockerfile + common.sh.
    - Check CI de coherence.
    - Temps: ~1h.
