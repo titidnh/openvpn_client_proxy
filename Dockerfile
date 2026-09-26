@@ -160,6 +160,8 @@ COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
 COPY --chmod=0755 lib/dns_blocklist.sh /usr/local/lib/dns_blocklist.sh
 COPY --chmod=0755 lib/firewall.sh     /usr/local/lib/firewall.sh
 COPY --chmod=0755 lib/dot.sh          /usr/local/lib/dot.sh
+COPY --chmod=0755 lib/supervisor.sh   /usr/local/lib/supervisor.sh
+COPY --chmod=0755 lib/dns_runtime.sh  /usr/local/lib/dns_runtime.sh
 
 # Supprimer les retours chariot (pour compatibilité Windows)
 RUN sed -i 's/\r//' /start.sh /usr/local/bin/openvpn.sh /usr/local/bin/vpn-selector.sh /usr/local/bin/vpn-startup.sh /usr/local/bin/healthcheck.sh /usr/local/lib/common.sh /usr/local/lib/dns_blocklist.sh /usr/local/lib/firewall.sh /usr/local/lib/dot.sh
