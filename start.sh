@@ -412,9 +412,13 @@ restart_vpn_service() {
 
 run_service_healthcheck() {
     local log_file="/tmp/healthcheck.log"
+    local healthcheck_in_progress="/tmp/healthcheck_in_progress"
     local max_retries=3
     local retry=0
     local success=0
+
+    # Mark that healthcheck is in progress to prevent supervisor from removing sentinel
+    touch "$healthcheck_in_progress"
 
     while [ "$retry" -lt "$max_retries" ]; do
         if /usr/local/bin/healthcheck.sh \
@@ -431,6 +435,9 @@ run_service_healthcheck() {
 
         sleep 5
     done
+
+    # Clear the flag that healthcheck is in progress
+    rm -f "$healthcheck_in_progress"
 
     if [ "$success" -eq 0 ]; then
         cat "$log_file" >&2 || true

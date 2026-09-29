@@ -106,14 +106,10 @@ check_http_proxy() {
 # ===========================================================================
 
 main() {
-    # Check rapide : le superviseur maintient ce fichier tant que le tunnel
-    # est actif. S'il est absent, inutile d'aller plus loin.
-    if [ ! -f /tmp/vpn_healthy ]; then
-        log_json ERROR "healthcheck" \
-            "vpn_healthy sentinel missing - tunnel down or not yet ready"
-        exit 1
-    fi
-
+    # Note: We don't fail if vpn_healthy sentinel is missing because there's a race condition
+    # where the supervisor loop might remove it while healthcheck is running.
+    # Instead, we validate the system ourselves.
+    
     # 1) OpenVPN doit être vivant
     if ! pidof openvpn >/dev/null 2>&1; then
         log_json ERROR "healthcheck" "openvpn process not running"

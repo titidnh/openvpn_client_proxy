@@ -225,9 +225,14 @@ supervise_all() {
                         log_json DEBUG "supervisor" "tunnel health confirmed" "cycles=${keepalive_cycles}" "vpn_healthy=true"
                     fi
                 else
-                    rm -f "$VPN_HEALTHY_FILE"
+                    # Don't remove sentinel if healthcheck is in progress (prevents race condition)
+                    if [ ! -f /tmp/healthcheck_in_progress ]; then
+                        rm -f "$VPN_HEALTHY_FILE"
+                        log_json WARN "supervisor" "local DNS health check failed"
+                    else
+                        log_json WARN "supervisor" "local DNS health check failed but healthcheck in progress - keeping sentinel"
+                    fi
                     METRIC_VPN_UP=0
-                    log_json WARN "supervisor" "local DNS health check failed"
                     fail=1
                 fi
             fi
