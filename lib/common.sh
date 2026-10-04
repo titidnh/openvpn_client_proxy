@@ -17,7 +17,9 @@ if [ -n "${COMMON_SH_LOADED+x}" ]; then
 fi
 COMMON_SH_LOADED=true
 
-set -euo pipefail
+# NOTE: pas de "set -e" ici : common.sh est source par le superviseur
+# long-vivant, qui ne doit pas mourir sur l'echec d'une commande. Les
+# scripts one-shot (healthcheck.sh) activent eux-memes le mode strict.
 
 # ===========================================================================
 # Constantes globales
@@ -189,16 +191,20 @@ log_json() {
         extra="${extra}, \"${k}\": \"${v}\""
     done
 
+    local escaped_message
+    escaped_message="${message//\\/\\\\}"
+    escaped_message="${escaped_message//\"/\\\"}"
+    escaped_message="${escaped_message//$'\n'/\\n}"
+    escaped_message="${escaped_message//$'\t'/\\t}"
+
+    # stderr : stdout est parfois capte par l'appelant (build_tailscale_up_flags)
     printf '{"ts":"%s","level":"%s","component":"%s","msg":"%s"%s}\n' \
-        "$ts" "$level" "$component" "$message" "$extra"
+        "$ts" "$level" "$component" "$escaped_message" "$extra" >&2
 }
 
 # ===========================================================================
 # Fonctions rÃƒÂ©seau
 # ===========================================================================
-
-# Wrapper pour ip6tables qui ignore les erreurs si la commande n'existe pas
-ipt6() { ip6tables "$@" 2>/dev/null || true; }
 
 # Trouve l'interface VPN (tun ou tap) active
 # Retourne le nom de l'interface ou vide si non trouvÃƒÂ©e
@@ -329,22 +335,27 @@ resolve_hostname_all() {
 # Tue un processus s'il est en cours d'exÃƒÂ©cution
 # Usage: kill_if_running PID
 kill_if_running() {
-    local pid="$1"
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    local pid="${1:-}"
+    # Refuse vide, 0 et non numerique : "kill 0" tuerait tout le groupe
+    # de processus de l'appelant (superviseur) et arreterait le conteneur.
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
+    kill "$pid" 2>/dev/null || true
 }
 
 # VÃƒÂ©rifie si un processus est en cours d'exÃƒÂ©cution
 # Usage: is_process_running PID
 is_process_running() {
-    local pid="$1"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
 # Attend qu'un processus se termine
 # Usage: wait_for_process PID [TIMEOUT]
 wait_for_process() {
-    local pid="$1"
+    local pid="${1:-}"
     local timeout="${2:-60}"
+
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
     local elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
@@ -392,6 +403,55 @@ get_vpn_port_proto() {
         VPN_PROTO=$(awk '/^proto /{print $2; exit}' "$conf")
         VPN_PROTO=${VPN_PROTO:-$DEFAULT_VPN_PROTO}
     fi
+
+    # Normalisation pour iptables : udp4/tcp4/udp6/tcp6/tcp-client/-server
+    case "$VPN_PROTO" in
+        udp*) VPN_PROTO="udp" ;;
+        tcp*) VPN_PROTO="tcp" ;;
+        *) VPN_PROTO="$DEFAULT_VPN_PROTO" ;;
+    esac
+}
+
+# Extrait les endpoints (remote) d'une configuration OpenVPN.
+# Normalise le protocole (udp/tcp, suffixes 4/6/-client/-server retires)
+# et emet une ligne "ip port proto" par remote (support remote-random,
+# remotes multiples, proto porte par la directive remote).
+# Usage: parse_vpn_remotes [CONFIG_FILE]
+parse_vpn_remotes() {
+    local conf="${1:-$DEFAULT_VPN_CONF}"
+    [ -f "$conf" ] || return 0
+
+    local default_proto
+    default_proto=$(awk '/^[[:space:]]*proto[[:space:]]/{print $2; exit}' "$conf")
+    default_proto="${default_proto:-$DEFAULT_VPN_PROTO}"
+
+    awk -v default_proto="$default_proto" '
+        /^[[:space:]]*remote[[:space:]]/ {
+            host = $2
+            port = ($3 ~ /^[0-9]+$/) ? $3 : ""
+            proto = ($3 ~ /^[0-9]+$/ && $4 != "") ? $4 : default_proto
+            if (proto == "") proto = "udp"
+            # Normalisation : udp4/udp6/tcp4/tcp6/tcp-client/tcp-server -> udp/tcp
+            if (proto ~ /^udp/) proto = "udp"
+            else if (proto ~ /^tcp/) proto = "tcp"
+            else next
+            print host, port, proto
+        }' "$conf"
+}
+
+# Extrait le port et protocole de l'Endpoint WireGuard (wg0.conf)
+# Usage: get_wireguard_endpoint [CONFIG_FILE]
+get_wireguard_endpoint() {
+    local conf="${1:-${VPN_DIR}/wg0.conf}"
+    [ -f "$conf" ] || return 1
+
+    awk -F'=' '
+        /^[[:space:]]*Endpoint[[:space:]]*=/ {
+            gsub(/[[:space:]]/, "", $2)
+            split($2, a, ":")
+            print a[1], a[2]
+            exit
+        }' "$conf"
 }
 
 # ===========================================================================

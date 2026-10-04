@@ -119,7 +119,7 @@ compile_blocklists() {
 
         # Format liste brute : un domaine par ligne, sans commentaire
         grep -E '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[[:space:]]*$' \
-            "$f" 2>/dev/null | tr -d '[:space:]' >> "$tmp_all" || true
+            "$f" 2>/dev/null | awk '{print $1}' >> "$tmp_all" || true
     done
 
     # Normalisation : minuscules, tri, dédoublonnage, format de domaine valide
@@ -264,15 +264,22 @@ _blocklist_refresh_loop() {
                     "pid=${ub_pid}"
             fi
         else
-            # dnsmasq ne relit PAS ses conf-file inclus sur un SIGHUP,
-            # un redémarrage complet du processus est nécessaire.
-            kill_if_running "${SERVICE_PIDS[dnsmasq]}"
-            SERVICE_PIDS[dnsmasq]=0
-            start_dnsmasq
-
+            # ATTENTION : cette boucle tourne dans un sous-shell. Toute
+            # ecriture dans SERVICE_PIDS serait perdue cote superviseur, qui
+            # garderait un PID perime et redemarrerait TOUTE la pile (C8).
+            # On relance dnsmasq via pidof ici, sans toucher SERVICE_PIDS :
+            # le superviseur detectera le nouveau processus par le port/DNS.
+            local dn_pid
+            dn_pid=$(pidof dnsmasq | awk '{print $1}' || true)
+            if [ -n "$dn_pid" ]; then
+                kill "$dn_pid" 2>/dev/null || true
+                sleep 1
+            fi
+            dnsmasq --no-daemon --conf-file="$DNSMASQ_CONF" --log-facility=- \
+                >/dev/null 2>&1 &
             log_json INFO "dns_blocklist" \
-                "dnsmasq redémarré (nouvelle blocklist)" \
-                "pid=${SERVICE_PIDS[dnsmasq]}"
+                "dnsmasq relancé (nouvelle blocklist)" \
+                "pid=$!"
         fi
     done
 }

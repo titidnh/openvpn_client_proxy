@@ -1,14 +1,35 @@
 #!/bin/bash
 # Supervisor orchestration extracted from start.sh
 
+# Attente interruptible : le trap INT/TERM s'execute pendant le sleep
+# au lieu d'attendre la fin de la commande (H9).
+sleep_wait() {
+    sleep "$1" &
+    wait $! 2>/dev/null || true
+}
+
+# Drapeaux d'etat pour les taches de fond : ne pas dependre du compteur
+# d'essais, sinon un echec DNS a l'iteration 1 empeche metrics/refresh de
+# demarrer pour toute la vie du conteneur (C7).
+_BG_METRICS_STARTED=0
+_BG_DOT_REFRESH_STARTED=0
+_BG_BLOCKLIST_REFRESH_STARTED=0
+
 supervise_all() {
     log_json INFO "supervisor" \
         "Starting supervisor" \
-        "version=2.1.0"
+        "version=2.2.0"
 
     local attempt=0
 
-    validate_environment
+    validate_environment || true
+
+    # Kill switch des la premiere seconde (H5) : sans cela le conteneur
+    # tourne en ACCEPT par defaut pendant les phases blocklist/dnsmasq/unbound.
+    firewall_early_lockdown
+
+    # Memorise l'IP publique reelle (reference anti-fuite pour check_vpn_ip)
+    capture_real_ip
 
     cp "$RESOLV_CONF" /tmp/resolv.conf.bak 2>/dev/null || true
 
@@ -18,7 +39,8 @@ supervise_all() {
     while true; do
         attempt=$((attempt + 1))
 
-        METRIC_RESTART_COUNT=$((attempt - 1))
+        # Counter Prometheus monotone : ne redescend jamais (M1)
+        METRIC_RESTART_COUNT=$((METRIC_RESTART_COUNT + 1))
         METRIC_LAST_RESTART_TS=$(date +%s)
 
         # Phase 0 : Blocklist DNS
@@ -34,7 +56,7 @@ supervise_all() {
         if ! wait_for_dns_ready 30; then
             log_json WARN "supervisor" "classic dns not ready - continuing"
         else
-            sleep 2
+            sleep_wait 2
         fi
 
         # Phase 1.5 : Pre-load DoT IPs
@@ -47,7 +69,7 @@ supervise_all() {
 
         if [ "${ENABLE_DOT:-false}" = "true" ] && [ -s "$DOT_FORWARD_ADDRS_FILE" ]; then
             log_json INFO "supervisor" "DoT configured - waiting for stabilization..."
-            sleep 3
+            sleep_wait 3
         fi
 
         # Verification DNS readiness
@@ -68,7 +90,7 @@ supervise_all() {
                     log_json DEBUG "supervisor" "DoT DNS still initializing" "cycles=${i}"
                 fi
 
-                sleep 2
+                sleep_wait 2
             done
 
             if [ "$dns_ready" -ne 1 ]; then
@@ -79,7 +101,7 @@ supervise_all() {
                 SERVICE_PIDS[dnsmasq]=0
                 SERVICE_PIDS[unbound]=0
 
-                sleep 5
+                sleep_wait 5
                 continue
             fi
         else
@@ -93,7 +115,7 @@ supervise_all() {
                     break
                 fi
 
-                sleep 1
+                sleep_wait 1
             done
 
             if [ "$dns_ready" -ne 1 ]; then
@@ -101,7 +123,7 @@ supervise_all() {
                 kill_if_running "${SERVICE_PIDS[dnsmasq]}"
                 SERVICE_PIDS[dnsmasq]=0
 
-                sleep 5
+                sleep_wait 5
                 continue
             fi
         fi
@@ -115,10 +137,17 @@ supervise_all() {
         start_nginx_auth
         start_vpn_service
 
-        if [ "$attempt" -eq 1 ]; then
+        if [ "$_BG_METRICS_STARTED" -eq 0 ]; then
             start_metrics
+            _BG_METRICS_STARTED=1
+        fi
+        if [ "$_BG_DOT_REFRESH_STARTED" -eq 0 ]; then
             start_dot_ip_refresh
+            _BG_DOT_REFRESH_STARTED=1
+        fi
+        if [ "$_BG_BLOCKLIST_REFRESH_STARTED" -eq 0 ]; then
             start_blocklist_refresh
+            _BG_BLOCKLIST_REFRESH_STARTED=1
         fi
 
         log_json INFO "supervisor" "waiting for VPN tunnel..."
@@ -130,7 +159,7 @@ supervise_all() {
 
         if [ "$tun_ready" -eq 1 ]; then
             setup_return_routes
-            check_vpn_ip
+            check_vpn_ip || true
 
             log_json INFO "supervisor" "waiting for tunnel to be fully operational..."
 
@@ -140,7 +169,7 @@ supervise_all() {
                     full_ready=1
                     break
                 fi
-                sleep 5
+                sleep_wait 5
             done
 
             if [ "$full_ready" -eq 1 ]; then
@@ -167,7 +196,7 @@ supervise_all() {
         log_json INFO "supervisor" "all services running" "vpn=${SERVICE_PIDS[vpn]}" "dnsmasq=${SERVICE_PIDS[dnsmasq]:-unknown}" "privoxy=${SERVICE_PIDS[privoxy]:-unknown}" "nginx_auth=${SERVICE_PIDS[nginx]:-disabled}" "unbound=${SERVICE_PIDS[unbound]:-disabled}" "metrics=${SERVICE_PIDS[metrics]:-disabled}" "dot_refresh=${SERVICE_PIDS[dot_refresh]:-disabled}" "blocklist_refresh=${SERVICE_PIDS[blocklist_refresh]:-disabled}"
 
         log_json INFO "supervisor" "waiting 40s before first healthcheck for stability..."
-        sleep 40
+        sleep_wait 40
 
         local fail=0
         local start_time
@@ -178,7 +207,7 @@ supervise_all() {
 
         local keepalive_cycles=0
         while true; do
-            sleep 10
+            sleep_wait 10
             keepalive_cycles=$((keepalive_cycles + 1))
             fail=0
 
@@ -263,7 +292,7 @@ supervise_all() {
                 if ! is_process_running "${SERVICE_PIDS[nginx]}"; then
                     log_json ERROR "supervisor" "nginx auth proxy died"
                     fail=1
-                elif ! nc -z -w 3 127.0.0.1 3128 >/dev/null 2>&1; then
+                elif ! nc -z -w 3 127.0.0.1 "${PROXY_PORT:-3128}" >/dev/null 2>&1; then
                     log_json ERROR "supervisor" "nginx auth proxy not listening"
                     fail=1
                 fi
@@ -304,6 +333,8 @@ supervise_all() {
                 if [ "$stable_cycles" -ge 6 ] && [ "$attempt" -gt 1 ]; then
                     attempt=1
                     stable_cycles=0
+                    # METRIC_RESTART_COUNT n'est PAS reinitialise : un counter
+                    # Prometheus ne doit jamais decroitre (M1).
                     log_json INFO "supervisor" "services stable - backoff counter reset"
                 fi
                 continue
@@ -356,13 +387,18 @@ supervise_all() {
 
         local sleep_s
         sleep_s=$((5 + attempt * 10))
-        if [ "$sleep_s" -gt 120 ]; then
-            sleep_s=120
+        if [ "$sleep_s" -gt 60 ]; then
+            sleep_s=60
         fi
 
         log_json INFO "supervisor" "stabilization wait ${sleep_s}s" "attempt=${attempt}"
-        sleep "$sleep_s"
+        sleep_wait "$sleep_s"
 
+        # Plafonne la monte du delai de grace : avant, il augmentait de 5 a
+        # chaque echec sans limite (M12).
         SKIP_HEALTHCHECK_FIRST_MINUTES=$(( ${SKIP_HEALTHCHECK_FIRST_MINUTES:-0} + 5 ))
+        if [ "$SKIP_HEALTHCHECK_FIRST_MINUTES" -gt 15 ]; then
+            SKIP_HEALTHCHECK_FIRST_MINUTES=15
+        fi
     done
 }
