@@ -50,9 +50,11 @@ start_metrics() {
 
     mkdir -p "$METRICS_DIR"
 
-    cat > /tmp/metrics_handler.sh <<HANDLER
-#!/bin/sh
-METRICS_DIR='${METRICS_DIR}'
+    # R4 : heredoc CITE - le contenu ne doit pas etre evalue a la generation.
+    # METRICS_DIR est injecte via printf, pas par interpolation du shell.
+    {
+        printf '#!/bin/sh\nMETRICS_DIR=%s\n' "$(printf "%q" "${METRICS_DIR}")"
+        cat <<'HANDLER'
 
 vpn_up=$(cat "$METRICS_DIR/metric_vpn_up" 2>/dev/null || echo 0)
 restart_total=$(cat "$METRICS_DIR/metric_restart_count" 2>/dev/null || echo 0)
@@ -85,6 +87,7 @@ len=${#body}
 printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
     "$len" "$body"
 HANDLER
+    } > /tmp/metrics_handler.sh
 
     chmod +x /tmp/metrics_handler.sh
 
@@ -237,6 +240,14 @@ start_privoxy() {
         "$PRIVOXY_CONF" &
 
     SERVICE_PIDS["privoxy"]=$!
+
+    # H4 : verifier que le demon a vraiment demarre (config invalide =
+    # processus qui meurt aussitot). Retour non nul pour le fail-closed.
+    sleep_wait 1
+    if ! is_process_running "${SERVICE_PIDS["privoxy"]}"; then
+        log_json ERROR "start_privoxy" "privoxy died immediately (invalid config?)"
+        return 1
+    fi
 }
 
 start_nginx_auth() {
@@ -254,10 +265,24 @@ start_nginx_auth() {
     [ -n "$user" ] && [ -n "$pass" ] || return 0
 
     if ! command_exists tinyproxy; then
+        # Fail-closed : sans frontal authentifiant, le proxy ne doit PAS
+        # rester muet (Privoxy n'ecoute que sur 127.0.0.1:PORT+1) ni exposer
+        # un port non protege. On arrete le superviseur avec une erreur.
         log_json ERROR "start_nginx_auth" \
-            "tinyproxy not found - refusing to expose proxy without auth"
+            "tinyproxy not found - cannot start authenticated proxy" \
+            "hint=install tinyproxy in the image"
         return 1
     fi
+
+    # BasicAuth n'accepte pas d'espace ni de '#' dans le mot de passe :
+    # la directive serait cassee (silencieusement). Refuser ces valeurs.
+    case "$user$pass" in
+        *[[:space:]#]*)
+            log_json ERROR "start_nginx_auth" \
+                "PROXY_USER/PROXY_PASS must not contain spaces or '#' for tinyproxy BasicAuth"
+            return 1
+            ;;
+    esac
 
     local privoxy_internal_port=$((PROXY_PORT + 1))
 
@@ -275,21 +300,28 @@ start_nginx_auth() {
     local tiny_conf=/etc/tinyproxy/tinyproxy_auth.conf
     mkdir -p /etc/tinyproxy
 
+    # umask 077 : la config contient le mot de passe en clair.
+    umask 077
     cat > "$tiny_conf" <<TINYCONF
 Port ${PROXY_PORT}
 Listen 0.0.0.0
 Timeout 600
-DefaultErrorFile "/usr/share/tinyproxy/default.html"
-StatFile "/usr/share/tinyproxy/stats.html"
-LogFile "/var/log/tinyproxy/auth.log"
 PidFile "/run/tinyproxy/tinyproxy_auth.pid"
 MaxClients 100
-Allow 127.0.0.1
+DisableViaHeader Yes
+LogLevel Critical
 BasicAuth ${user} ${pass}
 Upstream http 127.0.0.1:${privoxy_internal_port}
 TINYCONF
+    umask 022
 
-    tinyproxy -c "$tiny_conf" &
+    # NB : pas de directive "Allow" - en tinyproxy une seule directive Allow
+    # suffit a refuser TOUTE adresse non listee (les clients Docker non
+    # loopback auraient eu 403 meme avec de bons identifiants). Le filtrage
+    # reseau est fait par iptables (ALLOW_EXTERNAL_PROXY_ACCESS).
+    # -d : foreground, sinon tinyproxy demonise et $! serait le PID du
+    # parent deja sorti (R1a).
+    tinyproxy -d -c "$tiny_conf" &
     SERVICE_PIDS["nginx"]=$!
 
     log_json INFO "start_nginx_auth" \
@@ -445,19 +477,33 @@ run_service_healthcheck() {
 # Reference anti-fuite : si l'IP publique via le tunnel egale cette IP, le
 # tunnel ne route rien (C6).
 capture_real_ip() {
+    # Optionnelle : la requete revele l'IP reelle a un tiers a chaque demarrage.
+    if [ "${COLLECT_REAL_IP:-true}" != "true" ]; then
+        REAL_IP=""
+        return 0
+    fi
+
     if ! command_exists curl; then
         REAL_IP=""
         return 0
     fi
 
+    # Endpoint SANS DNS (le lockdown a vide le NAT Docker 127.0.0.11, la
+    # resolution de api.ipify.org echouerait). 1.1.1.1 repond en direct.
     REAL_IP=$(
-        timeout 10 curl -fsS --max-time 8 "https://api.ipify.org" 2>/dev/null || true
+        timeout 10 curl -fsS --max-time 8 "https://1.1.1.1/cdn-cgi/trace" 2>/dev/null |
+            awk -F= '$1=="ip"{print $2}' || true
     )
 
     if [ -n "$REAL_IP" ]; then
         log_json INFO "capture_real_ip" \
             "host public IP memorized (leak reference)" \
             "ip=${REAL_IP}"
+    else
+        # Sans reference, la detection de fuite (public IP == IP reelle) est
+        # silencieusement desactivee : il faut le signaler, pas l'ignorer.
+        log_json WARN "capture_real_ip" \
+            "could not capture host public IP - leak detection disabled"
     fi
 }
 
@@ -573,7 +619,7 @@ run_tailscale_up_async() {
 
     (
         # shellcheck disable=SC2086
-        tailscale up \
+        ts_cli up \
             --accept-dns=false \
             $up_flags \
             > /var/log/tailscale-up.log 2>&1
@@ -607,16 +653,21 @@ start_tailscale() {
     export TAILSCALE_SOCKET="$TAILSCALE_RUN_DIR/tailscaled.sock"
     SERVICE_PIDS["tailscaled"]=$!
 
+    # M8 : le CLI tailscale ne lit PAS TAILSCALE_SOCKET (variable
+    # containerboot) ; il faut --socket a chaque invocation, sinon le CLI
+    # cherche /var/run/tailscale/tailscaled.sock et ne joint pas le demon.
+    ts_cli() { tailscale --socket="$TAILSCALE_RUN_DIR/tailscaled.sock" "$@"; }
+
     local waited=0
 
-    until tailscale status >/dev/null 2>&1 ||
+    until ts_cli status >/dev/null 2>&1 ||
         [ "$waited" -ge 20 ]; do
 
-        sleep 1
+        sleep_wait 1
         waited=$((waited + 1))
     done
 
-    if ! tailscale status >/dev/null 2>&1; then
+    if ! ts_cli status >/dev/null 2>&1; then
         log_json WARN "start_tailscale" \
             "tailscale daemon socket not ready after wait window"
     fi
@@ -630,7 +681,7 @@ start_tailscale() {
         (
             export TS_AUTHKEY="$TAILSCALE_AUTHKEY"
             # shellcheck disable=SC2086
-            tailscale up --accept-dns=false $up_flags                 > /var/log/tailscale-up.log 2>&1
+            ts_cli up --accept-dns=false $up_flags                 > /var/log/tailscale-up.log 2>&1
         ) &
         return 0
     fi

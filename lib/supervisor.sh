@@ -39,9 +39,12 @@ supervise_all() {
     while true; do
         attempt=$((attempt + 1))
 
-        # Counter Prometheus monotone : ne redescend jamais (M1)
-        METRIC_RESTART_COUNT=$((METRIC_RESTART_COUNT + 1))
-        METRIC_LAST_RESTART_TS=$(date +%s)
+        # Counter Prometheus monotone : ne redescend jamais (M1).
+        # L'iteration initiale (attempt=1) n'est PAS un redemarrage.
+        if [ "$attempt" -gt 1 ]; then
+            METRIC_RESTART_COUNT=$((METRIC_RESTART_COUNT + 1))
+            METRIC_LAST_RESTART_TS=$(date +%s)
+        fi
 
         # Phase 0 : Blocklist DNS
         if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ]; then
@@ -129,13 +132,33 @@ supervise_all() {
         fi
 
         # Firewall and services
-        setup_iptables
+        # H4 : plus de set -e - chaque retour critique est verifie.
+        # Si le kill switch ne peut pas etre pose, on NE demarre PAS les
+        # services (fail-closed) : un proxy sans kill switch fuirait.
+        if ! setup_iptables; then
+            log_json ERROR "supervisor" \
+                "setup_iptables failed - refusing to start services (fail-closed)"
+            sleep_wait 30
+            continue
+        fi
         setup_ip6tables
         setup_proxy_routing
 
-        start_privoxy
-        start_nginx_auth
-        start_vpn_service
+        if ! start_privoxy; then
+            log_json ERROR "supervisor" "privoxy failed to start"
+            sleep_wait 10
+            continue
+        fi
+        if ! start_nginx_auth; then
+            log_json ERROR "supervisor" "auth proxy failed to start"
+            sleep_wait 10
+            continue
+        fi
+        if ! start_vpn_service; then
+            log_json ERROR "supervisor" "VPN service failed to start"
+            sleep_wait 10
+            continue
+        fi
 
         if [ "$_BG_METRICS_STARTED" -eq 0 ]; then
             start_metrics
@@ -311,6 +334,14 @@ supervise_all() {
             fi
 
             if [ "$fail" -eq 0 ]; then
+                # C8 : le refresh blocklist (sous-shell) peut relancer dnsmasq
+                # sans mettre a jour SERVICE_PIDS. Relire le PID reel avant
+                # le test, sinon faux "process died" -> redemarrage complet.
+                local dnsmasq_pid
+                dnsmasq_pid=$(pidof dnsmasq 2>/dev/null | awk '{print $1}')
+                if [ -n "$dnsmasq_pid" ]; then
+                    SERVICE_PIDS[dnsmasq]="$dnsmasq_pid"
+                fi
                 if ! is_process_running "${SERVICE_PIDS[dnsmasq]}"; then
                     log_json ERROR "supervisor" "dnsmasq process died"
                     fail=1

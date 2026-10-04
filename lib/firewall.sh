@@ -14,34 +14,46 @@
 # derniere definition ecrase silencieusement les precedentes).
 # ============================================================================
 
-# ============================================================================
-# lib/firewall.sh - Firewall rule management (iptables/ip6tables)
-# ============================================================================
-# This module handles all firewall configuration including:
-# - IPv4/IPv6 iptables rules
-# - Kill switch and DNS leak prevention  
-# - Port 853 (DoT) firewall rules
-# - Return routes configuration
-# ============================================================================
-
 # ===========================================================================
 # Helpers for IPv6 support - wrapper around ip6tables
 # ===========================================================================
 
+# Wrapper ip6tables : code retour FIDELE a ip6tables (R5). L'ancienne
+# version avalait les erreurs et cassait les tests d'existence (-C) :
+# "ipt6 -C ... || ipt6 -A ..." ne posait jamais la regle.
+# Si ip6tables n'existe pas ou si l'IPv6 est absent du noyau, on retourne 0
+# sans rien faire (pas d'IPv6 a proteger dans ce cas) mais on alerte une fois.
 IPT6_WARNED=0
 ipt6() {
-    # Wrapper ip6tables : ignore les erreurs (noyau sans module ip6_tables)
-    # mais alerte une fois - un IPv6 ouvert sans alerte serait pire (H4).
-    if command -v ip6tables &>/dev/null; then
-        if ! ip6tables "$@" 2>/dev/null; then
-            if [ "$IPT6_WARNED" -eq 0 ]; then
-                IPT6_WARNED=1
-                log_json WARN "ipt6" "ip6tables command failed - IPv6 rules may not be enforced"
-            fi
-        fi
+    if ! command -v ip6tables &>/dev/null; then
+        return 0
     fi
+    if ip6tables "$@" 2>/dev/null; then
+        return 0
+    fi
+    local rc=$?
+    # ip6tables absent du noyau : echec systematique, une seule alerte
+    if [ "$rc" -eq 3 ] || ! ip6tables -L >/dev/null 2>&1; then
+        if [ "$IPT6_WARNED" -eq 0 ]; then
+            IPT6_WARNED=1
+            log_json WARN "ipt6" "ip6tables unusable on this kernel - IPv6 rules not enforced"
+        fi
+        return 0
+    fi
+    return "$rc"
+}
+
+# Variante fail-closed : a utiliser pour les commandes critiques (politiques
+# DROP). Si ip6tables est utilisable mais que la commande echoue, on logue
+# une ERREUR et on retourne 1 pour que l'appelant arrete le demarrage (H4).
+ipt6_must() {
+    ipt6 "$@" || {
+        log_json ERROR "ipt6" "ip6tables critical command failed" "cmd=$*"
+        return 1
+    }
     return 0
 }
+
 
 # ===========================================================================
 # DoT (DNS over TLS) - Firewall port 853 rules
@@ -103,8 +115,55 @@ firewall_early_lockdown() {
         iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
     done
 
-    # Telechargement blocklists (avant tunnel)
-    iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    # Telechargement blocklists (avant tunnel), seulement si necessaire
+    if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ] ||
+        [ "${COLLECT_REAL_IP:-true}" = "true" ]; then
+        iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    fi
+
+    # R2/R6 : resoudre les IPs des remotes VPN MAINTENANT, pendant que le DNS
+    # bootstrap (53 vers DNS_SERVER_*) est encore autorise. En mode DoT ces
+    # ACCEPT disparaissent au verrouillage final : resoudre apres echouerait
+    # et declencherait le fallback par port (brèche). TOUTES les IP sont
+    # conservees (round-robin DNS, R6) : a la reconnexion OpenVPN pourra
+    # joindre n'importe laquelle.
+    if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
+        local wg_host wg_port wg_ip
+        while read -r wg_host wg_port; do
+            [ -n "${wg_host:-}" ] || continue
+            wg_host="${wg_host#[}"
+            wg_host="${wg_host%]}"
+            [ -n "${wg_port:-}" ] || wg_port=51820
+            if [[ "$wg_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$wg_host" =~ : ]]; then
+                VPN_REMOTE_IPS="$VPN_REMOTE_IPS $wg_host|${wg_port}|udp"
+            else
+                while read -r wg_ip; do
+                    VPN_REMOTE_IPS="$VPN_REMOTE_IPS $wg_ip|${wg_port}|udp"
+                done < <(resolve_vpn_ips "$wg_host" "$DNS_SERVER_1" "$DNS_SERVER_2")
+            fi
+        done < <(get_wireguard_endpoint "${VPN_DIR}/wg0.conf")
+    else
+        local r_host r_port r_proto r_ip
+        while read -r r_host r_port r_proto; do
+            [ -n "${r_host:-}" ] || continue
+            if [[ "$r_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$r_host" =~ : ]]; then
+                VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_host|$r_port|$r_proto"
+            else
+                while read -r r_ip; do
+                    VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_ip|$r_port|$r_proto"
+                done < <(resolve_vpn_ips "$r_host" "$DNS_SERVER_1" "$DNS_SERVER_2")
+            fi
+        done < <(parse_vpn_remotes "$VPN_CONF")
+    fi
+    export VPN_REMOTE_IPS="${VPN_REMOTE_IPS# }"
+    if [ -n "$VPN_REMOTE_IPS" ]; then
+        log_json INFO "firewall_early_lockdown" \
+            "VPN remotes resolved during bootstrap" \
+            "endpoints=$(echo $VPN_REMOTE_IPS | wc -w)"
+    else
+        log_json WARN "firewall_early_lockdown" \
+            "no VPN remote resolved during bootstrap"
+    fi
 
     ipt6 -P INPUT DROP
     ipt6 -P FORWARD DROP
@@ -166,8 +225,14 @@ setup_iptables() {
         iptables -A OUTPUT -p udp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
         iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
     fi
-    iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 80 -j ACCEPT
-    iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 443 -j ACCEPT
+    # Sonde de sante limitee a l'interface physique (reduit la brèche
+    # residuelle vers un seul hote, toutes interfaces). Les sondes peuvent
+    # aussi passer par le tunnel une fois celui-ci monte.
+    local hc_iface
+    hc_iface=$(get_physical_iface)
+    hc_iface="${hc_iface:-eth0}"
+    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 80 -j ACCEPT
+    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 443 -j ACCEPT
 
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -294,71 +359,66 @@ setup_iptables() {
         iptables -A OUTPUT -p tcp -d 127.0.0.11 --dport 53 -j ACCEPT
     fi
 
-    # VPN Configuration - regles ciblees par remote (C2) : limitees a
-    # l'interface physique ET a l'IP du serveur VPN, sinon tout trafic
-    # sortant vers le meme numero de port passerait hors tunnel (tcp/443!).
+    # VPN Configuration - regles ciblees par remote (C2/R2/R6) : les IPs ont
+    # ete resolues pendant le bootstrap (firewall_early_lockdown) et stockees
+    # dans VPN_REMOTE_IPS sous la forme "ip|port|proto". Resoudre ici serait
+    # trop tard en mode DoT (port 53 externe bloque). Pas de fallback par
+    # port : si aucune regle n'est posee, on echoue ferme (fail-closed).
     local phys_iface
     phys_iface=$(get_physical_iface)
     phys_iface="${phys_iface:-eth0}"
 
-    if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
-        local wg_host wg_port wg_ip
-        while read -r wg_host wg_port; do
-            [ -n "${wg_host:-}" ] || continue
-            wg_ip="$wg_host"
-            if ! [[ "$wg_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                wg_ip=$(resolve_hostname "$wg_host" "$DNS_SERVER_1" "$DNS_SERVER_2") || wg_ip=""
+    local endpoint rest r_ip r_port r_proto
+    local rule_added=0
+    for endpoint in ${VPN_REMOTE_IPS:-}; do
+        rest="${endpoint#*|}"
+        r_ip="${endpoint%%|*}"
+        r_port="${rest%%|*}"
+        r_proto="${rest#*|}"
+        [ -n "$r_ip" ] && [ -n "$r_port" ] && [ -n "$r_proto" ] || continue
+
+        if [[ "$r_ip" =~ : ]]; then
+            if ipt6 -A OUTPUT -o "$phys_iface" -d "$r_ip" -p "$r_proto" --dport "$r_port" -j ACCEPT; then
+                rule_added=$((rule_added + 1))
+            else
+                log_json ERROR "setup_iptables" \
+                    "failed to add IPv6 VPN remote rule" \
+                    "ip=${r_ip}" "proto=${r_proto}" "port=${r_port}"
             fi
-            [ -n "$wg_ip" ] || continue
+        else
+            if iptables -A OUTPUT -o "$phys_iface" -d "$r_ip" -p "$r_proto" --dport "$r_port" -j ACCEPT; then
+                rule_added=$((rule_added + 1))
+                log_json INFO "setup_iptables" \
+                    "VPN remote allowed" \
+                    "iface=${phys_iface}" "ip=${r_ip}" "proto=${r_proto}" "port=${r_port}"
+            else
+                log_json ERROR "setup_iptables" \
+                    "failed to add VPN remote rule" \
+                    "iface=${phys_iface}" "ip=${r_ip}" "proto=${r_proto}" "port=${r_port}"
+            fi
+        fi
+    done
 
-            iptables -A OUTPUT -o "$phys_iface" -d "$wg_ip" -p udp --dport "${wg_port:-51820}" -j ACCEPT
-            log_json INFO "setup_iptables" \
-                "WireGuard endpoint allowed" \
-                "iface=${phys_iface}" "ip=${wg_ip}" "port=${wg_port}"
-        done < <(get_wireguard_endpoint "${VPN_DIR}/wg0.conf")
+    if [ "$rule_added" -eq 0 ]; then
+        log_json ERROR "setup_iptables" \
+            "no VPN remote rule could be added - failing closed" \
+            "endpoints=${VPN_REMOTE_IPS:-none}"
+        FW_FAILED=1
+        return 1
+    fi
 
-        # Allow all traffic through wg interface
+    if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
         iptables -A OUTPUT -o wg+ -j ACCEPT
         iptables -t nat -A POSTROUTING -o wg+ -j MASQUERADE
-
-        log_json INFO "setup_iptables" "WireGuard firewall rules configured"
+        log_json INFO "setup_iptables" "WireGuard firewall rules configured" \
+            "remotes=${rule_added}"
     else
-        local r_host r_port r_proto r_ip
-        local remotes_count=0
-        while read -r r_host r_port r_proto; do
-            [ -n "${r_host:-}" ] || continue
-
-            r_ip="$r_host"
-            if ! [[ "$r_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                r_ip=$(resolve_hostname "$r_host" "$DNS_SERVER_1" "$DNS_SERVER_2") || r_ip=""
-            fi
-            [ -n "$r_ip" ] || continue
-            [ -n "${r_port:-}" ] || r_port="$VPN_PORT"
-
-            iptables -A OUTPUT -o "$phys_iface" -d "$r_ip" -p "$r_proto" --dport "$r_port" -j ACCEPT
-            remotes_count=$((remotes_count + 1))
-            log_json INFO "setup_iptables" \
-                "VPN remote allowed" \
-                "iface=${phys_iface}" "ip=${r_ip}" "proto=${r_proto}" "port=${r_port}"
-        done < <(parse_vpn_remotes "$VPN_CONF")
-
-        if [ "$remotes_count" -eq 0 ]; then
-            # Fallback : aucun remote resolu - regle contrainte a
-            # l'interface physique et au port (moins stricte, loggee WARN).
-            iptables -A OUTPUT -o "$phys_iface" -p "$VPN_PROTO" --dport "$VPN_PORT" -j ACCEPT
-            log_json WARN "setup_iptables" \
-                "no VPN remote resolved - port-based rule on ${phys_iface}" \
-                "vpn_proto=${VPN_PROTO}" "vpn_port=${VPN_PORT}"
-        fi
-
         iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
         iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
-
-        log_json INFO "setup_iptables" \
-            "OpenVPN firewall rules configured" \
+        log_json INFO "setup_iptables" "OpenVPN firewall rules configured" \
             "vpn_proto=${VPN_PROTO}" \
             "vpn_port=${VPN_PORT}" \
-            "remotes=${remotes_count}"
+            "remotes=${rule_added}"
     fi
 
     log_json INFO "setup_iptables" \
@@ -471,20 +531,9 @@ setup_ip6tables() {
         done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
 
-    # Regles VPN IPv6 ciblees par remote (C2) - pas de regle large par port.
-    if [ "${VPN_TYPE:-openvpn}" = "openvpn" ]; then
-        local r6_host r6_port r6_proto r6_ip
-        while read -r r6_host r6_port r6_proto; do
-            [ -n "${r6_host:-}" ] || continue
-            r6_ip="$r6_host"
-            if ! [[ "$r6_ip" =~ : ]]; then
-                r6_ip=$(resolve_hostname_all "$r6_host" "$DNS_SERVER_1" "$DNS_SERVER_2" | grep ':' | head -1) || r6_ip=""
-            fi
-            [[ "$r6_ip" =~ : ]] || continue
-            [ -n "${r6_port:-}" ] || r6_port="$VPN_PORT"
-            ipt6 -A OUTPUT -d "$r6_ip" -p "$r6_proto" --dport "$r6_port" -j ACCEPT
-        done < <(parse_vpn_remotes "$VPN_CONF")
-    fi
+    # Regles VPN IPv6 ciblees par remote (C2/R2) : les endpoints IPv6 ont
+    # ete resolus pendant le bootstrap et sont deja couverts par la boucle
+    # VPN_REMOTE_IPS de setup_iptables (ipt6). Rien a resoudre ici.
 
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
@@ -608,9 +657,10 @@ setup_return_routes() {
             ip rule add from "$ip" lookup 10 2>/dev/null || true
         fi
 
-        if ! iptables -C INPUT -d "$ip" -j ACCEPT 2>/dev/null; then
-            iptables -A INPUT -d "$ip" -j ACCEPT
-        fi
+        # NB : pas de "iptables -A INPUT -d $ip -j ACCEPT" : cette regle
+        # acceptait TOUT paquet adresse au conteneur depuis n'importe quelle
+        # source, annulant INPUT DROP et ALLOW_EXTERNAL_PROXY_ACCESS. Les
+        # paquets legitimes (conntrack ESTABLISHED,RELATED) passent deja.
     done
 
     if [ -n "$gw" ]; then
@@ -624,10 +674,7 @@ setup_return_routes() {
         if ! ip -6 rule show table 10 2>/dev/null | grep -q "$ip6"; then
             ip -6 rule add from "$ip6" lookup 10 2>/dev/null || true
         fi
-
-        if ! ipt6 -C INPUT -d "$ip6" -j ACCEPT 2>/dev/null; then
-            ipt6 -A INPUT -d "$ip6" -j ACCEPT
-        fi
+        # Pas de regle INPUT -d $ip6 ACCEPT (voir boucle IPv4 ci-dessus).
     done
 
     if [ -n "$gw6" ]; then

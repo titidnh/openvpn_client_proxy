@@ -295,6 +295,36 @@ resolve_hostname() {
 # RÃƒÂ©sout un nom d'hÃƒÂ´te en TOUTES les IPs (retourne une IP par ligne)
 # FIX STABILITÃƒâ€° #10 (suite): RÃƒÂ©sout TOUTES les IPs pour un hostname
 # Usage: resolve_hostname_all HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
+resolve_vpn_ips() {
+    local hostname="$1"
+    shift
+    local dns_servers=("$@")
+
+    if [ ${#dns_servers[@]} -eq 0 ]; then
+        dns_servers=("$DEFAULT_DNS_SERVER_1" "$DEFAULT_DNS_SERVER_2")
+    fi
+
+    local dns ips
+    for dns in "${dns_servers[@]}"; do
+        ips=$(dig +short "$hostname" @"$dns" A AAAA 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' || true)
+        if [ -n "$ips" ]; then
+            echo "$ips"
+            return 0
+        fi
+    done
+
+    for dns in "${dns_servers[@]}"; do
+        ips=$(nslookup -type=any "$hostname" "$dns" 2>/dev/null |
+            awk '/^Address: /{ if ($2 !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' || true)
+        if [ -n "$ips" ]; then
+            echo "$ips"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 resolve_hostname_all() {
     local hostname="$1"
     shift
@@ -413,23 +443,29 @@ get_vpn_port_proto() {
 }
 
 # Extrait les endpoints (remote) d'une configuration OpenVPN.
-# Normalise le protocole (udp/tcp, suffixes 4/6/-client/-server retires)
-# et emet une ligne "ip port proto" par remote (support remote-random,
-# remotes multiples, proto porte par la directive remote).
+# Robuste (R3) : ignore les CR (fichiers .ovpn Windows), gere la directive
+# "port", un remote sans port explicite (port par defaut de la conf, sinon
+# 1194), et normalise le protocole (udp/tcp, suffixes 4/6/-client/-server).
+# Emets "ip port proto" par remote (port jamais vide).
 # Usage: parse_vpn_remotes [CONFIG_FILE]
 parse_vpn_remotes() {
     local conf="${1:-$DEFAULT_VPN_CONF}"
     [ -f "$conf" ] || return 0
 
-    local default_proto
-    default_proto=$(awk '/^[[:space:]]*proto[[:space:]]/{print $2; exit}' "$conf")
-    default_proto="${default_proto:-$DEFAULT_VPN_PROTO}"
-
-    awk -v default_proto="$default_proto" '
-        /^[[:space:]]*remote[[:space:]]/ {
+    awk '
+        { sub(/\r$/, "") }
+        /^[[:space:]]*port[[:space:]]+/ { default_port = $2 }
+        /^[[:space:]]*proto[[:space:]]+/ { default_proto = $2 }
+        /^[[:space:]]*remote[[:space:]]+/ {
             host = $2
-            port = ($3 ~ /^[0-9]+$/) ? $3 : ""
-            proto = ($3 ~ /^[0-9]+$/ && $4 != "") ? $4 : default_proto
+            if ($3 ~ /^[0-9]+$/) {
+                port = $3
+                proto = ($4 != "") ? $4 : default_proto
+            } else {
+                port = default_port
+                proto = $3
+            }
+            if (port == "") port = "1194"
             if (proto == "") proto = "udp"
             # Normalisation : udp4/udp6/tcp4/tcp6/tcp-client/tcp-server -> udp/tcp
             if (proto ~ /^udp/) proto = "udp"

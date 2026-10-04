@@ -330,3 +330,68 @@
   CI/CD, pinning image, Trivy, nettoyage du code mort (`vpn.sh`, `proxy.sh`,
   `vpn-startup.sh`), encodage mojibake de `common.sh`, versions hétérogènes :
   à traiter en semaine 4.
+
+---
+
+# Round 2 — Corrections issues de la revue indépendante (R1–R6)
+
+> Chaque correctif de la revue a été appliqué puis re-vérifié (bash -n +
+> shellcheck --severity=error + tests unitaires ciblés quand le réseau
+> sandbox le permettait ; la résolution DNS externe est bloquée dans la
+> sandbox, les chemins de résolution sont validés par lecture croisée
+> avec resolve_hostname_all, testé en round 1).
+
+## R2b — Fallback par port rouvrait la brèche tcp/443 en mode DoT
+- **Fichiers** : `lib/firewall.sh` (`firewall_early_lockdown`, `setup_iptables`), `lib/common.sh` (`resolve_vpn_ips`)
+- **Problème** : les `remote` étaient résolus APRÈS le verrouillage DROP ; en mode DoT le port 53 externe est bloqué → résolution impossible → fallback « port-based » large (brèche kill switch).
+- **Correction** :
+  - Les IPs de TOUS les remotes (OpenVPN et WireGuard, v4 ET v6) sont résolues pendant le bootstrap (`firewall_early_lockdown`), quand le DNS 53 vers DNS_SERVER_* est encore autorisé, et stockées dans `VPN_REMOTE_IPS` (format `ip|port|proto`, le `:` étant ambigu avec IPv6).
+  - `setup_iptables` ne résout plus rien : il consomme `VPN_REMOTE_IPS`, pose une règle ciblée `-o <phys> -d <ip>` par endpoint, **compte uniquement les règles réellement posées** (rc iptables vérifié) et **échoue fermé** (`FW_FAILED=1; return 1`) si aucune règle n'a pu être posée. Le fallback par port est **supprimé**.
+  - Nouvelle fonction `resolve_vpn_ips` (A + AAAA) ; `get_wireguard_endpoint` retourne un host v6 entre crochets géré (crochets retirés, port par défaut 51820).
+  - La section IPv6 de `setup_ip6tables` ne re-résout plus : les endpoints v6 sont déjà couverts par la boucle `VPN_REMOTE_IPS` de `setup_iptables` via `ipt6`.
+
+## R3 — `remote` sans port / CRLF bloquaient le serveur VPN lui-même
+- **Fichier** : `lib/common.sh` (`parse_vpn_remotes`)
+- **Problème** : port vide → décalage des champs `read -r` → règle iptables invalide, kill switch bloquant le serveur VPN ; CRLF non nettoyé.
+- **Correction** (déjà en place, re-testée ici) : `sub(/\r$/,"")`, directive `port` par défaut, ordre `host port proto` sans champ vide, normalisation udp4/tcp-client → udp/tcp.
+- **Validation** : test avec `proto tcp`/`port 1195`/`remote` sans port → `vpn.example.com 1195 udp` ; fichier CRLF Windows → host propre, aucun `\r` (vérifié par `od -c`).
+
+## R4 — Handler metrics généré vide (heredoc non cité)
+- **Fichier** : `start.sh` (`start_metrics`)
+- **Problème** : `<<HANDLER` interpolait tout le contenu à la génération → corps HTTP vide, valeurs figées.
+- **Correction** : heredoc **cité** `<<'HANDLER'` ; `METRICS_DIR` injecté séparément via `printf '%q'`. `[VÉRIFIÉE bash -n + lecture]` — la génération est désormais statique.
+- **Complément M1** : `METRIC_RESTART_COUNT` n'incrémente qu'à partir d'`attempt=2` (l'itération initiale n'est plus comptée comme restart).
+
+## C8 — Faux « dnsmasq process died » après refresh blocklist
+- **Fichier** : `lib/supervisor.sh`
+- **Problème** : le sous-shell de refresh relançait dnsmasq sans mettre à jour `SERVICE_PIDS` → le superviseur voyait un PID mort → redémarrage complet quotidien.
+- **Correction** : le superviseur relit le PID réel (`pidof dnsmasq | awk '{print $1}'`) avant chaque test de vie.
+
+## H4 — Vérifications explicites après retrait de set -e
+- **Fichier** : `lib/supervisor.sh` (+ `start.sh`)
+- **Problème** : plus rien ne détectait l'échec des commandes critiques.
+- **Correction** : `setup_iptables` en échec → **les services ne démarrent pas** (fail-closed, `continue` + backoff). `start_privoxy` vérifie que le processus survit 1 s (config invalide détectée). `start_nginx_auth` et `start_vpn_service` déjà fail-closed ; le superviseur vérifie leurs retours et ne démarre pas la suite en cas d'échec.
+
+## R5 — `ipt6` avalait les codes retour (déjà corrigé, re-vérifié)
+- **Fichier** : `lib/firewall.sh` — wrapper fidèle, alerte unique si ip6tables inutilisable.
+
+## Constats annexes de la revue traités
+- **`setup_return_routes`** : les règles `INPUT -d <ip conteneur> -j ACCEPT` (v4 et v6), qui acceptaient TOUT paquet adressé au conteneur depuis n'importe quelle source, sont **supprimées** (les retours conntrack suffisent).
+- **`HEALTHCHECK_IP`** : règles 80/443 limitées à l'interface physique (`-o $iface`).
+- **En-tête dupliqué** de `lib/firewall.sh` (2 blocs après déduplication C3) : second bloc supprimé.
+- **WireGuard (R7/C4 round 2)** :
+  - backslashes fantômes en fin de `log_json` (3 commandes « not found ») supprimés ;
+  - endpoint résolu **une seule fois** ; `wg set` et la route hôte utilisent la **même IP** ; hostname non résolu → **échec explicite** ; route hote en échec → **échec explicite** (plus de boucle wg0) ;
+  - `PresharedKey` et `PersistentKeepalive` pris en charge (keepalive 25 s par défaut derrière NAT, sinon la sonde handshake échoue systématiquement) ;
+  - Endpoint IPv6 `[...]:port` géré ;
+  - repli **wireguard-go** si le module noyau wireguard est absent.
+- **Tailscale M8** : le CLI ne lit pas `TAILSCALE_SOCKET` ; un wrapper `ts_cli` passe `--socket=...` à chaque invocation (`status`, `up`).
+- **`capture_real_ip`** : endpoint sans DNS (`https://1.1.1.1/cdn-cgi/trace`, le lockdown ayant vidé le NAT Docker 127.0.0.11), `WARN` explicite si l'IP réelle ne peut être mémorisée (sinon l'anti-fuite est désactivé en silence), option `COLLECT_REAL_IP=false` pour ne pas révéler l'IP réelle à un tiers.
+- **`start_privoxy`** : sonde de vie à 1 s → retour 1 si mort immédiate.
+
+## Vérifications round 2
+- `bash -n` : OK sur `start.sh`, `lib/common.sh`, `lib/firewall.sh`, `lib/supervisor.sh`, `lib/wireguard.sh`.
+- `shellcheck --severity=error` : **0 erreur** sur les 5 fichiers.
+- `parse_vpn_remotes` : re-testé (multi-remotes, remote sans port, CRLF, udp4/tcp-client) — conforme.
+- Doublons de fonctions : uniquement les stubs gardés par `declare -F` de `lib/vpn.sh`/`lib/proxy.sh` (jamais sourcés) — sans effet à l'exécution.
+- Résolution DNS externe : **bloquée dans la sandbox** ; chemins de `resolve_vpn_ips` validés par lecture croisée avec `resolve_hostname_all` (validé round 1) et `bash -n`. À confirmer au premier déploiement réel (T2 de la revue).

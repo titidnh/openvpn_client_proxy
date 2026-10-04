@@ -90,10 +90,44 @@ start_wireguard() {
     local endpoint_host="${endpoint%:*}"
     local endpoint_port="${endpoint##*:}"
 
-    # Interface
+    # Endpoint IPv6 [2001:db8::1]:51820 -> retirer les crochets
+    if [[ "$endpoint_host" =~ ^\[(.*)\]$ ]]; then
+        endpoint_host="${BASH_REMATCH[1]}"
+    fi
+
+    # R7 : resoudre l'endpoint UNE SEULE fois et utiliser l'IP partout
+    # (wg set, route hote). Sinon wg et ip route resolvent chacun de leur
+    # cote et peuvent obtenir deux IP differentes ; pire, "ip route add
+    # <hostname>" echoue silencieusement et les paquets chiffres partent
+    # dans wg0 (boucle). Sans resolution : echec explicite (fail-closed).
+    local endpoint_ip="$endpoint_host"
+    if ! [[ "$endpoint_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! [[ "$endpoint_ip" =~ : ]]; then
+        endpoint_ip=$(resolve_vpn_ips "$endpoint_host" "$DNS_SERVER_1" "$DNS_SERVER_2" | head -1) || endpoint_ip=""
+        if [ -n "$endpoint_ip" ]; then
+            log_json INFO "start_wireguard" \
+                "endpoint resolved" \
+                "host=${endpoint_host}" "ip=${endpoint_ip}"
+        else
+            log_json ERROR "start_wireguard" \
+                "cannot resolve endpoint - aborting (fail-closed)" \
+                "host=${endpoint_host}"
+            return 1
+        fi
+    fi
+    # Interface - repli wireguard-go si le noyau n'a pas le module wireguard
     if ! ip link add dev wg0 type wireguard 2>/dev/null; then
-        log_json ERROR "start_wireguard" "failed to create wg0 interface"
-        return 1
+        if command_exists wireguard-go && [ ! -e /dev/net/tun -o -c /dev/net/tun ]; then
+            log_json WARN "start_wireguard" \
+                "kernel wireguard unavailable - falling back to wireguard-go"
+            if ! wireguard-go wg0 2>/dev/null; then
+                log_json ERROR "start_wireguard" "wireguard-go fallback failed"
+                return 1
+            fi
+        else
+            log_json ERROR "start_wireguard" \
+                "failed to create wg0 interface (no kernel module, no wireguard-go)"
+            return 1
+        fi
     fi
 
     if ! printf '%s\n' "$private_key" | wg set wg0 private-key /dev/stdin 2>/dev/null; then
@@ -110,11 +144,28 @@ start_wireguard() {
 
     if [ -n "$peer_pubkey" ]; then
         local wg_peer_args
-        wg_peer_args="peer ${peer_pubkey} endpoint ${endpoint}"
+        wg_peer_args="peer ${peer_pubkey} endpoint ${endpoint_ip}:${endpoint_port}"
         if [ -n "$allowed_ips" ]; then
             wg_peer_args="$wg_peer_args allowed-ips ${allowed_ips// /}"
         else
             wg_peer_args="$wg_peer_args allowed-ips 0.0.0.0/0,::/0"
+        fi
+        # PresharedKey (requise par plusieurs fournisseurs) et
+        # PersistentKeepalive (indispensable derriere NAT, sinon la
+        # supervision par handshake echoue).
+        local preshared_key keepalive
+        preshared_key=$(wg_get_value "$conf" "PresharedKey")
+        if [ -n "$preshared_key" ]; then
+            if ! printf '%s\n' "$preshared_key" | wg set wg0 peer "$peer_pubkey" preshared-key /dev/stdin 2>/dev/null; then
+                log_json WARN "start_wireguard" "failed to set preshared key"
+            fi
+        fi
+        keepalive=$(wg_get_value "$conf" "PersistentKeepalive")
+        if [ -n "$keepalive" ]; then
+            wg_peer_args="$wg_peer_args persistent-keepalive ${keepalive}"
+        else
+            # Derriere NAT, sans keepalive le tunnel meurt en ~2 min.
+            wg_peer_args="$wg_peer_args persistent-keepalive 25"
         fi
         # shellcheck disable=SC2086
         if ! wg set wg0 $wg_peer_args 2>/dev/null; then
@@ -159,7 +210,18 @@ start_wireguard() {
             gw=$(ip -4 route show dev "$phys" 2>/dev/null | awk '/^default/{print $3; exit}')
 
             if [ -n "$gw" ]; then
-                ip route add "$endpoint_host" via "$gw" dev "$phys" 2>/dev/null || true
+                # R7 : route hote vers l'IP RESOLUE de l'endpoint (un
+                # hostname echouerait et wg0 bouclerait sur lui-meme).
+                if ! ip route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
+                    log_json ERROR "start_wireguard" \
+                        "cannot add endpoint host route - aborting (fail-closed)" \
+                        "ip=${endpoint_ip}" "gw=${gw}"
+                    ip link del dev wg0 2>/dev/null || true
+                    return 1
+                fi
+            else
+                log_json WARN "start_wireguard" \
+                    "no gateway on ${phys} - endpoint route not installed"
             fi
         fi
 
@@ -174,9 +236,9 @@ start_wireguard() {
         log_json INFO "start_wireguard" "AllowedIPs routes via wg0 installed"
     fi
 
-    log_json INFO "start_wireguard" \\
-        "WireGuard tunnel up" \\
-        "endpoint=${endpoint}" \\
+    log_json INFO "start_wireguard" \
+        "WireGuard tunnel up" \
+        "endpoint=${endpoint_ip}:${endpoint_port}" \
         "address=${first_addr}"
 
     return 0
