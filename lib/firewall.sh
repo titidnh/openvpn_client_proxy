@@ -145,12 +145,13 @@ firewall_early_lockdown() {
     # meme serveur) - resoudre chaque hostname UNE SEULE fois (sur un DNS
     # muet, chaque resolution coute plusieurs secondes).
     declare -A RESOLVE_CACHE
+    # 3.1-v5 : NE PAS appeler via une substitution de processus (< <(...)) -
+    # le sous-shell perdrait l'ecriture du cache. On alimente le cache dans
+    # le shell parent, puis on lit RESOLVE_CACHE directement.
     resolve_cached() {
-        local host="$1" out
-        [ -n "${RESOLVE_CACHE[$host]+set}" ] || \
+        local host="$1"
+        [ -n "${RESOLVE_CACHE[$host]+set}" ] ||
             RESOLVE_CACHE[$host]="$(resolve_vpn_ips "$host" "$DNS_SERVER_1" "$DNS_SERVER_2" 2>/dev/null || true)"
-        out="${RESOLVE_CACHE[$host]}"
-        [ -n "$out" ] && echo "$out"
         return 0
     }
     if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
@@ -163,9 +164,11 @@ firewall_early_lockdown() {
             if [[ "$wg_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$wg_host" =~ : ]]; then
                 VPN_REMOTE_IPS="$VPN_REMOTE_IPS $wg_host|${wg_port}|udp"
             else
+                resolve_cached "$wg_host"
                 while read -r wg_ip; do
+                    [ -n "${wg_ip:-}" ] || continue
                     VPN_REMOTE_IPS="$VPN_REMOTE_IPS $wg_ip|${wg_port}|udp"
-                done < <(resolve_cached "$wg_host")
+                done <<< "${RESOLVE_CACHE[$wg_host]}"
             fi
         done < <(get_wireguard_endpoint "${VPN_DIR}/wg0.conf")
     else
@@ -175,9 +178,11 @@ firewall_early_lockdown() {
             if [[ "$r_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$r_host" =~ : ]]; then
                 VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_host|$r_port|$r_proto"
             else
+                resolve_cached "$r_host"
                 while read -r r_ip; do
+                    [ -n "${r_ip:-}" ] || continue
                     VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_ip|$r_port|$r_proto"
-                done < <(resolve_cached "$r_host")
+                done <<< "${RESOLVE_CACHE[$r_host]}"
             fi
         done < <(parse_vpn_remotes "$VPN_CONF")
     fi

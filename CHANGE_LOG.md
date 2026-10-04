@@ -573,3 +573,41 @@ La revue v4 valide B1-B5 sans nouveau defaut bloquant. Corrections des points no
 - compose : `disable_ipv6=0`, `blocklist-cache:/tmp` (M5/M9).
 - Banc netns-tests en CI (necessite root/unshare).
 - `ipt6_must` non branchee.
+
+---
+
+## Round 5 - revue v5 (round 4 de verification) : correctifs des 2 reservations
+
+La revue v5 valide 3.2/3.3/3.4/3.5/3.6 du round 4, sans regression, avec deux reservations :
+
+### v5-3.1 - Cache de resolution inoperant (sous-shell) (lib/firewall.sh)
+**PROBLEME** : resolve_cached etait appelee dans une substitution de processus
+(`done < <(resolve_cached "$r_host")`) : l'ecriture dans RESOLVE_CACHE se perdait
+dans le sous-shell - 3 appels reels pour 3 remotes sur 2 hostnames (attendu 2).
+**CORRECTIF** : resolve_cached alimente le cache dans le shell PARENT (plus de
+substitution de processus), puis la lecture se fait via `<<< "${RESOLVE_CACHE[$host]}"`.
+Applique aux deux branches (openvpn et wireguard).
+**VALIDATION** :
+- openvpn : 3 remotes / 2 hostnames (dont un hostname a 2 IP) -> 2 appels reels
+  seulement, VPN_REMOTE_IPS complete (5 entrees).
+- wireguard : endpoint par nom -> 1 seul appel.
+
+### v5-3.2 - Blocs `<connection>` : heritage des options globales (lib/common.sh)
+**PROBLEME** : une option non precisee dans un bloc retombait sur udp/1194 au lieu
+d'heriter de la valeur globale (norme OpenVPN) - `proto tcp` global + bloc sans
+proto donnait une regle udp fausse -> serveur VPN bloque.
+**CORRECTIF** : en 2e passe, si `blkport[k]`/`blkproto[k]` est vide, on retombe sur
+`dport`/`dproto` (les globales, deja lues en 1re passe quel que soit l'ordre).
+**VALIDATION** : 15/15 - les 4 cas du revioir (proto global seul, port+proto globaux,
+port redefini dans le bloc, globales APRES les blocs) + les 11 cas de non-regression
+du round 4 (blocs avec valeurs propres, ordre remote avant/apres port/proto,
+multi-remote par bloc, melange bloc/global, CRLF, tcp-client, bare remote).
+
+### v5-3.3 - Details mineurs (lib/common.sh)
+- Indentation du bloc `if command -v dig` dans resolve_vpn_ips.
+- Commentaire duree corrigee : ~4 s par serveur muet (mesure revioir), pas ~20 s.
+
+### Verification globale round 5
+- bash -n OK ; shellcheck --severity=error : 0 erreur ; aucun doublon de fonction.
+- Parseur 15/15 ; cache 2 appels / 5 entrees (openvpn), 1 appel (wireguard) ;
+  compteur pare-feu 5 echecs -> return 1 ; WG v6 crochets + ip -6 route inchanges.

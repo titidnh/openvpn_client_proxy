@@ -306,19 +306,19 @@ resolve_vpn_ips() {
 
     local dns ips
     if command -v dig >/dev/null 2>&1; then
-    # B1 : "dig host A AAAA" est invalide - seul le dernier type est pris en
-    # compte (seule l'IPv6 revenait). Deux requetes explicites par serveur.
-    # +time=2 +tries=1 : sans eux, ~20 s par serveur muet, plusieurs minutes
-    # pour un .ovpn a une dizaine de remotes.
-    for dns in "${dns_servers[@]}"; do
-        ips=$(dig +short +time=2 +tries=1 @"$dns" "$hostname" A "$hostname" AAAA 2>/dev/null |
-            grep -E '^[0-9a-fA-F.:]+$' || true)
-        if [ -n "$ips" ]; then
-            echo "$ips"
-            return 0
-        fi
-    done
-    return 1
+        # B1 : "dig host A AAAA" est invalide - seul le dernier type est
+        # pris en compte (seule l'IPv6 revenait). Deux requetes explicites
+        # par serveur. +time=2 +tries=1 : sinon ~4 s par serveur muet,
+        # plusieurs minutes pour un .ovpn a une dizaine de remotes.
+        for dns in "${dns_servers[@]}"; do
+            ips=$(dig +short +time=2 +tries=1 @"$dns" "$hostname" A "$hostname" AAAA 2>/dev/null |
+                grep -E '^[0-9a-fA-F.:]+$' || true)
+            if [ -n "$ips" ]; then
+                echo "$ips"
+                return 0
+            fi
+        done
+        return 1
     fi
 
     # Repli nslookup : seulement si dig est absent (3.1 - sinon on double
@@ -512,9 +512,14 @@ parse_vpn_remotes() {
         $1 == "remote" {
             host = $2
             if (inblock2) {
+                # v5-3.2 : une option absente du bloc herite de la valeur
+                # globale (norme OpenVPN) - sinon proto tcp global + bloc
+                # sans proto donnait udp (regle fausse, VPN bloque).
                 k = ++blkseen
                 port = blkport[k]
+                if (port == "") port = dport
                 proto = blkproto[k]
+                if (proto == "") proto = dproto
             } else {
                 port = dport
                 proto = dproto
