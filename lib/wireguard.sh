@@ -102,9 +102,8 @@ start_wireguard() {
     # Repli : resolution directe si la liste est vide (demarrage hors
     # superviseur). Sans resolution : echec explicite (fail-closed).
     local endpoint_ip=""
-    local ep rest
+    local ep
     for ep in ${VPN_REMOTE_IPS:-}; do
-        rest="${ep#*|}"
         endpoint_ip="${ep%%|*}"
         break
     done
@@ -158,7 +157,10 @@ start_wireguard() {
 
     if [ -n "$peer_pubkey" ]; then
         local wg_peer_args
-        wg_peer_args="peer ${peer_pubkey} endpoint ${endpoint_ip}:${endpoint_port}"
+        # 3.4 : wg exige [v6]:port pour un littéral IPv6
+        local endpoint_addr="${endpoint_ip}:${endpoint_port}"
+        [[ "$endpoint_ip" =~ : ]] && endpoint_addr="[${endpoint_ip}]:${endpoint_port}"
+        wg_peer_args="peer ${peer_pubkey} endpoint ${endpoint_addr}"
         if [ -n "$allowed_ips" ]; then
             wg_peer_args="$wg_peer_args allowed-ips ${allowed_ips// /}"
         else
@@ -221,24 +223,39 @@ start_wireguard() {
         local phys
         phys=$(get_physical_iface)
         if [ -n "$phys" ]; then
-            gw=$(ip -4 route show dev "$phys" 2>/dev/null | awk '/^default/{print $3; exit}')
-
-            if [ -n "$gw" ]; then
-                # R7 : route hote vers l'IP RESOLUE de l'endpoint (un
-                # hostname echouerait et wg0 bouclerait sur lui-meme).
-                if ! ip route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
-                    log_json ERROR "start_wireguard" \
-                        "cannot add endpoint host route - aborting (fail-closed)" \
-                        "ip=${endpoint_ip}" "gw=${gw}"
-                    ip link del dev wg0 2>/dev/null || true
-                    return 1
+            # 3.4 : endpoint v6 -> ip -6 route avec passerelle v6
+            if [[ "$endpoint_ip" =~ : ]]; then
+                gw=$(ip -6 route show dev "$phys" 2>/dev/null | awk '/^default/{print $3; exit}')
+                if [ -n "$gw" ]; then
+                    if ! ip -6 route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
+                        log_json ERROR "start_wireguard" \
+                            "cannot add endpoint host route - aborting (fail-closed)" \
+                            "ip=${endpoint_ip}" "gw=${gw}"
+                        ip link del dev wg0 2>/dev/null || true
+                        return 1
+                    fi
+                else
+                    log_json WARN "start_wireguard" \
+                        "no IPv6 gateway on ${phys} - endpoint route not installed"
                 fi
             else
-                log_json WARN "start_wireguard" \
-                    "no gateway on ${phys} - endpoint route not installed"
+                gw=$(ip -4 route show dev "$phys" 2>/dev/null | awk '/^default/{print $3; exit}')
+                if [ -n "$gw" ]; then
+                    # R7 : route hote vers l'IP RESOLUE de l'endpoint (un
+                    # hostname echouerait et wg0 bouclerait sur lui-meme).
+                    if ! ip route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
+                        log_json ERROR "start_wireguard" \
+                            "cannot add endpoint host route - aborting (fail-closed)" \
+                            "ip=${endpoint_ip}" "gw=${gw}"
+                        ip link del dev wg0 2>/dev/null || true
+                        return 1
+                    fi
+                else
+                    log_json WARN "start_wireguard" \
+                        "no gateway on ${phys} - endpoint route not installed"
+                fi
             fi
         fi
-
         ip route add 0.0.0.0/1 dev wg0 2>/dev/null || true
         ip route add 128.0.0.0/1 dev wg0 2>/dev/null || true
         log_json INFO "start_wireguard" "default routes via wg0 installed"
@@ -252,7 +269,7 @@ start_wireguard() {
 
     log_json INFO "start_wireguard" \
         "WireGuard tunnel up" \
-        "endpoint=${endpoint_ip}:${endpoint_port}" \
+        "endpoint=${endpoint_addr}" \
         "address=${first_addr}"
 
     return 0

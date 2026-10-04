@@ -522,3 +522,54 @@
   alerte) - a brancher si un echec v6 doit etre bloquant.
 - CI : integrer le banc netns-tests du revieur (scenarios A-H) comme tests
   de non-regression (necessite root/unshare).
+
+---
+
+## Round 4 — revue v4 (round 3 de verification) : points restants 3.1-3.6
+
+La revue v4 valide B1-B5 sans nouveau defaut bloquant. Corrections des points non bloquants 3.1 a 3.6 :
+
+### 3.3 — Blocs `<connection>` avec port/proto par bloc (parse_vpn_remotes, lib/common.sh)
+**PROBLEME** : la 1re passe retenait la DERNIERE valeur globale de port/proto -> le 1er bloc `<connection>` heritait des valeurs du dernier (regle tcp/443 fausse -> remote bloque).
+**CORRECTIF** : la 1re passe memorise `bport`/`bproto` PAR BLOC et les remontees des remotes du bloc (`blkstart`) ; les valeurs sont appliquees a la fermeture `</connection>` (ordre remote-avant-port legal OpenVPN gere). La 2e passe restitue par remote de bloc via `blkseen`.
+**VALIDATION** : 14/14 cas - blocs `<connection>` (port/proto apres OU avant remote), multi-remote par bloc, remote explicite dans bloc, melange bloc/global, CRLF, multi-remote, tcp-client, bare remote, proto seul.
+
+### 3.1 — Delais de resolution et deduplication (resolve_vpn_ips + firewall_early_lockdown)
+**PROBLEME** : repli nslookup sans borne (~6 s/serveur muet) et tente meme si dig a deja echoue ; hostnames partages par plusieurs remote resolus plusieurs fois.
+**CORRECTIF** :
+- repli nslookup tente UNIQUEMENT si dig est absent (sinon double attente) et borne par `timeout 5` (busybox nslookup n'a pas -timeout=).
+- `firewall_early_lockdown` : cache `RESOLVE_CACHE` (declare -A) - chaque hostname resolu UNE fois, tous partages la meme liste d'IP.
+**VALIDATION** : mock avec 3 remotes sur 2 hostnames -> 2 appels de resolution seulement ; liste VPN_REMOTE_IPS complete (3 entrees) ; regles -d correctes.
+
+### 3.2 — Reprise apres echec de resolution au boot (lib/supervisor.sh)
+**PROBLEME** : VPN_REMOTE_IPS calculee une seule fois ; DNS muet au boot -> setup_iptables echoue a chaque iteration -> boucle infinie (stop_stack + sleep 30).
+**CORRECTIF** : compteur `FW_FAIL_COUNT` d'echecs consecutifs ; apres `FW_FAIL_MAX` (5) echecs -> `return 1` de supervise_all : le conteneur sort (code 1) et la politique de redemarrage Docker relance un bootstrap complet (qui re-resoudra les remotes). Compteur remis a 0 sur succes.
+**VALIDATION** : harnais mocke - sortie au 5e echec consecutif exactement, compteur reinitialise apres un succes.
+
+### 3.4 — Endpoint WireGuard IPv6 litteral (lib/wireguard.sh)
+**PROBLEME** : `wg set` recevait `2001:db8::1:51820` sans crochets (invalide) et `ip route add` utilisait une passerelle IPv4 pour une destination v6.
+**CORRECTIF** : `endpoint_addr` reconstruit avec crochets si l'IP contient `:` ; route hote v6 via `ip -6 route` et passerelle v6 (`ip -6 route show`), branche v4 inchangee.
+**VALIDATION** : mock wg/ip de bout en bout - `wg set wg0 peer ... endpoint [2001:db8::1]:51820 ...` et `ip -6 route add 2001:db8::1 via 2001:db8::ff dev eth0` ; IPv4 sans crochets toujours OK.
+
+### 3.5 — Documentation residuelle (README.md, docker-compose.yml)
+**CORRECTIF** :
+- README :814 « hashed with bcrypt via htpasswd » (faux depuis tinyproxy) -> « stored in clear text in a 0600 tinyproxy config file ».
+- compose : l'exemple `PROXY_PASS: "s3cr3t!"` (desormais refuse par la validation) -> `"Passw0rd"` avec commentaire sur la limite `[A-Za-z0-9._-]`.
+
+### 3.6 — Details mineurs
+- `capture_real_ip` : log INFO unique « leak detection disabled - COLLECT_REAL_IP=false » au lieu d'une sortie muette (start.sh).
+- Variable `rest` inutilisee retiree de start_wireguard (SC2034, lib/wireguard.sh).
+- `ipt6_must` toujours pas appelee : dette declaree (echec de `ip6tables -P DROP` non bloquant).
+- `stop_stack` ne tue pas wireguard-go/tailscaled : accepte (concus pour survivre).
+
+### Verification globale round 4
+- `bash -n` OK sur start.sh, healthcheck.sh, lib/*.sh.
+- `shellcheck --severity=error` : 0 erreur.
+- Doublons de fonctions : uniquement le stub `find_vpn_interface` (lib/vpn.sh non source - connu).
+- Tests cibls : parseur 14/14, dedup 2 appels/2 hostnames, compteur FW 5 echecs -> return 1, WG v6 brackets + ip -6 route, flux firewall mocke conforme.
+
+### Dette restante (declaree, hors perimetre semaines 1-3)
+- Rafraichissement periodique de VPN_REMOTE_IPS (fournisseur qui change d'IP).
+- compose : `disable_ipv6=0`, `blocklist-cache:/tmp` (M5/M9).
+- Banc netns-tests en CI (necessite root/unshare).
+- `ipt6_must` non branchee.

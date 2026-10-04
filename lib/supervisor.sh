@@ -36,6 +36,8 @@ supervise_all() {
         "version=2.2.0"
 
     local attempt=0
+    local FW_FAIL_MAX=5
+    local FW_FAIL_COUNT=0
 
     validate_environment || true
 
@@ -157,12 +159,27 @@ supervise_all() {
         # Si le kill switch ne peut pas etre pose, on NE demarre PAS les
         # services (fail-closed) : un proxy sans kill switch fuirait.
         if ! setup_iptables; then
+            # 3.2 : VPN_REMOTE_IPS est calculee une seule fois au bootstrap.
+            # Si le DNS etait indisponible au boot, reessayer dans la boucle
+            # ne re-resoudra rien (liste vide figee) -> boucle infinie. Apres
+            # FW_FAIL_MAX echecs consecutifs, on sort : la politique de
+            # redemarrage Docker relancera un bootstrap complet (qui
+            # re-resoudra les remotes).
+            FW_FAIL_COUNT=$((FW_FAIL_COUNT + 1))
             log_json ERROR "supervisor" \
-                "setup_iptables failed - refusing to start services (fail-closed)"
+                "setup_iptables failed - refusing to start services (fail-closed)" \
+                "consecutive_failures=${FW_FAIL_COUNT}/${FW_FAIL_MAX}"
+            if [ "$FW_FAIL_COUNT" -ge "$FW_FAIL_MAX" ]; then
+                log_json ERROR "supervisor" \
+                    "giving up after ${FW_FAIL_COUNT} consecutive firewall failures - exiting for full re-bootstrap"
+                stop_stack
+                return 1
+            fi
             stop_stack
             sleep_wait 30
             continue
         fi
+        FW_FAIL_COUNT=0
         setup_ip6tables
         setup_proxy_routing
 

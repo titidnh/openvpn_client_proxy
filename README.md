@@ -811,7 +811,7 @@ Client → tinyproxy :8080 (Basic Auth) → Privoxy 127.0.0.1:8081 → VPN tunne
 
 - **tinyproxy** acts as an authenticating forward proxy on port `PROXY_PORT` (the only publicly exposed port)
 - **Privoxy** is moved to `127.0.0.1:PROXY_PORT+1` — unreachable from outside the container
-- Passwords are hashed with **bcrypt** via `htpasswd` at container startup
+- Credentials (`PROXY_USER`/`PROXY_PASS`) are stored **in clear text** in a `0600` tinyproxy config file generated at container startup (tinyproxy `BasicAuth` does not support hashing)
 - The `Authorization` header is stripped before forwarding to Privoxy
 
 ### Enabling authentication

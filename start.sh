@@ -494,6 +494,9 @@ capture_real_ip() {
     # demarrage - desactivee par defaut. Sans reference, la detection de
     # fuite IP (public == IP reelle) est desactivee (loggue WARN).
     if [ "${COLLECT_REAL_IP:-false}" != "true" ]; then
+        # 3.6 : sortir muet rend la desactivation invisible - INFO unique
+        log_json INFO "capture_real_ip" \
+            "leak detection disabled - COLLECT_REAL_IP=false"
         REAL_IP=""
         return 0
     fi

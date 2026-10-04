@@ -141,6 +141,18 @@ firewall_early_lockdown() {
     # et declencherait le fallback par port (brèche). TOUTES les IP sont
     # conservees (round-robin DNS, R6) : a la reconnexion OpenVPN pourra
     # joindre n'importe laquelle.
+    # 3.1 : plusieurs remote peuvent partager un hostname (multi-remote
+    # meme serveur) - resoudre chaque hostname UNE SEULE fois (sur un DNS
+    # muet, chaque resolution coute plusieurs secondes).
+    declare -A RESOLVE_CACHE
+    resolve_cached() {
+        local host="$1" out
+        [ -n "${RESOLVE_CACHE[$host]+set}" ] || \
+            RESOLVE_CACHE[$host]="$(resolve_vpn_ips "$host" "$DNS_SERVER_1" "$DNS_SERVER_2" 2>/dev/null || true)"
+        out="${RESOLVE_CACHE[$host]}"
+        [ -n "$out" ] && echo "$out"
+        return 0
+    }
     if [ "${VPN_TYPE:-openvpn}" = "wireguard" ]; then
         local wg_host wg_port wg_ip
         while read -r wg_host wg_port; do
@@ -153,7 +165,7 @@ firewall_early_lockdown() {
             else
                 while read -r wg_ip; do
                     VPN_REMOTE_IPS="$VPN_REMOTE_IPS $wg_ip|${wg_port}|udp"
-                done < <(resolve_vpn_ips "$wg_host" "$DNS_SERVER_1" "$DNS_SERVER_2")
+                done < <(resolve_cached "$wg_host")
             fi
         done < <(get_wireguard_endpoint "${VPN_DIR}/wg0.conf")
     else
@@ -165,7 +177,7 @@ firewall_early_lockdown() {
             else
                 while read -r r_ip; do
                     VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_ip|$r_port|$r_proto"
-                done < <(resolve_vpn_ips "$r_host" "$DNS_SERVER_1" "$DNS_SERVER_2")
+                done < <(resolve_cached "$r_host")
             fi
         done < <(parse_vpn_remotes "$VPN_CONF")
     fi

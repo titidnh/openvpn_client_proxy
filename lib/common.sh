@@ -305,6 +305,7 @@ resolve_vpn_ips() {
     fi
 
     local dns ips
+    if command -v dig >/dev/null 2>&1; then
     # B1 : "dig host A AAAA" est invalide - seul le dernier type est pris en
     # compte (seule l'IPv6 revenait). Deux requetes explicites par serveur.
     # +time=2 +tries=1 : sans eux, ~20 s par serveur muet, plusieurs minutes
@@ -317,11 +318,15 @@ resolve_vpn_ips() {
             return 0
         fi
     done
+    return 1
+    fi
 
-    # Repli nslookup : gerer les formats busybox ("Address 1: ip host"),
-    # classic ("Addresses:  ip, ip") et ignorer le serveur lui-meme.
+    # Repli nslookup : seulement si dig est absent (3.1 - sinon on double
+    # l'attente sur un DNS muet). Gerer les formats busybox ("Address 1: ip
+    # host"), classic ("Addresses:  ip, ip") et ignorer le serveur lui-meme.
+    # busybox nslookup n'a pas -timeout= ; on borne avec timeout(1).
     for dns in "${dns_servers[@]}"; do
-        ips=$(nslookup "$hostname" "$dns" 2>/dev/null |
+        ips=$(timeout 5 nslookup "$hostname" "$dns" 2>/dev/null |
             awk -v srv="$dns" '
                 /^Name:/ { inans = 1 }
                 inans && /Address/ {
@@ -469,34 +474,58 @@ parse_vpn_remotes() {
     local conf="${1:-$DEFAULT_VPN_CONF}"
     [ -f "$conf" ] || return 0
 
-    # B5 : deux passes - la 1re memorise port/proto quel que soit leur
-    # ordre par rapport aux remote (l'ancienne version ne connaissait les
-    # valeurs par defaut que si elles etaient AVANT le remote, et ignorait
-    # proto quand le port etait absent).
+    # B5 : deux passes - la 1re memorise les valeurs par defaut (port/proto)
+    # quel que soit leur ordre par rapport aux remote. Les valeurs portees
+    # par la ligne remote elle-meme ont toujours priorite (norme OpenVPN).
+    # 3.3 : les blocs <connection> portent leurs propres port/proto -
+    # memoriser les valeurs PAR BLOC en 1re passe et les restituer en 2e,
+    # sinon le 1er bloc herite des valeurs du dernier (regle fausse ->
+    # remote bloque par le kill switch).
     awk '
+        function emit(host, port, proto) {
+            if (port == "") port = "1194"
+            if (proto == "") proto = "udp"
+            # Normalisation : udp4/udp6/tcp4/tcp6/tcp-client/tcp-server -> udp/tcp
+            if (proto ~ /^udp/) proto = "udp"
+            else if (proto ~ /^tcp/) proto = "tcp"
+            else return
+            print host, port, proto
+        }
         { sub(/\r$/, "") }
         FNR == NR {
-            if ($1 == "port" && $2 != "") dport = $2
-            if ($1 == "proto" && $2 != "") dproto = $2
+            if ($1 == "<connection>") { inblock = 1; bport = ""; bproto = ""; blkstart = nblk + 1 }
+            if ($1 == "</connection>") {
+                for (i = blkstart; i <= nblk; i++) { blkport[i] = bport; blkproto[i] = bproto }
+                inblock = 0
+            }
+            if ($1 == "port" && $2 != "") {
+                if (inblock) bport = $2; else dport = $2
+            }
+            if ($1 == "proto" && $2 != "") {
+                if (inblock) bproto = $2; else dproto = $2
+            }
+            if ($1 == "remote" && inblock) { nblk++ }
             next
         }
+        $1 == "<connection>" { inblock2 = 1; next }
+        $1 == "</connection>" { inblock2 = 0; next }
         $1 == "remote" {
             host = $2
-            port = dport
-            proto = dproto
+            if (inblock2) {
+                k = ++blkseen
+                port = blkport[k]
+                proto = blkproto[k]
+            } else {
+                port = dport
+                proto = dproto
+            }
             if ($3 ~ /^[0-9]+$/) {
                 port = $3
                 if ($4 != "") proto = $4
             } else if ($3 != "") {
                 proto = $3
             }
-            if (port == "") port = "1194"
-            if (proto == "") proto = "udp"
-            # Normalisation : udp4/udp6/tcp4/tcp6/tcp-client/tcp-server -> udp/tcp
-            if (proto ~ /^udp/) proto = "udp"
-            else if (proto ~ /^tcp/) proto = "tcp"
-            else next
-            print host, port, proto
+            emit(host, port, proto)
         }' "$conf" "$conf"
 }
 
