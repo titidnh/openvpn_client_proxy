@@ -28,12 +28,17 @@ ipt6() {
     if ! command -v ip6tables &>/dev/null; then
         return 0
     fi
-    if ip6tables "$@" 2>/dev/null; then
-        return 0
-    fi
-    local rc=$?
+
+    # B4 : l'ancienne version faisait "if ip6tables ...; then return 0; fi;
+    # local rc=$?" - or $? apres un "if" faux vaut 0, donc rc etait TOUJOURS
+    # 0 et ipt6 ne signalait jamais d'echec (les tests -C donnaient faux
+    # positifs, les regles 853 IPv6 n'etaient jamais posees).
+    local rc=0
+    ip6tables "$@" 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+
     # ip6tables absent du noyau : echec systematique, une seule alerte
-    if [ "$rc" -eq 3 ] || ! ip6tables -L >/dev/null 2>&1; then
+    if ! ip6tables -L -n >/dev/null 2>&1; then
         if [ "$IPT6_WARNED" -eq 0 ]; then
             IPT6_WARNED=1
             log_json WARN "ipt6" "ip6tables unusable on this kernel - IPv6 rules not enforced"
@@ -94,10 +99,15 @@ ipt_del_853() {
 firewall_early_lockdown() {
     log_json INFO "firewall_early_lockdown" "Applying early DROP policies"
 
-    iptables -P INPUT DROP
-    iptables -P FORWARD DROP
-    iptables -P OUTPUT DROP
-
+    # §4-6 (H4) : si une politique DROP ne peut pas etre posee (module
+    # absent, CAP_NET_ADMIN manquante), le conteneur tournerait en ACCEPT
+    # par defaut SANS kill switch et sans erreur. Echec explicite.
+    if ! iptables -P INPUT DROP || ! iptables -P FORWARD DROP || ! iptables -P OUTPUT DROP; then
+        log_json ERROR "firewall_early_lockdown" \
+            "cannot set DROP policies - kill switch impossible on this kernel" \
+            "hint=run with NET_ADMIN capability and iptables support"
+        return 1
+    fi
     iptables -F
     iptables -X
     iptables -t nat -F
@@ -115,9 +125,13 @@ firewall_early_lockdown() {
         iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
     done
 
-    # Telechargement blocklists (avant tunnel), seulement si necessaire
-    if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ] ||
-        [ "${COLLECT_REAL_IP:-true}" = "true" ]; then
+    # Telechargement blocklists (avant tunnel), seulement si necessaire.
+    # La capture d'IP reelle n'ouvre QUE 1.1.1.1 en 443 (§4-5 : l'ancienne
+    # regle laissait sortir tcp/443 vers TOUTE destination par defaut).
+    if [ "${COLLECT_REAL_IP:-false}" = "true" ]; then
+        iptables -A OUTPUT -p tcp -d 1.1.1.1 --dport 443 -j ACCEPT
+    fi
+    if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ]; then
         iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
     fi
 
@@ -447,6 +461,9 @@ setup_ip6tables() {
     fi
 
     local docker6_network
+    local phys_iface_v6
+    phys_iface_v6=$(get_physical_iface)
+    phys_iface_v6="${phys_iface_v6:-eth0}"
 
     docker6_network=$(
         ip -o addr show dev eth0 2>/dev/null |
@@ -531,9 +548,18 @@ setup_ip6tables() {
         done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
 
-    # Regles VPN IPv6 ciblees par remote (C2/R2) : les endpoints IPv6 ont
-    # ete resolus pendant le bootstrap et sont deja couverts par la boucle
-    # VPN_REMOTE_IPS de setup_iptables (ipt6). Rien a resoudre ici.
+    # B4 : les regles IPv6 des remotes ont ete posees par setup_iptables
+    # (boucle VPN_REMOTE_IPS) MAIS le "ipt6 -F" en tete de cette fonction
+    # les efface. Re-poser les endpoints IPv6 depuis la liste pre-resolue.
+    local endpoint rest6 r6_ip r6_port r6_proto
+    for endpoint in ${VPN_REMOTE_IPS:-}; do
+        rest6="${endpoint#*|}"
+        r6_ip="${endpoint%%|*}"
+        r6_port="${rest6%%|*}"
+        r6_proto="${rest6#*|}"
+        [[ "$r6_ip" =~ : ]] || continue
+        ipt6 -A OUTPUT -o "$phys_iface_v6" -d "$r6_ip" -p "$r6_proto" --dport "$r6_port" -j ACCEPT
+    done
 
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE

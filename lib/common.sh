@@ -305,17 +305,34 @@ resolve_vpn_ips() {
     fi
 
     local dns ips
+    # B1 : "dig host A AAAA" est invalide - seul le dernier type est pris en
+    # compte (seule l'IPv6 revenait). Deux requetes explicites par serveur.
+    # +time=2 +tries=1 : sans eux, ~20 s par serveur muet, plusieurs minutes
+    # pour un .ovpn a une dizaine de remotes.
     for dns in "${dns_servers[@]}"; do
-        ips=$(dig +short "$hostname" @"$dns" A AAAA 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' || true)
+        ips=$(dig +short +time=2 +tries=1 @"$dns" "$hostname" A "$hostname" AAAA 2>/dev/null |
+            grep -E '^[0-9a-fA-F.:]+$' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
         fi
     done
 
+    # Repli nslookup : gerer les formats busybox ("Address 1: ip host"),
+    # classic ("Addresses:  ip, ip") et ignorer le serveur lui-meme.
     for dns in "${dns_servers[@]}"; do
-        ips=$(nslookup -type=any "$hostname" "$dns" 2>/dev/null |
-            awk '/^Address: /{ if ($2 !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $2 }' || true)
+        ips=$(nslookup "$hostname" "$dns" 2>/dev/null |
+            awk -v srv="$dns" '
+                /^Name:/ { inans = 1 }
+                inans && /Address/ {
+                    for (i = 1; i <= NF; i++) {
+                        ip = $i
+                        sub(/^Addresses?:?/, "", ip)
+                        sub(/^[0-9]+:/, "", ip)
+                        sub(/,$/, "", ip)
+                        if (ip != srv && ip != "" && ip ~ /^[0-9a-fA-F.:]+$/ && ip !~ /#/) print ip
+                    }
+                }' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
@@ -452,17 +469,25 @@ parse_vpn_remotes() {
     local conf="${1:-$DEFAULT_VPN_CONF}"
     [ -f "$conf" ] || return 0
 
+    # B5 : deux passes - la 1re memorise port/proto quel que soit leur
+    # ordre par rapport aux remote (l'ancienne version ne connaissait les
+    # valeurs par defaut que si elles etaient AVANT le remote, et ignorait
+    # proto quand le port etait absent).
     awk '
         { sub(/\r$/, "") }
-        /^[[:space:]]*port[[:space:]]+/ { default_port = $2 }
-        /^[[:space:]]*proto[[:space:]]+/ { default_proto = $2 }
-        /^[[:space:]]*remote[[:space:]]+/ {
+        FNR == NR {
+            if ($1 == "port" && $2 != "") dport = $2
+            if ($1 == "proto" && $2 != "") dproto = $2
+            next
+        }
+        $1 == "remote" {
             host = $2
+            port = dport
+            proto = dproto
             if ($3 ~ /^[0-9]+$/) {
                 port = $3
-                proto = ($4 != "") ? $4 : default_proto
-            } else {
-                port = default_port
+                if ($4 != "") proto = $4
+            } else if ($3 != "") {
                 proto = $3
             }
             if (port == "") port = "1194"
@@ -472,7 +497,7 @@ parse_vpn_remotes() {
             else if (proto ~ /^tcp/) proto = "tcp"
             else next
             print host, port, proto
-        }' "$conf"
+        }' "$conf" "$conf"
 }
 
 # Extrait le port et protocole de l'Endpoint WireGuard (wg0.conf)
@@ -483,9 +508,20 @@ get_wireguard_endpoint() {
 
     awk -F'=' '
         /^[[:space:]]*Endpoint[[:space:]]*=/ {
-            gsub(/[[:space:]]/, "", $2)
-            split($2, a, ":")
-            print a[1], a[2]
+            ep = $2
+            gsub(/[[:space:]]/, "", ep)
+            # B4/§4-4 : "host:port" pour IPv4/hostname, "[v6]:port" pour IPv6.
+            # L ancien split(:) cassait sur les adresses IPv6.
+            if (ep ~ /^\[/) {
+                match(ep, /^\[[^]]*\]/)
+                host = substr(ep, 2, RLENGTH - 2)
+                port = substr(ep, RLENGTH + 2)
+            } else {
+                n = split(ep, a, ":")
+                host = a[1]
+                port = (n > 1) ? a[n] : ""
+            }
+            print host, port
             exit
         }' "$conf"
 }

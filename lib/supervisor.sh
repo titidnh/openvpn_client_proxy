@@ -8,6 +8,21 @@ sleep_wait() {
     wait $! 2>/dev/null || true
 }
 
+# B3 : arret propre de la pile. Les "continue" du superviseur doivent
+# nettoyer les services deja lances, sinon un echec transitoire laisse des
+# processus orphelins (privoxy ne peut plus se binder a l'iteration
+# suivante -> blocage permanent jusqu'au redemarrage du conteneur).
+stop_stack() {
+    local s
+    for s in vpn nginx privoxy unbound dnsmasq; do
+        kill_if_running "${SERVICE_PIDS[$s]:-0}"
+        SERVICE_PIDS[$s]=0
+    done
+    pkill -x privoxy 2>/dev/null
+    pkill -x tinyproxy 2>/dev/null
+    return 0
+}
+
 # Drapeaux d'etat pour les taches de fond : ne pas dependre du compteur
 # d'essais, sinon un echec DNS a l'iteration 1 empeche metrics/refresh de
 # demarrer pour toute la vie du conteneur (C7).
@@ -26,7 +41,13 @@ supervise_all() {
 
     # Kill switch des la premiere seconde (H5) : sans cela le conteneur
     # tourne en ACCEPT par defaut pendant les phases blocklist/dnsmasq/unbound.
-    firewall_early_lockdown
+    # §4-6 : sans kill switch, le conteneur fuirait - arret explicite plutot
+    # qu'un demarrage en ACCEPT par defaut silencieux.
+    if ! firewall_early_lockdown; then
+        log_json ERROR "supervisor" \
+            "early lockdown failed - aborting (no kill switch possible)"
+        return 1
+    fi
 
     # Memorise l'IP publique reelle (reference anti-fuite pour check_vpn_ip)
     capture_real_ip
@@ -138,6 +159,7 @@ supervise_all() {
         if ! setup_iptables; then
             log_json ERROR "supervisor" \
                 "setup_iptables failed - refusing to start services (fail-closed)"
+            stop_stack
             sleep_wait 30
             continue
         fi
@@ -146,16 +168,19 @@ supervise_all() {
 
         if ! start_privoxy; then
             log_json ERROR "supervisor" "privoxy failed to start"
+            stop_stack
             sleep_wait 10
             continue
         fi
         if ! start_nginx_auth; then
             log_json ERROR "supervisor" "auth proxy failed to start"
+            stop_stack
             sleep_wait 10
             continue
         fi
         if ! start_vpn_service; then
             log_json ERROR "supervisor" "VPN service failed to start"
+            stop_stack
             sleep_wait 10
             continue
         fi

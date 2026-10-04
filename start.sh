@@ -274,15 +274,18 @@ start_nginx_auth() {
         return 1
     fi
 
-    # BasicAuth n'accepte pas d'espace ni de '#' dans le mot de passe :
-    # la directive serait cassee (silencieusement). Refuser ces valeurs.
-    case "$user$pass" in
-        *[[:space:]#]*)
-            log_json ERROR "start_nginx_auth" \
-                "PROXY_USER/PROXY_PASS must not contain spaces or '#' for tinyproxy BasicAuth"
-            return 1
-            ;;
-    esac
+    # B2 : tinyproxy BasicAuth n'accepte quasiment que [A-Za-z0-9._-]
+    # (testé 1.11.1 : s3cr3t! p@ss a$b x:y a%b a&b a+b a=b a/b a,b a;b
+    # a'b a"b a(b) a?b a~b é -> "Syntax error", le demon refuse de partir).
+    # Valider le jeu exact et echouer explicitement plutot que de laisser
+    # le demon mourir en boucle.
+    if ! [[ "$user" =~ ^[A-Za-z0-9._-]{1,64}$ ]] ||
+       ! [[ "$pass" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+        log_json ERROR "start_nginx_auth" \
+            "PROXY_USER/PROXY_PASS must only contain [A-Za-z0-9._-] (tinyproxy BasicAuth limit)" \
+            "hint=change the password or use a different auth frontend (squid/3proxy)"
+        return 1
+    fi
 
     local privoxy_internal_port=$((PROXY_PORT + 1))
 
@@ -323,6 +326,16 @@ TINYCONF
     # parent deja sorti (R1a).
     tinyproxy -d -c "$tiny_conf" &
     SERVICE_PIDS["nginx"]=$!
+
+    # B2 : sonde de vie - tinyproxy meurt aussitot sur une config refusee
+    # (BasicAuth invalide, port pris). Sans cette sonde, le superviseur
+    # bouclerait sur "auth proxy died".
+    sleep_wait 1
+    if ! is_process_running "${SERVICE_PIDS["nginx"]}"; then
+        log_json ERROR "start_nginx_auth" \
+            "tinyproxy died immediately (invalid config or port in use)"
+        return 1
+    fi
 
     log_json INFO "start_nginx_auth" \
         "started" \
@@ -477,8 +490,10 @@ run_service_healthcheck() {
 # Reference anti-fuite : si l'IP publique via le tunnel egale cette IP, le
 # tunnel ne route rien (C6).
 capture_real_ip() {
-    # Optionnelle : la requete revele l'IP reelle a un tiers a chaque demarrage.
-    if [ "${COLLECT_REAL_IP:-true}" != "true" ]; then
+    # Optionnelle (§4-5) : la requete revele l'IP reelle a un tiers a chaque
+    # demarrage - desactivee par defaut. Sans reference, la detection de
+    # fuite IP (public == IP reelle) est desactivee (loggue WARN).
+    if [ "${COLLECT_REAL_IP:-false}" != "true" ]; then
         REAL_IP=""
         return 0
     fi
@@ -676,12 +691,20 @@ start_tailscale() {
     up_flags=$(build_tailscale_up_flags)
 
     if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
-        # M6 : le secret passe par l'environnement (TS_AUTHKEY), pas en
-        # argument de ligne de commande (visible dans ps).
+        # M6 : le CLI tailscale ne lit PAS TS_AUTHKEY (variable containerboot,
+        # confirmé par cmd/tailscale/cli/up.go). Seuls --auth-key=<cle> ou
+        # --auth-key=file:/chemin existent. On ecrit la cle dans un fichier
+        # 0600 (jamais sur la ligne de commande, visible dans ps) et on passe
+        # file: au CLI.
+        local authkey_file=/run/tailscale_authkey
+        umask 077
+        printf '%s' "$TAILSCALE_AUTHKEY" > "$authkey_file"
+        umask 022
         (
-            export TS_AUTHKEY="$TAILSCALE_AUTHKEY"
             # shellcheck disable=SC2086
-            ts_cli up --accept-dns=false $up_flags                 > /var/log/tailscale-up.log 2>&1
+            ts_cli up --accept-dns=false --auth-key="file:${authkey_file}" $up_flags \
+                > /var/log/tailscale-up.log 2>&1
+            rm -f "$authkey_file"
         ) &
         return 0
     fi

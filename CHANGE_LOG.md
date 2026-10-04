@@ -395,3 +395,130 @@
 - `parse_vpn_remotes` : re-testé (multi-remotes, remote sans port, CRLF, udp4/tcp-client) — conforme.
 - Doublons de fonctions : uniquement les stubs gardés par `declare -F` de `lib/vpn.sh`/`lib/proxy.sh` (jamais sourcés) — sans effet à l'exécution.
 - Résolution DNS externe : **bloquée dans la sandbox** ; chemins de `resolve_vpn_ips` validés par lecture croisée avec `resolve_hostname_all` (validé round 1) et `bash -n`. À confirmer au premier déploiement réel (T2 de la revue).
+
+
+---
+
+# Round 3 - Corrections issues de la revue v3 (B1-B5, section 4)
+
+> Chaque correctif a ete applique puis valide par execution quand la sandbox
+> le permettait (iptables/ip6tables mockes a codes de retour fideles, tests
+> unitaires des parseurs executes). Le resolveur local est bloque dans la
+> sandbox : la syntaxe B1 est la version testee par le revieur avec un vrai
+> dig 9.18 (4 variantes comparees) ; le repli nslookup a ete teste ici sur
+> les deux formats de sortie (busybox et classic).
+
+## B1 - resolve_vpn_ips : la syntaxe combinee ne retournait que l'IPv6
+- **Fichier** : `lib/common.sh` (`resolve_vpn_ips`)
+- **Probleme** : la requete dig avec deux types sur un seul nom emet
+  « Warning, extra type option » et le DERNIER type l'emporte : resultat
+  vide ou IPv6 seulement. Tout remote par nom d'hote echouait donc a la
+  resolution, et le kill switch (ferme) empechait le conteneur de demarrer.
+  Le repli nslookup n'imprimait que les non-IPv4 et laissait passer la
+  ligne du serveur.
+- **Correction** : requete double explicite (A puis AAAA en une invocation
+  multi-query, testee par le revieur), +time=2 +tries=1 (sinon ~20 s par
+  serveur muet, plusieurs minutes pour 10 remotes). Repli nslookup reecrit :
+  gere les formats busybox (Address 1: ip host) et classic (Addresses: ip, ip),
+  ignore le serveur lui-meme.
+- **Validation** : repli nslookup teste sur les deux formats (2 IP extraites
+  chacune) ; syntaxe conforme a la matrice du revieur (4 variantes).
+
+## B5 - parse_vpn_remotes : proto faux dans 3 cas
+- **Fichier** : `lib/common.sh` (`parse_vpn_remotes`)
+- **Probleme** : la version une-passe ne connaissait port/proto que s'ils
+  etaient AVANT le remote, et ignorait proto quand le port etait absent :
+  proto tcp -> regle udp/443 -> VPN bloque par le kill switch.
+- **Correction** : deux passes awk (le fichier passe deux fois) - la 1re
+  memorise dport/dproto quel que soit l'ordre, la 2e traite les remotes ;
+  dproto utilise quand le 3e champ n'est ni un port ni un proto explicite.
+- **Validation** : les 3 cas de la revue (D/E/F) + CRLF + multi-remote +
+  tcp-client tous conformes (teste).
+
+## B3 - continue sans nettoyage : services orphelins, blocage permanent
+- **Fichier** : `lib/supervisor.sh`
+- **Probleme** : un echec de start_privoxy / start_nginx_auth /
+  start_vpn_service / setup_iptables faisait continue sans arreter les
+  services deja lances : privoxy orphelin, bind impossible a l'iteration
+  suivante, blocage jusqu'au redemarrage du conteneur.
+- **Correction** : stop_stack() (kill des PID enregistres + pkill -x
+  privoxy/tinyproxy pour les orphelins, remise a 0 des PID) appele avant
+  chaque continue de la section firewall/services.
+- **Validation** : test unitaire - 2 processus lances, stop_stack, plus
+  aucun vivant.
+
+## B4 - ipt6 : code retour toujours 0 (non corrige en round 2)
+- **Fichiers** : `lib/firewall.sh` (ipt6, setup_ip6tables)
+- **Probleme** : « if ip6tables ...; then return 0; fi; local rc=$? » -
+  or $? apres un if faux vaut 0, donc rc etait TOUJOURS 0 : les tests -C
+  donnaient des faux positifs, les regles IPv6 853 n'etaient jamais posees.
+  En outre setup_ip6tables (appele apres setup_iptables) commencait par
+  ipt6 -F et effacait les regles IPv6 des remotes sans les re-poser.
+- **Correction** : ip6tables avec || rc=$? (rc fidele) ; alerte unique si
+  ip6tables inutilisable ; les endpoints IPv6 de VPN_REMOTE_IPS sont
+  re-poses dans setup_ip6tables apres le flush (interface physique
+  determinee une fois).
+- **Validation** : avec ip6tables mocke rc-fidele - -C regle absente -> 1,
+  commande invalide -> non nul, commande valide -> 0.
+
+## B2 - tinyproxy rejetait presque tous les mots de passe reels
+- **Fichier** : `start.sh` (start_nginx_auth)
+- **Probleme** : BasicAuth n'accepte quasiment que [A-Za-z0-9._-] (teste
+  1.11.1 par le revieur : s3cr3t! p@ss etc -> Syntax error, demon mort) ;
+  start_nginx_auth ne detectait pas la mort immediate et renvoyait 0 ->
+  boucle de redemarrage.
+- **Correction** : validation stricte ^[A-Za-z0-9._-]{1,64}$ (user) et
+  {1,128} (pass) avec erreur explicite + hint (Squid/3proxy pour mots de
+  passe arbitraires) ; sonde de vie a 1 s (sleep_wait 1 + is_process_running)
+  -> return 1.
+- **Documentation** : README mis a jour - nginx->tinyproxy partout
+  (13 occurrences), limite de jeu de caracteres documentee sur PROXY_PASS,
+  COLLECT_REAL_IP documente.
+- **Validation** : test du jeu de caracteres (accepte s3cr3t / Passw0rd,
+  rejette s3cr3t! / p@ss / espace).
+
+## Section 4 - Points non bloquants traites
+- **(1) Tailscale TS_AUTHKEY** : le CLI up ne lit pas cette variable
+  (confirme par cmd/tailscale/cli/up.go). La cle est ecrite dans
+  /run/tailscale_authkey (0600) et passee via --auth-key=file:/...,
+  fichier supprime apres le up.
+- **(2) Liste d'IP figee** : non traite ce tour (rafraichissement
+  periodique de VPN_REMOTE_IPS) - documente comme dette ; un changement
+  d'IP fournisseur necessite un redemarrage.
+- **(3) WireGuard + DoT** : start_wireguard reutilise l'IP de
+  VPN_REMOTE_IPS (resolue au bootstrap) au lieu de re-resoudre apres DROP -
+  valide par test (endpoint = 203.0.113.7, pas de resolution).
+- **(4) Endpoint WG IPv6** : get_wireguard_endpoint reecrit -
+  [2001:db8::1]:51820 -> 2001:db8::1 51820 (valide), host:port et host
+  sans port OK.
+- **(5) tcp/443 bootstrap** : COLLECT_REAL_IP defaut false ; n'ouvre que
+  vers -d 1.1.1.1 ; le 443 large n'est ouvert que si ENABLE_DNS_BLOCKLIST.
+  capture_real_ip aligne (defaut false) et README documente.
+- **(6) H4** : firewall_early_lockdown verifie les 3 politiques
+  iptables -P ... DROP et echoue explicitement (return 1) ; supervise_all
+  s'arrete proprement si le lockdown echoue (pas de kill switch -> pas de
+  demarrage).
+
+## Verifications round 3
+- bash -n : OK sur tous les scripts ; shellcheck --severity=error : 0 erreur.
+- Fail-closed re-teste de bout en bout (mocks iptables) : hostname non
+  resoluble -> VPN_REMOTE_IPS vide -> failing closed, setup_iptables rc=1,
+  aucun fallback par port.
+- Flux nominal re-teste : conf multi-remotes -> 3 regles ciblees
+  -o eth0 -d <ip> posees, proto/port corrects.
+- ipt6 : codes retour fideles (3 cas).
+- parse_vpn_remotes : 7 scenarios conformes.
+- Non testable ici : vrai dig (resolveur bloque sandbox), vrai
+  tinyproxy/privoxy non installes, pas de namespace reseau root pour le
+  banc iptables reel. Ces chemins portent la syntaxe validee par le revieur
+  avec les vrais outils.
+
+## Dette restante (a planifier)
+- (2) : rafraichissement periodique de VPN_REMOTE_IPS (changement d'IP
+  fournisseur).
+- compose : disable_ipv6=0 et blocklist-cache:/tmp inchanges (M9/M5,
+  semaine 4).
+- ipt6_must encore non appelee (les politiques v6 sont gerees via ipt6 +
+  alerte) - a brancher si un echec v6 doit etre bloquant.
+- CI : integrer le banc netns-tests du revieur (scenarios A-H) comme tests
+  de non-regression (necessite root/unshare).

@@ -95,12 +95,22 @@ start_wireguard() {
         endpoint_host="${BASH_REMATCH[1]}"
     fi
 
-    # R7 : resoudre l'endpoint UNE SEULE fois et utiliser l'IP partout
-    # (wg set, route hote). Sinon wg et ip route resolvent chacun de leur
-    # cote et peuvent obtenir deux IP differentes ; pire, "ip route add
-    # <hostname>" echoue silencieusement et les paquets chiffres partent
-    # dans wg0 (boucle). Sans resolution : echec explicite (fail-closed).
-    local endpoint_ip="$endpoint_host"
+    # R7 : utiliser l'IP deja resolue pendant le bootstrap (VPN_REMOTE_IPS,
+    # format "ip|port|proto"). start_wireguard est appele APRES setup_iptables
+    # (DROP) : re-resoudre ici echoue en mode DoT (port 53 externe bloque)
+    # et donnerait une IP differente de celle autorisee au pare-feu.
+    # Repli : resolution directe si la liste est vide (demarrage hors
+    # superviseur). Sans resolution : echec explicite (fail-closed).
+    local endpoint_ip=""
+    local ep rest
+    for ep in ${VPN_REMOTE_IPS:-}; do
+        rest="${ep#*|}"
+        endpoint_ip="${ep%%|*}"
+        break
+    done
+    if [ -z "$endpoint_ip" ]; then
+        endpoint_ip="$endpoint_host"
+    fi
     if ! [[ "$endpoint_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! [[ "$endpoint_ip" =~ : ]]; then
         endpoint_ip=$(resolve_vpn_ips "$endpoint_host" "$DNS_SERVER_1" "$DNS_SERVER_2" | head -1) || endpoint_ip=""
         if [ -n "$endpoint_ip" ]; then
@@ -113,7 +123,11 @@ start_wireguard() {
                 "host=${endpoint_host}"
             return 1
         fi
+    elif [[ "$endpoint_ip" =~ : ]]; then
+        endpoint_ip="${endpoint_ip#\[}"
+        endpoint_ip="${endpoint_ip%\]}"
     fi
+
     # Interface - repli wireguard-go si le noyau n'a pas le module wireguard
     if ! ip link add dev wg0 type wireguard 2>/dev/null; then
         if command_exists wireguard-go && [ ! -e /dev/net/tun -o -c /dev/net/tun ]; then
