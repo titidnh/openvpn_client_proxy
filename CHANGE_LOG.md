@@ -872,3 +872,50 @@ au cycle keepalive suivant avec ce correctif).
 **NOTE** : le message OpenVPN "Options error: block-outside-dns" est
 benin (option Windows-only poussee par Surfshark, ignoree par OpenVPN
 Linux 2.6) et n affecte pas le tunnel.
+
+---
+
+## Round 13 - refresh des remotes : le VPN etait redemarre alors que le tunnel etait parfaitement sain
+
+**SYMPTOME** (log conteneur reel, 2026-10-05 18:19) : le tunnel etait
+stable depuis ~40 min (`tunnel health confirmed` en continu). Le refresh
+horaire a detecte une rotation DNS du fournisseur
+(`ch-zur.prod.surfshark.com` : 156.146.62.51,89.37.173.41 ->
+89.37.173.47,212.102.36.234) et le superviseur a ALORS redemarre
+OpenVPN de maniere preventive ("restarting VPN to re-pin remotes") :
+interruption du tunnel ~4 s, re-TLS, nouvelle IP de sortie
+(89.37.173.48), routes retirees/remontees - pour rien, puisque la
+connexion en cours vers l ancienne IP fonctionnait.
+
+**CAUSE RACINE** : dans la boucle keepalive (lib/supervisor.sh), le bloc
+`refresh_vpn_remote_ips` traitait le retour 1 (IP changees) comme un
+motif de redemarrage immediate du VPN, sans consulter l etat reel du
+tunnel. Or refresh_vpn_remote_ips met DEJA le pare-feu a jour sans
+interruption (regles posees avant retrait ; la connexion etablie vers
+l ancienne IP survit via conntrack ESTABLISHED,RELATED) et met a jour
+VPN_REMOTE_MAP/VPN_REMOTE_IPS pour le prochain (re)demarrage.
+
+**CORRECTIF** :
+1. `lib/supervisor.sh` : le retour 1 ne declenche PLUS de redemarrage.
+   Log INFO "VPN remote IPs changed - firewall updated, new IPs will be
+   pinned on next VPN (re)start". Les nouvelles IP sont epinglees par
+   openvpn.sh uniquement au prochain (re)demarrage du VPN :
+   - deconnexion/reconnexion spontanee (fournisseur, ping-restart), ou
+   - relance pilote par l echec detecte par les sondes existantes
+     (check_vpn_routing puis restart_vpn_service, healthcheck ->
+     redemarrage complet), qui utilisent alors la carte fraiche.
+2. `README.md` : description de `VPN_REMOTE_REFRESH_INTERVAL` mise a
+   jour (plus de "VPN service is restarted to re-pin").
+
+**PARCOURS DE RECOUVREMENT** (verifie) : si l ancienne IP epinglee meurt
+plus tard, OpenVPN ne peut pas se reconnecter vers elle (regle ACCEPT
+retiree au refresh) -> tunnel down -> le superviseur relance le VPN via
+restart_vpn_service, qui appelle openvpn.sh avec la carte fraiche deja
+autorisee par le pare-feu. Le refresh periodique AVANT la panne reste
+donc indispensable : en mode DoT la re-resolution passe par le DNS local
+(127.0.0.1 -> unbound via le tunnel) et echouerait tunnel down - les
+nouvelles IP doivent etre pre-chargees pendant que le tunnel est sain.
+
+**VALIDATION** : `bash -n` OK sur lib/supervisor.sh ; tests
+tests/firewall.bats sur refresh_vpn_remote_ips inchanges (la fonction et
+son retour 1 ne bougent pas, seul le traitement superviseur change).
