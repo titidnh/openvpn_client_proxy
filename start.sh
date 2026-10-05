@@ -650,6 +650,15 @@ start_tailscale() {
 
     [ "${ENABLE_TAILSCALE:-false}" = "true" ] || return 0
 
+    # v12 : idempotent - le keepalive peut appeler start_tailscale en
+    # differe ; ne jamais lancer un deuxieme tailscaled.
+    if [ "${SERVICE_PIDS[tailscaled]:-0}" -ne 0 ] && \
+       is_process_running "${SERVICE_PIDS[tailscaled]}"; then
+        log_json DEBUG "start_tailscale" \
+            "tailscaled already running - skipping"
+        return 0
+    fi
+
     if ! command_exists tailscaled; then
         log_json WARN "start_tailscale" \
             "tailscaled not installed - skipping"

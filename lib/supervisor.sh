@@ -229,7 +229,14 @@ supervise_all() {
             log_json INFO "supervisor" "waiting for tunnel to be fully operational..."
 
             local full_ready=0
-            for i in 1 2 3; do
+            # v12 : en mode DoT, unbound doit retablir ses connexions TLS
+            # (853) via le tunnel avant que curl ne resolve api.ipify.org -
+            # la fenetre de 15 s etait trop courte (Tailscale etait
+            # definitivement saute alors que le tunnel devenait sain ~40 s
+            # plus tard, cf keepalive "tunnel health confirmed").
+            local full_tries=3
+            [ "${ENABLE_DOT:-false}" = "true" ] && full_tries=9
+            for i in $(seq 1 "$full_tries"); do
                 if check_vpn_ip && nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
                     full_ready=1
                     break
@@ -242,7 +249,8 @@ supervise_all() {
                 METRIC_VPN_UP=1
                 start_tailscale
             else
-                log_json WARN "supervisor" "tunnel not fully operational after 15s - skipping Tailscale"
+                log_json WARN "supervisor" \
+                    "tunnel not fully operational yet - Tailscale deferred to keepalive loop"
                 rm -f "$VPN_HEALTHY_FILE"
                 METRIC_VPN_UP=0
             fi
@@ -271,6 +279,15 @@ supervise_all() {
         log_json INFO "supervisor" "entering keepalive loop - sentinel vpn_healthy will be maintained" "interval=10s"
 
         local keepalive_cycles=0
+        # v12 : Tailscale differe - lance des que le tunnel est reellement
+        # sain si la fenetre de demarrage l a saute (DoT : unbound doit
+        # retablir ses connexions 853 via le tunnel). start_tailscale est
+        # idempotent (garde sur SERVICE_PIDS/tailscaled).
+        local tailscale_pending=0
+        if [ "${ENABLE_TAILSCALE:-false}" = "true" ] && \
+           [ "${SERVICE_PIDS[tailscaled]:-0}" -eq 0 ]; then
+            tailscale_pending=1
+        fi
         while true; do
             sleep_wait 10
             keepalive_cycles=$((keepalive_cycles + 1))
@@ -340,6 +357,12 @@ supervise_all() {
                 if [ "$dns_ok" -eq 1 ]; then
                     touch "$VPN_HEALTHY_FILE"
                     METRIC_VPN_UP=1
+                    if [ "$tailscale_pending" -eq 1 ] && \
+                       check_vpn_ip && start_tailscale; then
+                        tailscale_pending=0
+                        log_json INFO "supervisor" \
+                            "tunnel now fully operational - Tailscale started"
+                    fi
                     if [ $((keepalive_cycles % 6)) -eq 0 ]; then
                         log_json DEBUG "supervisor" "tunnel health confirmed" "cycles=${keepalive_cycles}" "vpn_healthy=true"
                     fi

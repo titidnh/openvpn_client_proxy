@@ -832,3 +832,43 @@ redemarrage du conteneur.
 pare-feu est deja coherent au moment du restart. Un fournisseur qui change
 d IP a une frequence > 1/h peut baisser l intervalle, au prix de plus de
 redemarrages VPN.
+
+---
+
+## Round 12 - DoT : tunnel sain mais "not fully operational" -> Tailscale definitivement saute
+
+**SYMPTOME** (conteneur reel, ENABLE_DOT=true + ENABLE_DNSSEC=true +
+ENABLE_TAILSCALE=true) : le tunnel monte (`Initialization Sequence
+Completed`), mais `check_vpn_ip` (curl via Privoxy vers api.ipify.org)
+echoue pendant les 15 s de la fenetre "fully operational". Le superviseur
+logue "tunnel not fully operational after 15s - skipping Tailscale", puis
+le keepalive confirme la sante du tunnel (`tunnel health confirmed`) ~40 s
+plus tard. Tailscale n est JAMAIS lance.
+
+**CAUSE RACINE** :
+1. La fenetre "fully operational" (3 essais x 5 s) est trop courte en mode
+   DoT : unbound doit retablir ses connexions TLS (TCP 853 vers les IP
+   DoT resolues) a travers le NOUVEAU tunnel avant que la resolution de
+   api.ipify.org reussisse. Le mode classique n a pas ce delai (UDP 53
+   vers DNS_SERVER_*, regles posees au bootstrap).
+2. Tailscale n etait lance qu a UNE seule place (fenetre de demarrage).
+   Une fois saute, aucun mecanisme ne le relancait - d ou "il a skip
+   Tailscale ce qu il n aurait pas du faire".
+
+**CORRECTIF** :
+1. `lib/supervisor.sh` : la fenetre passe a 9 essais x 5 s (45 s) en mode
+   DoT (3 essais inchanges sinon). Le WARN devient "Tailscale deferred to
+   keepalive loop" (ce n est plus un skip definitif).
+2. `lib/supervisor.sh` (boucle keepalive) : drapeau `tailscale_pending` -
+   quand le tunnel est reellement sain (dns_ok=1 ET check_vpn_ip OK),
+   start_tailscale est appele en differe, une seule fois.
+3. `start.sh` (`start_tailscale`) : garde d idempotence - si tailscaled
+   tourne deja (SERVICE_PIDS[tailscaled] vivant), on ne le relance pas.
+
+**VALIDATION** : `bash -n` OK sur start.sh et lib/supervisor.sh ; lecture
+croisee du log fourni (tunnel sain a 15:05:53, Tailscale aurait ete lance
+au cycle keepalive suivant avec ce correctif).
+
+**NOTE** : le message OpenVPN "Options error: block-outside-dns" est
+benin (option Windows-only poussee par Surfshark, ignoree par OpenVPN
+Linux 2.6) et n affecte pas le tunnel.
