@@ -417,9 +417,13 @@ restart_vpn_service() {
     cleanup_routes_on_restart
     start_vpn_service
 
+    # Une reconnexion OpenVPN (TLS, pull de config, montage tun) prend
+    # facilement 5-15 s ; avec 5 s le superviseur declarait un echec alors
+    # que la reconnexion etait en cours et relancait toute la pile pour
+    # rien. Meme fenetre que wait_for_vpn_tunnel au demarrage.
     local i
 
-    for i in 1 2 3 4 5; do
+    for i in $(seq 1 30); do
         sleep 1
 
         if check_vpn_routing; then

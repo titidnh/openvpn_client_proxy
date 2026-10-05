@@ -299,3 +299,97 @@ teardown() {
     export ENABLE_DOT=false
     # And should not interfere with other firewall rules
 }
+
+# ============================================================================
+# Test Group 8: VPN remote refresh (regression tests)
+# ============================================================================
+# Regression (round11 fix) : l etape 1 du refresh comparait les NOUVELLES IPs
+# a VPN_REMOTE_IPS (qui ne contient encore que les ANCIENNES IPs) - la boucle
+# etait un no-op, aucune regle ACCEPT n etait posee pour les nouveaux remotes,
+# et l etape 2 retirait les anciennes : kill switch total sur les nouvelles
+# IPs apres un refresh.
+
+@test "refresh_vpn_remote_ips adds ACCEPT rules for the NEW remote IPs" {
+    export VPN_REMOTE_MAP="vpn.example.com=1.1.1.1,2.2.2.2"
+    export VPN_REMOTE_IPS="1.1.1.1|1194|udp 2.2.2.2|1194|udp"
+    local out="$TEST_TMP/refresh_iptables.log"
+    : > "$out"
+
+    iptables() { echo "iptables $*" >> "$out"; return 0; }
+    ip() {
+        case "$1 $2" in
+            "route show") echo "default via 172.17.0.1 dev eth0" ;;
+        esac
+        return 0
+    }
+    resolve_vpn_ips() { printf '3.3.3.3\n4.4.4.4\n'; return 0; }
+
+    local rc=0
+    refresh_vpn_remote_ips || rc=$?
+
+    # Retour 1 = IPs changees (signal au superviseur de re-epingler)
+    [ "$rc" -eq 1 ]
+    # Nouvelles IPs : regles -A posees AVANT tout retrait
+    grep -q -- '-A OUTPUT -o eth0 -d 3.3.3.3 -p udp --dport 1194 -j ACCEPT' "$out"
+    grep -q -- '-A OUTPUT -o eth0 -d 4.4.4.4 -p udp --dport 1194 -j ACCEPT' "$out"
+    # Anciennes IPs retirees
+    grep -q -- '-D OUTPUT -o eth0 -d 1.1.1.1 -p udp --dport 1194 -j ACCEPT' "$out"
+    grep -q -- '-D OUTPUT -o eth0 -d 2.2.2.2 -p udp --dport 1194 -j ACCEPT' "$out"
+    # Carte et endpoints re-epingles sur les nouvelles IPs
+    [ "$VPN_REMOTE_MAP" = "vpn.example.com=3.3.3.3,4.4.4.4" ]
+    [ "$VPN_REMOTE_IPS" = "3.3.3.3|1194|udp 4.4.4.4|1194|udp" ]
+}
+
+@test "refresh_vpn_remote_ips keeps old IPs when re-resolve fails" {
+    export VPN_REMOTE_MAP="vpn.example.com=1.1.1.1"
+    export VPN_REMOTE_IPS="1.1.1.1|1194|udp"
+    local out="$TEST_TMP/refresh_iptables.log"
+    : > "$out"
+
+    iptables() { echo "iptables $*" >> "$out"; return 0; }
+    ip() { return 0; }
+    resolve_vpn_ips() { return 1; }
+
+    refresh_vpn_remote_ips || return 1  # retour 0 attendu
+
+    [ ! -s "$out" ]
+    [ "$VPN_REMOTE_MAP" = "vpn.example.com=1.1.1.1" ]
+}
+
+@test "refresh_vpn_remote_ips is a no-op when IPs are unchanged" {
+    export VPN_REMOTE_MAP="vpn.example.com=3.3.3.3"
+    export VPN_REMOTE_IPS="3.3.3.3|1194|udp"
+    local out="$TEST_TMP/refresh_iptables.log"
+    : > "$out"
+
+    iptables() { echo "iptables $*" >> "$out"; return 0; }
+    ip() { return 0; }
+    resolve_vpn_ips() { printf '3.3.3.3\n'; return 0; }
+
+    refresh_vpn_remote_ips
+
+    [ ! -s "$out" ]
+    [ "$VPN_REMOTE_MAP" = "vpn.example.com=3.3.3.3" ]
+}
+
+# Regression (round11 fix) : cleanup_routes_on_restart supprimait "default via
+# 0.0.0.0" - sur les reseaux point-a-point c est la route physique par defaut,
+# rien ne la restaure jamais dans le namespace -> conteneur ENETUNREACH pour
+# toujours (OpenVPN "Network unreachable", dnsmasq "upstream DNS not
+# responding" en boucle). Le default ne doit JAMAIS etre supprime.
+
+@test "cleanup_routes_on_restart never deletes the default route" {
+    local out="$TEST_TMP/routes.log"
+    : > "$out"
+
+    timeout() { shift; "$@"; }
+    ip() { echo "ip $*" >> "$out"; return 0; }
+    find_vpn_interface() { return 1; }
+
+    cleanup_routes_on_restart
+
+    ! grep -q -- 'ip route del default' "$out"
+    # Les routes /1 residuelles du tunnel sont nettoyees par prefixe
+    grep -q -- 'ip route del 0.0.0.0/1' "$out"
+    grep -q -- 'ip route del 128.0.0.0/1' "$out"
+}

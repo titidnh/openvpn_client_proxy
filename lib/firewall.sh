@@ -261,7 +261,30 @@ refresh_vpn_remote_ips() {
     local old_map="$VPN_REMOTE_MAP"
     local new_map="" changed=0
     local entry host old_ips new_ips
-    local ip rest port proto
+    local ip rest port proto pp
+
+    # Ports/protos par hostname, derives des ANCIENS endpoints (VPN_REMOTE_IPS
+    # ne contient encore que les anciennes IPs a ce stade). L ancienne etape 1
+    # comparait les NOUVELLES IPs a VPN_REMOTE_IPS : la boucle etait un no-op,
+    # aucune regle ACCEPT n etait posee pour les nouveaux remotes, et l etape 2
+    # retirait les anciennes -> kill switch total sur les nouvelles IPs.
+    local ep_ip old_host old_entry
+    local -A host_eps=()
+    for old_entry in $old_map; do
+        old_host="${old_entry%%=*}"
+        host_eps[$old_host]=""
+        for endpoint in ${VPN_REMOTE_IPS:-}; do
+            ep_ip="${endpoint%%|*}"
+            printf '%s\n' "${old_entry#*=}" | tr ',' '\n' | grep -qx "$ep_ip" || continue
+            rest="${endpoint#*|}"
+            port="${rest%%|*}"
+            proto="${rest#*|}"
+            case " ${host_eps[$old_host]} " in
+                *" ${port}|${proto}"*) ;;
+                *) host_eps[$old_host]="${host_eps[$old_host]} ${port}|${proto}" ;;
+            esac
+        done
+    done
 
     for entry in $old_map; do
         host="${entry%%=*}"
@@ -295,16 +318,16 @@ refresh_vpn_remote_ips() {
             "VPN remote IPs changed - updating firewall" \
             "host=${host}" \
             "old=${old_ips}" \
-            "new=$(echo "$new_ips" | tr '\n' ',')"
+            "new=$(echo "$new_ips" | paste -sd, -)"
         changed=1
 
-        # 1. POSER les nouvelles regles d abord (IP x ports/protos connus).
+        # 1. POSER les nouvelles regles d abord : chaque nouvelle IP herite
+        #    des ports/protos que le pare-feu autorisait pour les anciennes
+        #    IPs du meme hostname (host_eps).
         for ip in $(printf '%s\n' "$new_ips"); do
-            for endpoint in ${VPN_REMOTE_IPS:-}; do
-                rest="${endpoint#*|}"
-                port="${rest%%|*}"
-                proto="${rest#*|}"
-                [ "${endpoint%%|*}" = "$ip" ] && [ -n "$port" ] && [ -n "$proto" ] || continue
+            for pp in ${host_eps[$host]:-}; do
+                port="${pp%%|*}"
+                proto="${pp#*|}"
                 if [[ "$ip" =~ : ]]; then
                     ipt6 -A OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
                 else
@@ -340,11 +363,9 @@ ${entry#*=}"
         host="${entry%%=*}"
         for ip in $(printf '%s\n' "${entry#*=}" | tr ',' '\n'); do
             printf '%s\n' "$new_all" | grep -qx "$ip" && continue
-            for endpoint in ${VPN_REMOTE_IPS:-}; do
-                rest="${endpoint#*|}"
-                port="${rest%%|*}"
-                proto="${rest#*|}"
-                [ "${endpoint%%|*}" = "$ip" ] && [ -n "$port" ] && [ -n "$proto" ] || continue
+            for pp in ${host_eps[$host]:-}; do
+                port="${pp%%|*}"
+                proto="${pp#*|}"
                 if [[ "$ip" =~ : ]]; then
                     ipt6 -D OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
                 else
@@ -359,25 +380,10 @@ ${entry#*=}"
 
     # 3. Regenerer VPN_REMOTE_IPS (endpoints "ip|port|proto") : pour chaque
     #    hostname de la nouvelle carte, les ports/protos sont ceux que le
-    #    pare-feu autorisait pour les ANCIENNES IP du meme hostname. Un
-    #    hostname dont les IP sont inchangees garde ses endpoints tels quels.
-    local updated_eps="" ep_port ep_proto old_host old_ip_list ep_ip
-    local -A host_eps=()
-    for old_entry in $old_map; do
-        old_host="${old_entry%%=*}"
-        host_eps[$old_host]=""
-        for endpoint in ${VPN_REMOTE_IPS:-}; do
-            ep_ip="${endpoint%%|*}"
-            printf '%s\n' "${old_entry#*=}" | tr ',' '\n' | grep -qx "$ep_ip" || continue
-            rest="${endpoint#*|}"
-            ep_port="${rest%%|*}"
-            ep_proto="${rest#*|}"
-            case " ${host_eps[$old_host]} " in
-                *" ${ep_port}|${ep_proto}"*) ;;
-                *) host_eps[$old_host]="${host_eps[$old_host]} ${ep_port}|${ep_proto}" ;;
-            esac
-        done
-    done
+    #    pare-feu autorisait pour les ANCIENNES IP du meme hostname (host_eps,
+    #    calcule en tete de fonction). Un hostname dont les IP sont inchangees
+    #    garde ses endpoints tels quels.
+    local updated_eps=""
     for entry in $VPN_REMOTE_MAP; do
         host="${entry%%=*}"
         for ip in $(printf '%s\n' "${entry#*=}" | tr ',' '\n'); do
@@ -926,9 +932,25 @@ cleanup_routes_on_restart() {
         timeout 3 ip addr flush dev "$tun_dev" 2>/dev/null || true
     fi
 
-    timeout 3 ip route del default via 0.0.0.0 2>/dev/null || true
-    timeout 3 ip route del 0.0.0.0/1 via 10.0.0.0 2>/dev/null || true
+    # NB : ne JAMAIS supprimer la route "default" : sur les reseaux
+    # point-a-point le default physique est "default via 0.0.0.0 dev eth0"
+    # et l ancien "ip route del default via 0.0.0.0" le supprimait. Rien
+    # ne la restaure ensuite dans le namespace (Docker ne la pose qu a la
+    # creation du conteneur) -> conteneur ENETUNREACH pour toujours
+    # (OpenVPN "Network unreachable", dnsmasq "upstream DNS not responding").
+    # Les routes /1 du tunnel sont retirees par OpenVPN lui-meme a l arret
+    # propre ; les dels ci-dessous ne visent que les residus d un crash
+    # (cette fonction n est appelee qu apres avoir tue et attendu le VPN).
+    timeout 3 ip route del 0.0.0.0/1 2>/dev/null || true
+    timeout 3 ip route del 128.0.0.0/1 2>/dev/null || true
     # Clean up WireGuard routes
     timeout 3 ip route del 0.0.0.0/1 dev wg0 2>/dev/null || true
     timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
+
+    # Tripwire : si la route physique par defaut a disparu (bug anterieur,
+    # manip manuelle), rien ne sortira plus du conteneur - le dire.
+    if ! ip route show default 2>/dev/null | grep -q .; then
+        log_json ERROR "cleanup_routes_on_restart" \
+            "no default route left in container - external network unreachable"
+    fi
 }
