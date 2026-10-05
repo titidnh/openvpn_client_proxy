@@ -787,3 +787,48 @@ l ecriture posait probleme.
 **DETTE** (inchangee) : les IP restent figees au demarrage du conteneur ;
 une re-resolution periodique ou un restart Docker reste le correctif de
 fond. /tmp en volume nomme reste a restreindre (dette declaree).
+
+---
+
+## Round 11 - dette "IP figees au demarrage du conteneur" : re-resolution periodique
+
+**PROBLEME** (dette declaree rounds 8-10) : le pare-feu et l epinglage
+OpenVPN figent les IP des remotes au bootstrap. Si le fournisseur change
+TOUTES ses IP pendant la vie du conteneur, OpenVPN echoue jusqu au
+redemarrage du conteneur.
+
+**CORRECTIF** :
+1. `lib/firewall.sh` : nouvelle fonction `refresh_vpn_remote_ips`.
+   - Re-resout chaque hostname de `VPN_REMOTE_MAP` via le DNS LOCAL
+     (127.0.0.1 en mode DoT, DNS_SERVER_* sinon) - jamais en clair vers
+     l exterieur (port 53 externe bloque par le kill switch).
+   - Pose les NOUVELLES regles iptables AVANT de retirer les anciennes
+     (zero interruption, meme approche que dot_refresh).
+   - Fail-safe : si la re-resolution echoue pour un hostname, ses anciennes
+     IP et regles sont CONSERVEES (jamais de fail-open).
+   - Met a jour `VPN_REMOTE_MAP` (carte hostname->IP) et regenere
+     `VPN_REMOTE_IPS` (endpoints ip|port|proto, ports/protos herites des
+     anciennes IP du meme hostname, dedupliques).
+   - Retourne 1 si au moins une IP a change (le pare-feu est deja a jour),
+     0 sinon.
+2. `lib/supervisor.sh` (boucle keepalive) : appel periodique toutes les
+   `VPN_REMOTE_REFRESH_INTERVAL` secondes (defaut 3600, 0 = desactive).
+   Si le retour est 1, le VPN est redemarre pour que `openvpn.sh` re-epingle
+   la nouvelle carte, puis l etat de sante est reevalue (sentinel, routes).
+3. `docker-compose.yml` / `README.md` : nouvelle variable
+   `VPN_REMOTE_REFRESH_INTERVAL` (defaut 3600).
+
+**VALIDATION** (harnais mocke : log_json, iptables, resolve_vpn_ips) :
+- IP changees : rc=1, carte mise a jour, anciennes regles retirees
+  (203.0.113.7/.8 -> 203.0.113.30), regle 443/tcp de l hote inchange
+  conservee, `VPN_REMOTE_IPS` regenere sans doublon (3 endpoints).
+- Echec de resolution d un hostname : ses IP/regles conservees, reste de
+  la carte mis a jour (jamais de fail-open).
+- Aucun changement : rc=0, aucune regle touchee.
+- `bash -n` OK sur firewall.sh, supervisor.sh, start.sh, openvpn.sh ;
+  `parse_tests.sh` 39/39 OK.
+
+**NOTE** : le redemarrage du VPN (et non du conteneur entier) suffit - le
+pare-feu est deja coherent au moment du restart. Un fournisseur qui change
+d IP a une frequence > 1/h peut baisser l intervalle, au prix de plus de
+redemarrages VPN.

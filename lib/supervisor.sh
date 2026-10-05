@@ -281,6 +281,31 @@ supervise_all() {
             current_time=$(date +%s)
             elapsed_minutes=$(( (current_time - start_time) / 60 ))
 
+            # Dette "IP figees" (v10) : re-resolution periodique des remotes
+            # VPN. refresh_vpn_remote_ips met deja le pare-feu a jour ; si
+            # elle retourne 1 (IP changees), le VPN est redemarre pour que
+            # openvpn.sh re-epingle la nouvelle carte VPN_REMOTE_MAP.
+            local refresh_interval="${VPN_REMOTE_REFRESH_INTERVAL:-3600}"
+            if [ "$refresh_interval" != "0" ] && \
+               [ "$((refresh_interval / 10))" -gt 0 ] && \
+               [ $((keepalive_cycles % (refresh_interval / 10) )) -eq 0 ]; then
+                if ! refresh_vpn_remote_ips; then
+                    log_json WARN "supervisor" \
+                        "VPN remote IPs changed - restarting VPN to re-pin remotes"
+                    rm -f "$VPN_HEALTHY_FILE"
+                    METRIC_VPN_UP=0
+                    if restart_vpn_service; then
+                        setup_return_routes
+                        if check_vpn_ip && nslookup example.com 127.0.0.1 >/dev/null 2>&1; then
+                            touch "$VPN_HEALTHY_FILE"
+                            METRIC_VPN_UP=1
+                            log_json INFO "supervisor" \
+                                "VPN tunnel recovered on new remote IPs"
+                        fi
+                    fi
+                fi
+            fi
+
             if ! check_vpn_routing; then
                 log_json WARN "supervisor" "VPN tunnel is down"
                 rm -f "$VPN_HEALTHY_FILE"

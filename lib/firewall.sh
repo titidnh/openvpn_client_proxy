@@ -236,6 +236,166 @@ get_physical_iface() {
 # IPv4 Firewall - Kill switch + DNS leak prevention
 # ===========================================================================
 
+# v10 (dette "IP figees") : re-resolution periodique des remotes VPN.
+# Le pare-feu et l'epinglage OpenVPN figent les IP au bootstrap ; si le
+# fournisseur change d IP pendant la vie du conteneur, la connexion
+# tombait dans le kill switch jusqu au redemarrage. Cette fonction :
+# 1. re-resout chaque hostname de VPN_REMOTE_MAP via le DNS LOCAL (127.0.0.1
+#    en DoT, DNS_SERVER_* sinon) - le port 53 externe est bloque apres le
+#    verrouillage, on ne re-resout JAMAIS vers l exterieur en clair ;
+# 2. pose les nouvelles regles iptables AVANT de retirer les anciennes
+#    (zero interruption, meme approche que dot_refresh) ;
+# 3. met a jour VPN_REMOTE_IPS/VPN_REMOTE_MAP pour que le prochain
+#    (re)demarrage d openvpn.sh epingle exactement ces IP.
+# Fail-safe : en cas d echec de resolution, les anciennes IP sont
+# CONSERVEES (jamais de fail-open). Retour 1 = IP changees, le
+# superviseur doit redemarrer le VPN pour re-epingler la nouvelle carte.
+# Usage: refresh_vpn_remote_ips
+refresh_vpn_remote_ips() {
+    [ -n "${VPN_REMOTE_MAP:-}" ] || return 0
+
+    local phys_iface
+    phys_iface=$(get_physical_iface)
+    phys_iface="${phys_iface:-eth0}"
+
+    local old_map="$VPN_REMOTE_MAP"
+    local new_map="" changed=0
+    local entry host old_ips new_ips
+    local ip rest port proto
+
+    for entry in $old_map; do
+        host="${entry%%=*}"
+        old_ips="${entry#*=}"
+        [ -n "$host" ] && [ -n "$old_ips" ] || continue
+
+        if [ "${ENABLE_DOT:-false}" = "true" ]; then
+            new_ips=$(resolve_vpn_ips "$host" 127.0.0.1 2>/dev/null || true)
+        else
+            new_ips=$(resolve_vpn_ips "$host" "$DNS_SERVER_1" "$DNS_SERVER_2" 2>/dev/null || true)
+        fi
+
+        if [ -z "$(echo "$new_ips" | tr -d '[:space:]')" ]; then
+            log_json WARN "vpn_remote_refresh" \
+                "re-resolve failed - keeping old IPs" \
+                "host=${host}"
+            new_map="${new_map} ${entry}"
+            continue
+        fi
+
+        local old_sorted new_sorted
+        old_sorted=$(printf '%s\n' "$old_ips" | tr ',' '\n' | sort | tr '\n' ' ')
+        new_sorted=$(printf '%s\n' "$new_ips" | sort | tr '\n' ' ')
+
+        if [ "$old_sorted" = "$new_sorted" ]; then
+            new_map="${new_map} ${entry}"
+            continue
+        fi
+
+        log_json INFO "vpn_remote_refresh" \
+            "VPN remote IPs changed - updating firewall" \
+            "host=${host}" \
+            "old=${old_ips}" \
+            "new=$(echo "$new_ips" | tr '\n' ',')"
+        changed=1
+
+        # 1. POSER les nouvelles regles d abord (IP x ports/protos connus).
+        for ip in $(printf '%s\n' "$new_ips"); do
+            for endpoint in ${VPN_REMOTE_IPS:-}; do
+                rest="${endpoint#*|}"
+                port="${rest%%|*}"
+                proto="${rest#*|}"
+                [ "${endpoint%%|*}" = "$ip" ] && [ -n "$port" ] && [ -n "$proto" ] || continue
+                if [[ "$ip" =~ : ]]; then
+                    ipt6 -A OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
+                else
+                    iptables -A OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
+                fi
+            done
+        done
+
+        local comma_ips=""
+        for ip in $(printf '%s\n' "$new_ips"); do
+            comma_ips="${comma_ips},${ip}"
+        done
+        new_map="${new_map} ${host}=${comma_ips#,}"
+    done
+
+    new_map="${new_map# }"
+    [ -n "$new_map" ] && export VPN_REMOTE_MAP="$new_map"
+
+    if [ "$changed" -eq 0 ]; then
+        log_json DEBUG "vpn_remote_refresh" "VPN remote IPs unchanged"
+        return 0
+    fi
+
+    # 2. Retirer les anciennes regles qui ne sont plus dans la nouvelle
+    #    carte (les nouvelles regles ont ete posees a l etape 1).
+    local new_all=""
+    for entry in $VPN_REMOTE_MAP; do
+        new_all="${new_all}
+${entry#*=}"
+    done
+    new_all=$(printf '%s\n' "$new_all" | tr ',' '\n' | sort -u)
+    for entry in $old_map; do
+        host="${entry%%=*}"
+        for ip in $(printf '%s\n' "${entry#*=}" | tr ',' '\n'); do
+            printf '%s\n' "$new_all" | grep -qx "$ip" && continue
+            for endpoint in ${VPN_REMOTE_IPS:-}; do
+                rest="${endpoint#*|}"
+                port="${rest%%|*}"
+                proto="${rest#*|}"
+                [ "${endpoint%%|*}" = "$ip" ] && [ -n "$port" ] && [ -n "$proto" ] || continue
+                if [[ "$ip" =~ : ]]; then
+                    ipt6 -D OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
+                else
+                    iptables -D OUTPUT -o "$phys_iface" -d "$ip" -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
+                fi
+            done
+            log_json INFO "vpn_remote_refresh" \
+                "removed stale VPN remote rule" \
+                "ip=${ip}"
+        done
+    done
+
+    # 3. Regenerer VPN_REMOTE_IPS (endpoints "ip|port|proto") : pour chaque
+    #    hostname de la nouvelle carte, les ports/protos sont ceux que le
+    #    pare-feu autorisait pour les ANCIENNES IP du meme hostname. Un
+    #    hostname dont les IP sont inchangees garde ses endpoints tels quels.
+    local updated_eps="" ep_port ep_proto old_host old_ip_list ep_ip
+    local -A host_eps=()
+    for old_entry in $old_map; do
+        old_host="${old_entry%%=*}"
+        host_eps[$old_host]=""
+        for endpoint in ${VPN_REMOTE_IPS:-}; do
+            ep_ip="${endpoint%%|*}"
+            printf '%s\n' "${old_entry#*=}" | tr ',' '\n' | grep -qx "$ep_ip" || continue
+            rest="${endpoint#*|}"
+            ep_port="${rest%%|*}"
+            ep_proto="${rest#*|}"
+            case " ${host_eps[$old_host]} " in
+                *" ${ep_port}|${ep_proto}"*) ;;
+                *) host_eps[$old_host]="${host_eps[$old_host]} ${ep_port}|${ep_proto}" ;;
+            esac
+        done
+    done
+    for entry in $VPN_REMOTE_MAP; do
+        host="${entry%%=*}"
+        for ip in $(printf '%s\n' "${entry#*=}" | tr ',' '\n'); do
+            for pp in ${host_eps[$host]:-}; do
+                updated_eps="${updated_eps} ${ip}|${pp}"
+            done
+        done
+    done
+    export VPN_REMOTE_IPS="${updated_eps# }"
+
+    log_json INFO "vpn_remote_refresh" \
+        "VPN remote refresh complete" \
+        "map=${VPN_REMOTE_MAP}" \
+        "endpoints=$(echo ${VPN_REMOTE_IPS:-} | wc -w)"
+    return 1
+}
+
+
 setup_iptables() {
     log_json INFO "setup_iptables" "Configuring IPv4 firewall"
 

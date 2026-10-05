@@ -97,6 +97,10 @@ services:
       ENABLE_TAILSCALE: "false"
       ENABLE_DNSSEC: "false"
 
+      # Re-résolution périodique des remotes VPN (dette "IP figées")
+      # 3600 = toutes les heures ; 0 = désactiver
+      VPN_REMOTE_REFRESH_INTERVAL: "3600"
+
       # =================================================================
       # PROFIL: STRICT-FILTERING (DoT + DNS Blocklist)
       # Décommentez les lignes ci-dessous et commentez le profil DEFAULT
