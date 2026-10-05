@@ -719,3 +719,30 @@ figee" qui mordait en production (deux VPN : le premier marche par chance
 **NOTE** : la re-resolution periodique des IP (fournisseur qui change d IP
 pendant la vie du conteneur) reste une dette - ce correctif garantit la
 coherence pare-feu/OpenVPN au demarrage, ce qui corrige le cas observe.
+
+---
+
+## Round 9 - retour production : /vpn monte en lecture seule
+
+**SYMPTOME** : `/usr/local/bin/openvpn.sh: line 62: /vpn/vpn.resolved.conf:
+Read-only file system` puis plus rien - le conteneur restait bloque
+("waiting for VPN tunnel..." sans fin).
+
+**CAUSE** : le volume /vpn est monte en lecture seule (ro) dans docker-compose.
+Le round 8 ecrivait la config resolue dans $dir (/vpn). De plus, avec set -e,
+l echec du redirect tuait openvpn.sh AVANT le fallback WARN prevu - le
+processus VPN mourait silencieusement et le superviseur attendait indefiniment.
+
+**CORRECTIF** (openvpn.sh) :
+1. La config resolue est ecrite dans /tmp/vpn.resolved.conf (pas dans /vpn).
+   --cd reste sur $dir : les chemins RELATIFS de la config (certificats, cles,
+   vpn.auth) continuent d etre resolus dans /vpn.
+2. Redirect tolere l echec (|| true + test -s) : si la generation echoue,
+   WARN + config d origine - jamais de mort silencieuse.
+
+**VALIDATION** (mock) : generation dans /tmp OK, remotes IP corrects,
+directives conservees ; le flux map -> config reste identique par ailleurs.
+
+**NOTE** : les deux IP de ce log (185.183.104.43, 89.37.173.23) correspondent
+aux remotes autorises au pare-feu - l epinglage du round 8 fonctionne, seule
+l ecriture posait probleme.

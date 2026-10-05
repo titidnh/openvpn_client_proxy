@@ -58,7 +58,10 @@ fi
 # resolues - OpenVPN ne doit PAS re-resoudre le hostname, sinon il peut
 # obtenir une autre IP du round-robin DNS, bloquee par le kill switch.
 if [ -n "${VPN_REMOTE_MAP:-}" ]; then
-    resolved_conf="$dir/vpn.resolved.conf"
+    # /vpn est souvent monte en lecture seule (volume ro) - la config
+    # resolue est ecrite dans /tmp ; --cd reste sur $dir pour les
+    # certificats/cles relatifs de la config d origine.
+    resolved_conf="/tmp/vpn.resolved.conf"
     awk -v map="${VPN_REMOTE_MAP}" '
         BEGIN {
             n = split(map, m, " ")
@@ -83,7 +86,7 @@ if [ -n "${VPN_REMOTE_MAP:-}" ]; then
             }
             print
         }
-    ' "$conf" > "$resolved_conf"
+    ' "$conf" > "$resolved_conf" 2>/dev/null || true
     if [ -s "$resolved_conf" ]; then
         chmod 600 "$resolved_conf"
         log_json INFO "openvpn.sh" \
