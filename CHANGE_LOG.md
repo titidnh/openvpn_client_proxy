@@ -746,3 +746,44 @@ directives conservees ; le flux map -> config reste identique par ailleurs.
 **NOTE** : les deux IP de ce log (185.183.104.43, 89.37.173.23) correspondent
 aux remotes autorises au pare-feu - l epinglage du round 8 fonctionne, seule
 l ecriture posait probleme.
+
+---
+
+## Round 10 - revue v8 (rounds 7 a 9) : secrets en volume persistant + BOM
+
+### v10-3.1 - La config resolue (avec secrets inline) etait ecrite dans /tmp, monte sur un volume persistant **[VALIDEE]**
+
+- **Fichier** : `openvpn.sh`
+- **Probleme** : docker-compose.yml monte le volume nomme `blocklist-cache`
+  sur /tmp (persistant sur l hote, survit a `docker compose down` sans `-v`).
+  La config resolue copiait INTEGRALEMENT vpn.conf - donc `<key>`,
+  `<auth-user-pass>` et identifiants inline des .ovpn de fournisseurs - dans
+  ce volume. De plus le fichier etait cree en 644 (umask par defaut) pendant
+  un court instant avant le chmod 600.
+- **Correction** :
+  1. `umask 077` : le fichier est cree directement en 600, aucune fenetre.
+  2. `mktemp /dev/shm/...` (tmpfs memoire, jamais persiste), avec repli
+     `/run` puis `/tmp` si le tmpfs est absent.
+- **Validation** : bloc mktemp execute sous `set -euo pipefail` ->
+  fichier cree en mode 600 dans /dev/shm ; `bash -n` OK.
+
+### v10-3.2 - remote non reecrit en cas de BOM UTF-8 (openvpn.sh, sans avertissement) **[VALIDEE]**
+
+- **Probleme** : l awk de reecriture n avait pas le nettoyage de
+  parse_vpn_remotes (BOM, CR). Un `remote host` en 1re ligne precede d un BOM
+  n etait pas reecrit -> OpenVPN re-resolvait le hostname -> IP non
+  autorisee par le kill switch, sans aucun message.
+- **Correction** :
+  1. Nettoyage identique au parseur du pare-feu en tete de reggle :
+     `sub(/^\xef\xbb\xbf/, ""); sub(/\r$/, "")`.
+  2. `END` : WARN sur /dev/stderr si un hostname de la ligne remote n a pas
+     ete epingle par VPN_REMOTE_MAP (silence supprime).
+- **Validation** (awk reel extrait de openvpn.sh, 5 scenarios) :
+  BOM 1re ligne + CRLF -> reecrit ; CRLF sans port -> reecrit ;
+  hostname hors carte -> WARN emis ; remote IP -> inchange ;
+  2 remotes x 2 IP -> 4 lignes correctes. Le `2>/dev/null` qui masquait le
+  WARN a ete retire.
+
+**DETTE** (inchangee) : les IP restent figees au demarrage du conteneur ;
+une re-resolution periodique ou un restart Docker reste le correctif de
+fond. /tmp en volume nomme reste a restreindre (dette declaree).

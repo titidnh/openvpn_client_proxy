@@ -59,9 +59,16 @@ fi
 # obtenir une autre IP du round-robin DNS, bloquee par le kill switch.
 if [ -n "${VPN_REMOTE_MAP:-}" ]; then
     # /vpn est souvent monte en lecture seule (volume ro) - la config
-    # resolue est ecrite dans /tmp ; --cd reste sur $dir pour les
-    # certificats/cles relatifs de la config d origine.
-    resolved_conf="/tmp/vpn.resolved.conf"
+    # resolue est ecrite dans un tmpfs (memoire), JAMAIS dans /tmp :
+    # docker-compose.yml monte un volume nomme persistant sur /tmp, et la
+    # config copiee embarque les secrets inline (<key>, <auth-user-pass>).
+    # umask 077 : le fichier est cree en 600 (pas de fenetre en 644).
+    # --cd reste sur $dir pour les certificats/cles relatifs de la config
+    # d origine.
+    umask 077
+    resolved_conf="$(mktemp /dev/shm/vpn.resolved.XXXXXX 2>/dev/null \
+        || mktemp /run/vpn.resolved.XXXXXX 2>/dev/null \
+        || mktemp /tmp/vpn.resolved.XXXXXX)"
     awk -v map="${VPN_REMOTE_MAP}" '
         BEGIN {
             n = split(map, m, " ")
@@ -70,9 +77,12 @@ if [ -n "${VPN_REMOTE_MAP:-}" ]; then
                 hosts[kv[1]] = kv[2]
             }
         }
+        # v8-3.2 : meme nettoyage que parse_vpn_remotes (BOM UTF-8, CR) -
+        # sinon un remote en 1re ligne avec BOM n est pas reecrit et
+        # OpenVPN re-resout le hostname (IP non autorisee, kill switch).
+        { sub(/^\xef\xbb\xbf/, ""); sub(/\r$/, "") }
         {
             if ($1 == "remote" && ($2 in hosts)) {
-                sub(/\r$/, "")
                 port = ($3 ~ /^[0-9]+$/) ? $3 : ""
                 proto = ($4 != "") ? $4 : ""
                 np = split(hosts[$2], ips, ",")
@@ -84,9 +94,15 @@ if [ -n "${VPN_REMOTE_MAP:-}" ]; then
                 }
                 next
             }
+            if ($1 == "remote" && $2 !~ /^[0-9.]+$/ && ($2 in hosts) == 0)
+                left = $2
             print
         }
-    ' "$conf" > "$resolved_conf" 2>/dev/null || true
+        END {
+            if (left)
+                print "WARN: remote hostname non epingle par VPN_REMOTE_MAP: " left > "/dev/stderr"
+        }
+    ' "$conf" > "$resolved_conf" || true
     if [ -s "$resolved_conf" ]; then
         chmod 600 "$resolved_conf"
         log_json INFO "openvpn.sh" \
