@@ -648,3 +648,35 @@ proto/remote/port n'etait pas reconnu (directive prefixee par \xEF\xBB\xBF).
 - compose : disable_ipv6=0, volume nomme sur /tmp.
 - shellcheck --norc sur lib/*.sh : 12 SC2034 + 5 SC2154 (dns_runtime/dns_blocklist,
   faux positifs sur cles de tableaux associatifs) - a regarder a l occasion.
+
+---
+
+## Round 7 - revue v7 (round 6 de verification) : croisement de portee rport/port
+
+La revue v7 valide rport + BOM sous mawk ET busybox awk (celui de l image Alpine),
+sans regression. Un seul point restait :
+
+### v7-3 - rport GLOBAL ecrasait le port PROPRE AU BLOC (parse_vpn_remotes)
+**PROBLEME** : v6 appliquait la retombee rport -> port en fin de calcul, sans
+distinction de portee : `rport 443` global + bloc avec `port 8443` donnait 443
+au lieu de 8443 (l option la plus locale doit lemporter).
+**CORRECTIF** : resolution du port PAR PORTEE, du plus local au plus global :
+rport du bloc > port du bloc > rport global > port global ; un port explicite sur
+la ligne remote reste au-dessus de tout (norme OpenVPN).
+**VALIDATION** : banc parse_tests.sh (39 cas, fourni par le revioir, ajoute au depot)
+- 39/39 sous mawk. Le revioir a valide le comportement identique sous busybox awk
+  (image Alpine) sur les 39 cas ; la sandbox n a pas busybox (pas de root pour
+  installer) - la reference reste le banc du revioir.
+- Cas corriges : rport global + bloc avec port (8443 gagne), rport de bloc vs
+  rport global (bloc gagne), lport ignore, BOM sur ligne de commentaire.
+
+### Tests : parse_tests.sh ajoute a la racine du depot
+Banc autonome (ni root ni reseau) : 39 cas couvrant CRLF, BOM, port/rport/proto
+globaux et par bloc, heritage, ordre quelconque, IPv6 litteral, udp6/tcp6-client,
+multi-remote par bloc, commentaires, remote-random, lport, croisements de portee.
+Usage : CODE=. bash parse_tests.sh (option : PATH=shim-busybox pour tester avec
+l awk BusyBox de l image).
+
+### Verification globale round 7
+- bash -n OK ; shellcheck --severity=error : 0 erreur ; doublons : stub connu.
+- Non-regression : cache resolution, compteur pare-feu, WG v6 - inchanges.

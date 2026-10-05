@@ -523,21 +523,23 @@ parse_vpn_remotes() {
                 # globale (norme OpenVPN) - sinon proto tcp global + bloc
                 # sans proto donnait udp (regle fausse, VPN bloque).
                 k = ++blkseen
-                port = blkport[k]
-                if (port == "") port = dport
                 proto = blkproto[k]
                 if (proto == "") proto = dproto
-                rport = blkrport[k]
-                if (rport == "") rport = drport
+                # v7 : resolution du port PAR PORTEE, la plus locale lemporte
+                # (rport = port distant explicite, prioritaire sur port dans
+                # la meme portee). v6 applait rport global en fin de calcul
+                # et ecrasait le port propre au bloc.
+                if (blkrport[k] != "") port = blkrport[k]
+                else if (blkport[k] != "") port = blkport[k]
+                else if (drport != "") port = drport
+                else port = dport
             } else {
-                port = dport
                 proto = dproto
-                rport = drport
+                if (drport != "") port = drport
+                else port = dport
             }
-            # v6-3.1 : rport = port DISTANT explicite, prioritaire sur la
-            # directive port (revue v6). Un port explicite sur la ligne
-            # remote reste au-dessus de tout (norme OpenVPN).
-            if (rport != "") port = rport
+            # Un port explicite sur la ligne remote reste au-dessus de tout
+            # (norme OpenVPN).
             if ($3 ~ /^[0-9]+$/) {
                 port = $3
                 if ($4 != "") proto = $4
