@@ -187,6 +187,22 @@ firewall_early_lockdown() {
         done < <(parse_vpn_remotes "$VPN_CONF")
     fi
     export VPN_REMOTE_IPS="${VPN_REMOTE_IPS# }"
+    # v8 : exporter la carte hostname -> IPs resolues pour qu OpenVPN
+    # utilise EXACTEMENT les IPs autorisees au pare-feu. Sinon OpenVPN
+    # re-resout le hostname au demarrage et peut obtenir une autre IP
+    # du round-robin DNS -> bloquee par le kill switch (write UDPv4:
+    # Operation not permitted).
+    local map_host map_ips remote_map=""
+    for map_host in "${!RESOLVE_CACHE[@]}"; do
+        map_ips=""
+        local m_ip
+        for m_ip in ${RESOLVE_CACHE[$map_host]}; do
+            map_ips="${map_ips},${m_ip}"
+        done
+        map_ips="${map_ips#,}"
+        [ -n "$map_ips" ] && remote_map="$remote_map $map_host=$map_ips"
+    done
+    [ -n "$remote_map" ] && export VPN_REMOTE_MAP="${remote_map# }"
     if [ -n "$VPN_REMOTE_IPS" ]; then
         log_json INFO "firewall_early_lockdown" \
             "VPN remotes resolved during bootstrap" \

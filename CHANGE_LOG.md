@@ -680,3 +680,42 @@ l awk BusyBox de l image).
 ### Verification globale round 7
 - bash -n OK ; shellcheck --severity=error : 0 erreur ; doublons : stub connu.
 - Non-regression : cache resolution, compteur pare-feu, WG v6 - inchanges.
+
+---
+
+## Round 8 - bug production : OpenVPN re-resout le hostname et bute sur le kill switch
+
+**SYMPTOME** (conteneur reel) : pare-feu OK (2 remotes resolus au bootstrap,
+156.146.62.56 et 89.222.97.196), puis :
+`write UDPv4 []: Operation not permitted` vers 89.37.173.19:1194 -
+une TROISIEME IP du round-robin DNS que le pare-feu n a jamais autorisee.
+
+**CAUSE RACINE** : le pare-feu autorise les IP resolues au bootstrap
+(VPN_REMOTE_IPS), mais OpenVPN demarre avec la config d origine et
+re-resout lui-meme le hostname -> peut obtenir une autre IP du
+round-robin -> bloquee par le kill switch. C est la dette "VPN_REMOTE_IPS
+figee" qui mordait en production (deux VPN : le premier marche par chance
+- meme IP tiree ; le second echoue).
+
+**CORRECTIF (approche : epingler OpenVPN sur les memes IP que le pare-feu)** :
+1. lib/firewall.sh (firewall_early_lockdown) : export de VPN_REMOTE_MAP,
+   carte "host=ip1,ip2 ..." construite depuis RESOLVE_CACHE (deja utilisee
+   pour poser les regles).
+2. openvpn.sh : si VPN_REMOTE_MAP est present, generation de
+   vpn.resolved.conf OU chaque ligne `remote host [port] [proto]` avec un
+   hostname mappe est remplacee par une ligne par IP resolue (port/proto
+   conserves, autres directives intactes), chmod 600, et OpenVPN demarre
+   sur cette config. Plus AUCUNE resolution DNS au demarrage d OpenVPN.
+
+**VALIDATION** (mock complet) :
+- firewall_early_lockdown exporte bien
+  VPN_REMOTE_MAP="vpn.example.com=156.146.62.56,89.222.97.196"
+  et VPN_REMOTE_IPS avec les 4 couples IP|port|proto.
+- config resolue : 2 lignes remote hostname -> 4 lignes remote IP
+  (2 IP x 2 remotes), directives conservees (client, proto, resolv-retry).
+- Si RESOLVE_CACHE est vide (remotes en IP litterales), pas de map, pas de
+  rewrite - comportement inchange.
+
+**NOTE** : la re-resolution periodique des IP (fournisseur qui change d IP
+pendant la vie du conteneur) reste une dette - ce correctif garantit la
+coherence pare-feu/OpenVPN au demarrage, ce qui corrige le cas observe.
