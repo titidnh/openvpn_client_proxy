@@ -611,3 +611,40 @@ multi-remote par bloc, melange bloc/global, CRLF, tcp-client, bare remote).
 - bash -n OK ; shellcheck --severity=error : 0 erreur ; aucun doublon de fonction.
 - Parseur 15/15 ; cache 2 appels / 5 entrees (openvpn), 1 appel (wireguard) ;
   compteur pare-feu 5 echecs -> return 1 ; WG v6 crochets + ip -6 route inchanges.
+
+---
+
+## Round 6 - revue v6 (round 5 de verification) : rport + BOM UTF-8
+
+La revue v6 valide les deux correctifs du round 5 (cache 2 appels, heritage global 16/16)
+sans regression. Restaient deux limites mineures du parseur, corrigees ici :
+
+### v6-3.1 - Directive rport ignoree (parse_vpn_remotes, lib/common.sh)
+**PROBLEME** : rport fixe le port DISTANT (directive OpenVPN valide, y compris dans
+un bloc <connection>) mais le parseur ne lisait que port -> regle fausse, serveur bloque.
+**CORRECTIF** : rport memorise comme port distant (global drport / par bloc brport),
+prioritaire sur la directive port ; un port explicite sur la ligne remote reste
+au-dessus (norme OpenVPN). Heritage global dans les blocs identique a port/proto.
+**VALIDATION** : 5 cas rport - global seul, dans un bloc, rport vs port (rport gagne),
+port explicite sur remote (remote gagne), heritage global dans bloc.
+
+### v6-3.2 - BOM UTF-8 en tete de fichier (parse_vpn_remotes, lib/common.sh)
+**PROBLEME** : un .ovpn enregistre avec BOM (Notepad Windows) dont la 1re ligne est
+proto/remote/port n'etait pas reconnu (directive prefixee par \xEF\xBB\xBF).
+**CORRECTIF** : sub(/^\xef\xbb\xbf/, "") en tete de la regle de nettoyage
+(avant sub(/\r$/)), inconditonnel - le BOM ne colle quau 1er champ du fichier.
+**VALIDATION** : BOM + proto en 1re ligne ; BOM + bloc <connection> en 1re ligne.
+
+### Verification globale round 6
+- Parseur : 22/22 (5 rport, 2 BOM, 4 heritage global v5, 11 non-regression round 4).
+- bash -n OK ; shellcheck --severity=error : 0 erreur ; doublons : seul le stub
+  find_vpn_interface (lib/vpn.sh non source, connu).
+- Non-regression du flux : cache openvpn 2 appels / 5 entrees, cache wireguard 1 appel,
+  compteur pare-feu 5 echecs -> return 1, WG v6 crochets + ip -6 route.
+
+### Dettes inchangees (declarees)
+- VPN_REMOTE_IPS calculee une seule fois au bootstrap ; sortie apres 5 echecs pare-feu.
+- ipt6_must non appelee ; stop_stack ne tue pas wireguard-go/tailscaled.
+- compose : disable_ipv6=0, volume nomme sur /tmp.
+- shellcheck --norc sur lib/*.sh : 12 SC2034 + 5 SC2154 (dns_runtime/dns_blocklist,
+  faux positifs sur cles de tableaux associatifs) - a regarder a l occasion.

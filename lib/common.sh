@@ -491,15 +491,22 @@ parse_vpn_remotes() {
             else return
             print host, port, proto
         }
-        { sub(/\r$/, "") }
+        # v6-3.2 : BOM UTF-8 - sinon la 1re directive du fichier
+        # nest pas reconnue. Le sub est inconditionnel et sans effet
+        # sur les lignes suivantes.
+        { sub(/^\xef\xbb\xbf/, ""); sub(/\r$/, "") }
         FNR == NR {
-            if ($1 == "<connection>") { inblock = 1; bport = ""; bproto = ""; blkstart = nblk + 1 }
+            if ($1 == "<connection>") { inblock = 1; bport = ""; bproto = ""; brport = ""; blkstart = nblk + 1 }
             if ($1 == "</connection>") {
-                for (i = blkstart; i <= nblk; i++) { blkport[i] = bport; blkproto[i] = bproto }
+                for (i = blkstart; i <= nblk; i++) { blkport[i] = bport; blkproto[i] = bproto; blkrport[i] = brport }
                 inblock = 0
             }
             if ($1 == "port" && $2 != "") {
                 if (inblock) bport = $2; else dport = $2
+            }
+            # v6-3.1 : rport fixe le port DISTANT (prioritaire sur port)
+            if ($1 == "rport" && $2 != "") {
+                if (inblock) brport = $2; else drport = $2
             }
             if ($1 == "proto" && $2 != "") {
                 if (inblock) bproto = $2; else dproto = $2
@@ -520,10 +527,17 @@ parse_vpn_remotes() {
                 if (port == "") port = dport
                 proto = blkproto[k]
                 if (proto == "") proto = dproto
+                rport = blkrport[k]
+                if (rport == "") rport = drport
             } else {
                 port = dport
                 proto = dproto
+                rport = drport
             }
+            # v6-3.1 : rport = port DISTANT explicite, prioritaire sur la
+            # directive port (revue v6). Un port explicite sur la ligne
+            # remote reste au-dessus de tout (norme OpenVPN).
+            if (rport != "") port = rport
             if ($3 ~ /^[0-9]+$/) {
                 port = $3
                 if ($4 != "") proto = $4
