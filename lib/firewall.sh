@@ -136,6 +136,63 @@ ip6tables_usable() {
     command -v ip6tables >/dev/null 2>&1 && ip6tables -L -n >/dev/null 2>&1
 }
 
+# S3 : le proxy (Privoxy, lance sous l'utilisateur PROXY_RUN_USER) ne doit
+# pas servir de pivot vers les reseaux prives : tailnet (100.64.0.0/10),
+# hote Docker, conteneurs voisins, services locaux (dnsmasq, unbound,
+# metriques). Seul le DNS local (127.0.0.1:53) reste autorise.
+# Desactivable avec PROXY_ALLOW_PRIVATE_NETWORKS=true.
+PROXY_PRIVATE_NETS_V4="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16"
+PROXY_PRIVATE_NETS_V6="::1/128 fc00::/7 fe80::/10"
+
+# Usage: setup_proxy_egress_filter   (a appeler APRES le flush de setup_iptables)
+setup_proxy_egress_filter() {
+    if [ "${PROXY_ALLOW_PRIVATE_NETWORKS:-false}" = "true" ]; then
+        log_json WARN "proxy_egress" \
+            "PROXY_ALLOW_PRIVATE_NETWORKS=true - proxy clients can reach private networks"
+        return 0
+    fi
+
+    local user="${PROXY_RUN_USER:-vpn}"
+    local net
+
+    iptables -N PROXY_EGRESS 2>/dev/null || iptables -F PROXY_EGRESS
+    iptables -A PROXY_EGRESS -d 127.0.0.1 -p udp --dport 53 -j RETURN
+    iptables -A PROXY_EGRESS -d 127.0.0.1 -p tcp --dport 53 -j RETURN
+    for net in $PROXY_PRIVATE_NETS_V4; do
+        iptables -A PROXY_EGRESS -d "$net" -j REJECT
+    done
+
+    # NEW uniquement : les reponses de Privoxy vers ses clients (reseau
+    # Docker) sont ESTABLISHED et ne doivent pas etre bloquees.
+    if ! iptables -I OUTPUT 1 -m owner --uid-owner "$user" \
+            -m conntrack --ctstate NEW -j PROXY_EGRESS; then
+        log_json ERROR "proxy_egress" \
+            "cannot install owner-match rule (xt_owner missing?)" \
+            "hint=set PROXY_ALLOW_PRIVATE_NETWORKS=true to start without this protection"
+        return 1
+    fi
+
+    log_json INFO "proxy_egress" \
+        "proxy egress to private networks blocked" "user=${user}"
+}
+
+# Usage: setup_proxy_egress_filter_v6   (a appeler APRES le flush de setup_ip6tables)
+setup_proxy_egress_filter_v6() {
+    [ "${PROXY_ALLOW_PRIVATE_NETWORKS:-false}" = "true" ] && return 0
+
+    local user="${PROXY_RUN_USER:-vpn}"
+    local net
+
+    ipt6 -N PROXY_EGRESS 2>/dev/null || ipt6 -F PROXY_EGRESS
+    ipt6 -A PROXY_EGRESS -d ::1 -p udp --dport 53 -j RETURN
+    ipt6 -A PROXY_EGRESS -d ::1 -p tcp --dport 53 -j RETURN
+    for net in $PROXY_PRIVATE_NETS_V6; do
+        ipt6 -A PROXY_EGRESS -d "$net" -j REJECT
+    done
+    ipt6 -I OUTPUT 1 -m owner --uid-owner "$user" \
+        -m conntrack --ctstate NEW -j PROXY_EGRESS
+}
+
 # ===========================================================================
 # Early lockdown : a appeler le plus tot possible au demarrage (avant la
 # phase blocklist/dnsmasq/unbound). Sans cela, le conteneur tourne avec la
@@ -488,6 +545,12 @@ setup_iptables() {
     # reconnexion n'a pas besoin de DNS. ipt_add_853 devient un no-op.
     FW_TUNNEL_ONLY=1
 
+    # S3 : interdire au proxy de joindre les reseaux prives (apres le flush).
+    if ! setup_proxy_egress_filter; then
+        FW_FAILED=1
+        return 1
+    fi
+
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A INPUT -i lo -j ACCEPT
@@ -693,6 +756,9 @@ setup_ip6tables() {
     ipt6_must -P INPUT DROP || return 1
     ipt6_must -P FORWARD DROP || return 1
     ipt6_must -P OUTPUT DROP || return 1
+
+    # S3 : meme filtre de sortie du proxy qu'en IPv4.
+    setup_proxy_egress_filter_v6
 
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -p icmpv6 -j ACCEPT

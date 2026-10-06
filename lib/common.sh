@@ -762,6 +762,8 @@ init_environment() {
     
     # Security
     : "${DROP_CAPS:=false}"
+    : "${PROXY_RUN_USER:=vpn}"
+    : "${PROXY_ALLOW_PRIVATE_NETWORKS:=false}"
     
     # Directories and file paths
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"

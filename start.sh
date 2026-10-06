@@ -235,8 +235,12 @@ start_privoxy() {
 
     configure_privoxy_auth
 
+    # S3/S7 : Privoxy analyse du contenu web non fiable - ne pas le laisser
+    # en root. Il abandonne ses privileges apres le bind du port. L'UID sert
+    # aussi au filtre iptables PROXY_EGRESS (setup_proxy_egress_filter).
     /usr/sbin/privoxy \
         --no-daemon \
+        --user "${PROXY_RUN_USER:-vpn}" \
         "$PRIVOXY_CONF" &
 
     SERVICE_PIDS["privoxy"]=$!
