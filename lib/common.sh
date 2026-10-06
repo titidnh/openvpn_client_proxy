@@ -163,6 +163,29 @@ validate_environment() {
     return 0
 }
 
+# S2 : refuse d'exposer un proxy SANS authentification hors du reseau Docker.
+# Retourne 1 si ALLOW_EXTERNAL_PROXY_ACCESS=true sans PROXY_USER/PROXY_PASS,
+# sauf derogation explicite ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true.
+# Usage: check_proxy_exposure
+check_proxy_exposure() {
+    [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ] || return 0
+
+    if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
+        return 0
+    fi
+
+    if [ "${ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY:-false}" = "true" ]; then
+        log_json WARN "check_proxy_exposure" \
+            "OPEN PROXY: external access enabled WITHOUT authentication (ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true)"
+        return 0
+    fi
+
+    log_json ERROR "check_proxy_exposure" \
+        "ALLOW_EXTERNAL_PROXY_ACCESS=true requires PROXY_USER and PROXY_PASS - refusing to start an open proxy" \
+        "hint=set PROXY_USER/PROXY_PASS, or ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true to explicitly accept an open proxy"
+    return 1
+}
+
 # ===========================================================================
 # Logging JSON structurÃƒÂ© (compatible avec start.sh)
 # ===========================================================================
@@ -764,6 +787,7 @@ init_environment() {
     : "${DROP_CAPS:=false}"
     : "${PROXY_RUN_USER:=vpn}"
     : "${PROXY_ALLOW_PRIVATE_NETWORKS:=false}"
+    : "${ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY:=false}"
     
     # Directories and file paths
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"

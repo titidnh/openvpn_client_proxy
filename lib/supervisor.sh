@@ -41,6 +41,11 @@ supervise_all() {
 
     validate_environment || true
 
+    # S2 : jamais de proxy ouvert sans authentification.
+    if ! check_proxy_exposure; then
+        return 1
+    fi
+
     # Kill switch des la premiere seconde (H5) : sans cela le conteneur
     # tourne en ACCEPT par defaut pendant les phases blocklist/dnsmasq/unbound.
     # §4-6 : sans kill switch, le conteneur fuirait - arret explicite plutot
