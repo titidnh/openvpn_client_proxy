@@ -34,6 +34,8 @@ jobs:
 
       - name: Security regression tests
         run: bats tests/security_regression.bats
+      - name: Camouflage mode tests
+        run: bats tests/camouflage.bats
 
       # The older bats files contain known-broken tests (see SECURITY_REVIEW.md, Q1).
       # They run for visibility but do not block publishing until they are fixed.

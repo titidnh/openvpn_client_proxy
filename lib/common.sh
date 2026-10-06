@@ -506,6 +506,15 @@ get_vpn_port_proto() {
         tcp*) VPN_PROTO="tcp" ;;
         *) VPN_PROTO="$DEFAULT_VPN_PROTO" ;;
     esac
+
+    # Mode camouflage : le tunnel OpenVPN est encapsule en TLS par stunnel
+    # sur le port CAMOUFLAGE_PORT - c'est ce port/proto que le kill switch
+    # doit autoriser, pas le port/proto de la conf d origine.
+    if [ "${ENABLE_CAMOUFLAGE:-false}" = "true" ] &&
+       [ "${VPN_TYPE:-openvpn}" = "openvpn" ]; then
+        VPN_PROTO="tcp"
+        VPN_PORT="${CAMOUFLAGE_PORT:-443}"
+    fi
 }
 
 # Extrait les endpoints (remote) d'une configuration OpenVPN.
@@ -744,6 +753,12 @@ write_file() {
 # Initialise les variables d'environnement avec des valeurs par dÃƒÂ©faut
 # Usage: init_environment
 init_environment() {
+    # Mode camouflage (obfuscation TLS du tunnel via stunnel)
+    : "${ENABLE_CAMOUFLAGE:=false}"
+    : "${CAMOUFLAGE_PORT:=443}"
+    : "${CAMOUFLAGE_LOCAL_PORT:=1194}"
+    : "${CAMOUFLAGE_TLS_VERIFY:=true}"
+
     # VPN configuration
     : "${VPN_TYPE:=openvpn}"
     : "${OPENVPN_ENABLED:=true}"

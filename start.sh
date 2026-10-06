@@ -376,6 +376,12 @@ restart_vpn_service() {
 
     SERVICE_PIDS["vpn"]=0
 
+    # Mode camouflage : stunnel est demarre par openvpn.sh, l arreter ici
+    # evite qu une instance orpheline survive a la mort du tunnel OpenVPN.
+    if camouflage_enabled; then
+        stop_stunnel || true
+    fi
+
     cleanup_routes_on_restart
     start_vpn_service
 
@@ -714,6 +720,10 @@ cleanup() {
     fi
 
     rm -f "$VPN_HEALTHY_FILE"
+    # Mode camouflage : arreter stunnel avec le reste des services.
+    if camouflage_enabled; then
+        stop_stunnel || true
+    fi
 
     local service
 

@@ -56,6 +56,7 @@
 | 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor |
 | 📌 **DoT Cert Pinning** | Mount a custom CA bundle (`DOT_TLS_CERT_BUNDLE`) to restrict which TLS certificates are accepted for DoT connections |
 | 🌍 **DoH Support** | Use `https://` prefix in `DOT_DNS_SERVERS` to forward to a DNS-over-HTTPS upstream |
+| 🥸 **Camouflage Mode** | Optional (`ENABLE_CAMOUFLAGE=true`) — OpenVPN/TCP wrapped in a TLS session via stunnel on port 443, indistinguishable from plain HTTPS traffic (same as Surfshark's official Camouflage mode). Defeats DPI/anti-VPN detection. |
 | 🔀 **Split DNS** | Route specific domains to an internal resolver (`DNS_SPLIT="corp.local=10.0.0.53"`). Works in both plain and DoT modes. |
 | 🔄 **Dynamic DoT IP Refresh** | Periodically re-resolves DoT server hostnames and updates iptables rules atomically (zero connectivity interruption) |
 | 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint on `127.0.0.1:9100` with VPN status, restart count, DoT state, and uptime |
@@ -338,7 +339,11 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node — all Tailscale clients can route traffic through the VPN. |
 | `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
 | `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com,tls://dns.quad9.net` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
-| `HEALTHCHECK_IP` | `9.9.9.9` | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
+| `HEALTHCHECK_IP` | `9.9.9.9` |
+| `ENABLE_CAMOUFLAGE` | `false` | Set to `true` to enable Camouflage mode: the OpenVPN/TCP tunnel is wrapped in a TLS session via stunnel (`CAMOUFLAGE_PORT`, default 443), so the traffic is indistinguishable from HTTPS for an ISP/DPI/hotspot (same as Surfshark's Camouflage mode). OpenVPN only. Your VPN server must accept OpenVPN/TCP on `CAMOUFLAGE_PORT`. |
+| `CAMOUFLAGE_PORT` | `443` | Remote TCP port of the VPN servers used for the TLS-wrapped tunnel. Surfshark Camouflage uses 443. |
+| `CAMOUFLAGE_LOCAL_PORT` | `1194` | Local loopback port stunnel listens on for the inner OpenVPN connection (127.0.0.1 only). |
+| `CAMOUFLAGE_TLS_VERIFY` | `true` | Verify the VPN server's TLS certificate chain and hostname (SNI). Set to `false` only for testing with self-signed servers — the inner OpenVPN TLS layer still authenticates the server. | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
 | `ROUTE_TEST_IP` | `9.9.9.9` | IP used to test basic routing/connectivity from inside the container. |
 | `SKIP_HEALTHCHECK_FIRST_MINUTES` | `2` | Number of minutes to skip the healthcheck after container startup. Useful to avoid false failures during initialization. |
 | `TAILSCALE_RUN_DIR` | `/var/run/tailscale` | Directory where `tailscaled` creates its runtime socket (override if needed). |

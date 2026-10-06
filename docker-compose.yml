@@ -102,6 +102,17 @@ services:
       # Re-résolution périodique des remotes VPN (dette "IP figées")
       # 3600 = toutes les heures ; 0 = désactiver
       VPN_REMOTE_REFRESH_INTERVAL: "3600"
+      # =================================================================
+      # MODE CAMOUFLAGE (obfuscation TLS - comme le mode Camouflage
+      # de l'app Surfshark). Le tunnel OpenVPN est encapsule dans une
+      # session TLS via stunnel sur le port 443 : indifferenciable du
+      # HTTPS pour un FAI / DPI / hotspot. Necessite un serveur VPN
+      # qui accepte OpenVPN/TCP sur le port CAMOUFLAGE_PORT.
+      # =================================================================
+      ENABLE_CAMOUFLAGE: "false"
+      CAMOUFLAGE_PORT: "443"
+      CAMOUFLAGE_LOCAL_PORT: "1194"
+      CAMOUFLAGE_TLS_VERIFY: "true"
 
       # =================================================================
       # PROFIL: STRICT-FILTERING (DoT + DNS Blocklist)

@@ -279,8 +279,16 @@ firewall_early_lockdown() {
         done < <(get_wireguard_endpoint "${VPN_DIR}/wg0.conf")
     else
         local r_host r_port r_proto r_ip
+        # Mode camouflage : stunnel encapsule le tunnel en TLS vers le port
+        # CAMOUFLAGE_PORT - le pare-feu epingle donc les serveurs en
+        # tcp/CAMOUFLAGE_PORT, quel que soit le port/proto de la conf
+        # d origine (OpenVPN se connecte a stunnel en local sur lo).
         while read -r r_host r_port r_proto; do
             [ -n "${r_host:-}" ] || continue
+            if [ "${ENABLE_CAMOUFLAGE:-false}" = "true" ]; then
+                r_proto="tcp"
+                r_port="${CAMOUFLAGE_PORT:-443}"
+            fi
             if [[ "$r_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$r_host" =~ : ]]; then
                 VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_host|$r_port|$r_proto"
             else

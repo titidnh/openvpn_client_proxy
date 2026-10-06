@@ -15,6 +15,7 @@ set -euo pipefail
 
 # Charger les fonctions communes
 source "/usr/local/lib/common.sh"
+source "/usr/local/lib/camouflage.sh"
 
 # Initialiser l'environnement
 init_environment
@@ -111,6 +112,39 @@ if [ -n "${VPN_REMOTE_MAP:-}" ]; then
         conf="$resolved_conf"
     else
         log_json WARN "openvpn.sh" "resolved config generation failed - using original"
+    fi
+fi
+
+# ===========================================================================
+# Mode camouflage : encapsuler le tunnel OpenVPN dans une session TLS via
+# stunnel (comme le mode Camouflage de l app Surfshark). stunnel ecoute en
+# local et se connecte aux serveurs VPN epingles en tcp/CAMOUFLAGE_PORT.
+# ===========================================================================
+if [ "${ENABLE_CAMOUFLAGE:-false}" = "true" ]; then
+    if ! command_exists stunnel; then
+        log_json ERROR "openvpn.sh" \
+            "ENABLE_CAMOUFLAGE=true but stunnel is not installed"
+        exit 1
+    fi
+    if ! start_stunnel; then
+        log_json ERROR "openvpn.sh" "camouflage: stunnel failed to start"
+        exit 1
+    fi
+    umask 077
+    camo_conf="$(mktemp /dev/shm/vpn.camouflage.XXXXXX 2>/dev/null \
+        || mktemp /run/vpn.camouflage.XXXXXX 2>/dev/null \
+        || mktemp /tmp/vpn.camouflage.XXXXXX)"
+    if build_camouflaged_openvpn_conf "$conf" "$camo_conf"; then
+        conf="$camo_conf"
+        log_json INFO "openvpn.sh" \
+            "camouflage mode active - OpenVPN wrapped in TLS via stunnel" \
+            "remote_port=${CAMOUFLAGE_PORT:-443}"
+    else
+        log_json ERROR "openvpn.sh" \
+            "camouflage: failed to build the camouflaged config"
+        rm -f "$camo_conf"
+        stop_stunnel
+        exit 1
     fi
 fi
 

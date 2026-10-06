@@ -127,6 +127,7 @@ RUN apk add --no-cache \
       iproute2 \
       netcat-openbsd \
       tinyproxy \
+      stunnel \
       openvpn \
       privoxy \
       tini \
@@ -174,6 +175,7 @@ COPY --chmod=0755 start.sh        /start.sh
 
 # Copier les bibliothèques de fonctions
 COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
+COPY --chmod=0755 lib/camouflage.sh    /usr/local/lib/camouflage.sh
 COPY --chmod=0755 lib/dns_blocklist.sh /usr/local/lib/dns_blocklist.sh
 COPY --chmod=0755 lib/firewall.sh     /usr/local/lib/firewall.sh
 COPY --chmod=0755 lib/dot.sh          /usr/local/lib/dot.sh
