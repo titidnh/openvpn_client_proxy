@@ -353,3 +353,29 @@ teardown() {
     # Verify command_exists is available
     declare -f command_exists >/dev/null
 }
+
+# ============================================================================
+# Test Group 8: parse_dot_servers - repli sur le cache
+# ============================================================================
+# Regression (round11 fix) : en mode DoT le port 53 externe est bloque apres
+# le verrouillage ; lors d un redemarrage du superviseur la re-resolution
+# echoue et DoT restait mort ("no valid DoT servers parsed"). Repli sur les
+# IPs deja validees du cache persistant.
+
+@test "parse_dot_servers falls back to cached IPs when resolution is blocked" {
+    local cached_ip="94.140.14.14"
+    declare -gA DOT_HOST_IP_MAP
+    export DOT_DNS_SERVERS="tls://dns.adguard-dns.com"
+    echo "dns.adguard-dns.com=${cached_ip}" > "$DOT_IP_MAP_FILE"
+    : > "$DOT_FORWARD_ADDRS_FILE"
+
+    iptables() { return 0; }
+    # Port 53 externe bloque : resolution impossible
+    resolve_hostname_all() { return 1; }
+
+    parse_dot_servers 2>/dev/null
+
+    [ -s "$DOT_FORWARD_ADDRS_FILE" ]
+    grep -q "forward-addr: ${cached_ip}@853#dns.adguard-dns.com" \
+        "$DOT_FORWARD_ADDRS_FILE"
+}

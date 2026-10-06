@@ -193,15 +193,34 @@ parse_dot_servers() {
                     "host=${host}" \
                     "attempt=${attempt}/${max_attempts}" \
                     "wait=${backoff}s"
-                
+
                 sleep "$backoff"
                 backoff=$((backoff * 2))
-                
+
                 if [ "$backoff" -gt 10 ]; then
                     backoff=10
                 fi
             fi
         done
+
+        # Repli fail-safe sur le cache persistant : apres le verrouillage
+        # final le port 53 externe est bloque (mode DoT), la re-resolution
+        # directe est donc impossible lors d un redemarrage du superviseur.
+        # Ces IPs ont ete validees au bootstrap ; unbound verifie de toute
+        # facon le certificat TLS contre le hostname du forward-addr (#host).
+        # Sans ce repli, tout redemarrage de la boucle superviseur laissait
+        # DoT mort ("no valid DoT servers parsed") en boucle infinie.
+        if [ -z "$ips" ]; then
+            ips=$(grep "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null |
+                cut -d= -f2- || true)
+
+            if [ -n "$ips" ]; then
+                log_json WARN "parse_dot_servers" \
+                    "resolve failed - using cached DoT IPs" \
+                    "host=${host}" \
+                    "ip_count=$(printf '%s\n' "$ips" | wc -l)"
+            fi
+        fi
 
         if [ -n "$ips" ]; then
             local first_ip=1

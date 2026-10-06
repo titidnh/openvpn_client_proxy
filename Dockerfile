@@ -108,11 +108,12 @@ RUN addgroup -S vpn && adduser -S -G vpn -H -s /sbin/nologin vpn
 #   - busybox (inclus dans Alpine base) fournit nslookup → pas besoin de dnsutils
 #   - tini est dans le repo principal d'Alpine
 #   - ip6tables est regroupé avec iptables sur Alpine
-#   - nginx + apache2-utils pour l'authentification proxy optionnelle
+#   - tinyproxy pour l'authentification proxy optionnelle (CONNECT + 407 natifs)
 #   - socat pour le serveur de métriques (meilleur que nc pour le fallback)
 # ---------------------------------------------------------------------------
 RUN apk add --no-cache \
       bash \
+      bind-tools \
       ca-certificates \
       curl \
       dnsmasq \
@@ -120,8 +121,7 @@ RUN apk add --no-cache \
       ip6tables \
       iproute2 \
       netcat-openbsd \
-      nginx \
-      apache2-utils \
+      tinyproxy \
       openvpn \
       privoxy \
       tini \
@@ -160,8 +160,9 @@ COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
 COPY --chmod=0755 lib/dns_blocklist.sh /usr/local/lib/dns_blocklist.sh
 COPY --chmod=0755 lib/firewall.sh     /usr/local/lib/firewall.sh
 COPY --chmod=0755 lib/dot.sh          /usr/local/lib/dot.sh
-COPY --chmod=0755 lib/supervisor.sh   /usr/local/lib/supervisor.sh
 COPY --chmod=0755 lib/dns_runtime.sh  /usr/local/lib/dns_runtime.sh
+COPY --chmod=0755 lib/wireguard.sh    /usr/local/lib/wireguard.sh
+COPY --chmod=0755 lib/supervisor.sh   /usr/local/lib/supervisor.sh
 
 # Supprimer les retours chariot (pour compatibilité Windows CRLF → LF)
 RUN find /usr/local/bin /usr/local/lib /start.sh -type f \( -name '*.sh' -o -name 'start.sh' \) -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
@@ -176,7 +177,7 @@ COPY --chown=vpn:vpn \
 # ---------------------------------------------------------------------------
 VOLUME ["/vpn", "/var/lib/tailscale"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=20s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
 
 # ---------------------------------------------------------------------------

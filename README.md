@@ -47,7 +47,7 @@
 | 🛡️ **DNS Leak Protection** | All DNS queries are forced through local `dnsmasq` — no external resolver bypass possible |
 | 🔁 **Auto-Reconnect** | Built-in supervisor with exponential backoff (5s → 60s cap) restarts services on failure |
 | 🌐 **HTTP Proxy** | Privoxy on port `PROXY_PORT` (default: `3128`) — usable by any app or container that supports HTTP proxies |
-| 🔑 **Optional Proxy Auth** | Set `PROXY_USER` + `PROXY_PASS` to require HTTP Basic Auth on the proxy (nginx fronts Privoxy) |
+| 🔑 **Optional Proxy Auth** | Set `PROXY_USER` + `PROXY_PASS` to require HTTP Basic Auth on the proxy (tinyproxy fronts Privoxy) |
 | 🧹 **Ad/Content Filtering** | DNS-level filtering via upstream resolver — configurable with `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
@@ -327,9 +327,9 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
 | `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Family — blocks ads and adult content). |
-| `PROXY_PORT` | `3128` | TCP port for the HTTP proxy. **Without auth:** Privoxy listens on `0.0.0.0:PROXY_PORT`. **With auth:** Privoxy listens internally on `127.0.0.1:PROXY_PORT+1` and nginx fronts on `0.0.0.0:PROXY_PORT`. Example: `PROXY_PORT=8080` → nginx `0.0.0.0:8080` → Privoxy `127.0.0.1:8081`. |
+| `PROXY_PORT` | `3128` | TCP port for the HTTP proxy. **Without auth:** Privoxy listens on `0.0.0.0:PROXY_PORT`. **With auth:** Privoxy listens internally on `127.0.0.1:PROXY_PORT+1` and tinyproxy fronts on `0.0.0.0:PROXY_PORT`. Example: `PROXY_PORT=8080` → tinyproxy `0.0.0.0:8080` → Privoxy `127.0.0.1:8081`. |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
-| `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth. Uses bcrypt hashing via `htpasswd`. |
+| `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth (tinyproxy `BasicAuth`). **Only `[A-Za-z0-9._-]` characters are accepted** — tinyproxy rejects passwords containing spaces or special characters like `! @ $ : / , ;` (the container fails fast with an explicit error). For arbitrary passwords, front the proxy with Squid/3proxy instead. |
 | `ENABLE_TAILSCALE` | `false` | Set to `true` to start `tailscaled` at container startup. |
 | `TAILSCALE_AUTHKEY` | *(empty)* | Pre-auth key for non-interactive `tailscale up`. |
 | `TAILSCALE_FLAGS` | *(empty)* | Extra flags appended verbatim to `tailscale up`. |
@@ -344,9 +344,11 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `TAILSCALE_RUN_DIR` | `/var/run/tailscale` | Directory where `tailscaled` creates its runtime socket (override if needed). |
 | `PROXY_TEST_HOST` | `connectivitycheck.gstatic.com` | Hostname used by the healthcheck to verify local DNS resolution. |
 | `PROXY_TEST_URL` | `http://connectivitycheck.gstatic.com/generate_204` | URL used by the healthcheck to verify HTTP proxy connectivity. |
+| `COLLECT_REAL_IP` | `false` | Capture the host's real public IP at startup (via `https://1.1.1.1/cdn-cgi/trace`) to enable leak detection (`public IP via tunnel == real IP` → error). **Disabled by default**: the request reveals your real IP to a third party at every container start. |
 | `ENABLE_DNSSEC` | `false` | Set to `true` to enable strict DNSSEC validation in unbound. Initialises the root trust anchor via `unbound-anchor`. Leave `false` for zones that are not DNSSEC-signed. |
 | `DOT_TLS_CERT_BUNDLE` | *(system CA)* | Path to a PEM bundle for TLS certificate verification of DoT servers. Defaults to Alpine's system bundle. Mount a restricted bundle for certificate pinning (e.g. `-v ./my-ca.pem:/vpn/dot-ca.pem:ro` then `DOT_TLS_CERT_BUNDLE=/vpn/dot-ca.pem`). |
 | `DOT_IP_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of DoT server hostnames. If an IP changes, iptables rules are updated atomically. Set to `0` to disable. |
+| `VPN_REMOTE_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of VPN remote hostnames (kill switch pins the IPs at startup). If an IP changes, iptables rules and the pinned remote map are updated atomically; a healthy tunnel is NOT restarted - the new IPs are pinned by OpenVPN on the next VPN (re)start. Set to `0` to disable. |
 | `ENABLE_DNS_BLOCKLIST` | `false` | Set to `true` to enable optional DNS blocklist support. Downloads, compiles, and periodically refreshes blocklists from `DNS_BLOCKLIST_URLS`. |
 | `DNS_BLOCKLIST_URLS` | *(empty)* | Space or comma-separated list of blocklist URLs (supports `hosts`, `adblock`, and raw newline-delimited formats). Example: `https://raw.githubusercontent.com/.../hosts.txt https://adaway.org/hosts.txt`. Used only when `ENABLE_DNS_BLOCKLIST=true`. |
 | `DNS_BLOCKLIST_REFRESH_INTERVAL` | `86400` | Seconds between automatic blocklist refresh cycles (default: 24 hours). Set to `0` to disable periodic refresh. |
@@ -400,7 +402,7 @@ By default, DNS queries are forwarded in plaintext to `DNS_SERVER_1` / `DNS_SERV
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Docker Container                          │
 │                                                                  │
-│  App → dnsmasq :53 → unbound :5053 ──TLS:853──→ DoT Server      │
+│  App → dnsmasq :53 → unbound :5053 ──TLS:853──→ DoT Server       │
 │                                        (via VPN tunnel tun0)     │
 │                                                                  │
 │  iptables: UDP/TCP 53 external → DROP  (DNS leak kill switch)    │
@@ -538,9 +540,9 @@ DNS-level blocklisting adds an extra layer of protection by sinkhole-blocking kn
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Docker Container                          │
 │                                                                  │
-│  App → dnsmasq → Blocklist rules (hosts/adblock/raw) → response │
+│  App → dnsmasq → Blocklist rules (hosts/adblock/raw) → response  │
 │        │                                                         │
-│        └─ If DoT enabled → unbound :5053 ──TLS:853──→ DoT srv   │
+│        └─ If DoT enabled → unbound :5053 ──TLS:853──→ DoT srv    │
 │                                                                  │
 │  iptables: DNS blocklist + VPN tunnel enforcement + leaks block  │
 └──────────────────────────────────────────────────────────────────┘
@@ -795,22 +797,22 @@ By default, Privoxy listens on `0.0.0.0:PROXY_PORT` (default: `3128`) with **no 
 When you set both `PROXY_USER` and `PROXY_PASS`, the container automatically activates **HTTP Basic Authentication**:
 
 ```
-Client → nginx :PROXY_PORT (Basic Auth check) → Privoxy 127.0.0.1:PROXY_PORT+1 → VPN tunnel
+Client → tinyproxy :PROXY_PORT (Basic Auth check, 407 + CONNECT natifs) → Privoxy 127.0.0.1:PROXY_PORT+1 → VPN tunnel
 ```
 
 **Example with PROXY_PORT=3128 (default):**
 ```
-Client → nginx :3128 (Basic Auth) → Privoxy 127.0.0.1:3129 → VPN tunnel
+Client → tinyproxy :3128 (Basic Auth) → Privoxy 127.0.0.1:3129 → VPN tunnel
 ```
 
 **Example with PROXY_PORT=8080:**
 ```
-Client → nginx :8080 (Basic Auth) → Privoxy 127.0.0.1:8081 → VPN tunnel
+Client → tinyproxy :8080 (Basic Auth) → Privoxy 127.0.0.1:8081 → VPN tunnel
 ```
 
-- **nginx** acts as an authenticating reverse proxy on port `PROXY_PORT` (the only publicly exposed port)
+- **tinyproxy** acts as an authenticating forward proxy on port `PROXY_PORT` (the only publicly exposed port)
 - **Privoxy** is moved to `127.0.0.1:PROXY_PORT+1` — unreachable from outside the container
-- Passwords are hashed with **bcrypt** via `htpasswd` at container startup
+- Credentials (`PROXY_USER`/`PROXY_PASS`) are stored **in clear text** in a `0600` tinyproxy config file generated at container startup (tinyproxy `BasicAuth` does not support hashing)
 - The `Authorization` header is stripped before forwarding to Privoxy
 
 ### Enabling authentication
@@ -869,9 +871,9 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 | Condition | Action |
 |---|---|
 | OpenVPN process died | Kills and restarts OpenVPN only. Waits up to 5s for routing. If restored → continue normally. If not → full restart. |
-| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + nginx + OpenVPN + Tailscale) |
+| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + tinyproxy + OpenVPN + Tailscale) |
 | Privoxy not listening on its port | Full service restart |
-| nginx auth proxy died or not listening (if enabled) | Full service restart |
+| tinyproxy auth proxy died or not listening (if enabled) | Full service restart |
 | dnsmasq process died | Full service restart |
 | DNS resolution via `127.0.0.1` fails | Full service restart |
 | Tailscale process died (if enabled) | Full service restart |
@@ -1002,7 +1004,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 192M   # nginx frontal requires a bit more memory
+          memory: 192M   # tinyproxy frontal requires a bit more memory
     cap_add:
       - NET_ADMIN
     devices:
@@ -1156,7 +1158,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M   # Tailscale + nginx require extra memory
+          memory: 256M   # Tailscale + tinyproxy require extra memory
     cap_add:
       - NET_ADMIN
     devices:
@@ -1433,11 +1435,11 @@ Auth is enabled but credentials are missing from the proxy URL. Add `user:pass@`
 curl --proxy http://alice:s3cr3t!@127.0.0.1:3128 https://api.ipify.org
 ```
 
-Verify nginx started correctly:
+Verify the auth proxy started correctly:
 
 ```sh
-docker logs vpn_proxy | grep nginx
-docker exec vpn_proxy nginx -t -c /etc/nginx/nginx_proxy_auth.conf
+docker logs vpn_proxy | grep tinyproxy
+docker exec vpn_proxy ps w | grep tinyproxy
 ```
 
 ### `tun: Operation not permitted`
@@ -1681,7 +1683,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 | DoT certificate pinning | ✅ Implemented — `DOT_TLS_CERT_BUNDLE` |
 | DNS-over-HTTPS (DoH) | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
 | Drop capabilities | ✅ Implemented — `DROP_CAPS=true` |
-| Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (nginx TLS terminator + mounted certificate) |
+| Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (TLS terminator + mounted certificate) |
 | Read-only filesystem | 💡 `--read-only` flag with targeted tmpfs mounts to reduce attack surface |
 
 ### 🧰 Operational & Reliability
@@ -1710,7 +1712,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 |---|---|
 | SOCKS5 proxy | 💡 Expose a SOCKS5 proxy (`dante` or `microsocks`) in addition to HTTP — supports UDP and broader app compatibility |
 | Per-container proxy routing | 💡 Use Privoxy `forward` directives to split-tunnel specific domains at the proxy level |
-| Bandwidth / connection limits | 💡 nginx rate limiting to prevent a single client from saturating the VPN uplink |
+| Bandwidth / connection limits | rate limiting to prevent a single client from saturating the VPN uplink |
 
 ---
 

@@ -62,42 +62,21 @@ check_http_proxy() {
         return 1
     fi
     
-    # 2) Test réel via proxy avec une URL externe fiable (Google Connectivity Check)
-    # Cette URL retourne 204 No Content si accessible, idéal pour healthcheck
-    if timeout 5 curl -s -f \
+    # 2) Test reel via proxy avec PROXY_TEST_URL (204 attendu). Aucun
+    # fallback : Privoxy repond lui-meme 502/503 en page d'erreur quand le
+    # tunnel est mort, donc un grep sur "HTTP" validerait a tort (H1).
+    if timeout 8 curl -s -f \
         -x "http://127.0.0.1:${proxy_port}" \
         --connect-timeout 3 \
-        --max-time 5 \
+        --max-time 6 \
         -o /dev/null \
-        "http://connectivitycheck.gstatic.com/generate_204" 2>/dev/null; then
+        "$PROXY_TEST_URL" 2>/dev/null; then
         return 0
     fi
-    
-    # 3) Fallback #1: Essayer Cloudflare connectivity check
-    if timeout 5 curl -s -f \
-        -x "http://127.0.0.1:${proxy_port}" \
-        --connect-timeout 3 \
-        --max-time 5 \
-        -o /dev/null \
-        "http://one.one.one.one/cdn-cgi/trace" 2>/dev/null; then
-        return 0
-    fi
-    
-    # 4) Fallback #2: Si aucun test externe ne fonctionne, au minimum vérifier
-    # que le proxy répond à une requête HTTP simple
-    if timeout 3 curl -s -i \
-        -x "http://127.0.0.1:${proxy_port}" \
-        --connect-timeout 2 \
-        http://example.com/ 2>/dev/null | grep -q "HTTP"; then
-        return 0
-    fi
-    
-    # 5) Dernier recours: vérifier juste que le port répond
-    if nc -z -w 2 127.0.0.1 "$proxy_port" 2>/dev/null; then
-        log_json WARN "healthcheck" "proxy port open but external connectivity test failed - may be firewall/route issue"
-        return 0
-    fi
-    
+
+    log_json ERROR "healthcheck" \
+        "external connectivity via proxy failed" \
+        "url=$PROXY_TEST_URL"
     return 1
 }
 
@@ -110,31 +89,37 @@ main() {
     # where the supervisor loop might remove it while healthcheck is running.
     # Instead, we validate the system ourselves.
     
-    # 1) OpenVPN doit être vivant
-    if ! pidof openvpn >/dev/null 2>&1; then
-        log_json ERROR "healthcheck" "openvpn process not running"
-        rm -f /tmp/vpn_healthy
-        exit 1
-    fi
+    # 1) Le processus VPN doit être vivant (openvpn ou wireguard)
+    case "${VPN_TYPE:-openvpn}" in
+        wireguard)
+            if ! ip link show wg0 >/dev/null 2>&1; then
+                log_json ERROR "healthcheck" "wg0 interface not present"
+                exit 1
+            fi
+            ;;
+        *)
+            if ! pidof openvpn >/dev/null 2>&1; then
+                log_json ERROR "healthcheck" "openvpn process not running"
+                exit 1
+            fi
+            ;;
+    esac
 
     # 2) Le routage doit passer par tun/tap
     if ! check_openvpn_routing; then
-        log_json ERROR "healthcheck" "routing is not active on tun/tap"
-        rm -f /tmp/vpn_healthy
+        log_json ERROR "healthcheck" "routing is not active on tunnel interface"
         exit 1
     fi
 
     # 3) Le DNS local doit fonctionner pour resolver les sites de test
     if ! check_dns_local; then
         log_json ERROR "healthcheck" "local DNS resolution failed"
-        rm -f /tmp/vpn_healthy
         exit 1
     fi
 
     # 4) Le proxy doit pouvoir sortir vers un endpoint fiable
     if ! check_http_proxy; then
         log_json ERROR "healthcheck" "proxy connectivity test failed"
-        rm -f /tmp/vpn_healthy
         exit 1
     fi
 

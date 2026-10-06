@@ -97,6 +97,10 @@ services:
       ENABLE_TAILSCALE: "false"
       ENABLE_DNSSEC: "false"
 
+      # Re-résolution périodique des remotes VPN (dette "IP figées")
+      # 3600 = toutes les heures ; 0 = désactiver
+      VPN_REMOTE_REFRESH_INTERVAL: "3600"
+
       # =================================================================
       # PROFIL: STRICT-FILTERING (DoT + DNS Blocklist)
       # Décommentez les lignes ci-dessous et commentez le profil DEFAULT
@@ -118,7 +122,7 @@ services:
       
       # Authentification proxy HTTP Basic
       # PROXY_USER: "alice"
-      # PROXY_PASS: "s3cr3t!"
+      # PROXY_PASS: "Passw0rd"   # [A-Za-z0-9._-] uniquement (limite tinyproxy BasicAuth)
       
       # Sécurité renforcée
       # ENABLE_METRICS: "true"                 # Prometheus metrics

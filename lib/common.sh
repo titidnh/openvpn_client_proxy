@@ -17,7 +17,9 @@ if [ -n "${COMMON_SH_LOADED+x}" ]; then
 fi
 COMMON_SH_LOADED=true
 
-set -euo pipefail
+# NOTE: pas de "set -e" ici : common.sh est source par le superviseur
+# long-vivant, qui ne doit pas mourir sur l'echec d'une commande. Les
+# scripts one-shot (healthcheck.sh) activent eux-memes le mode strict.
 
 # ===========================================================================
 # Constantes globales
@@ -189,16 +191,20 @@ log_json() {
         extra="${extra}, \"${k}\": \"${v}\""
     done
 
+    local escaped_message
+    escaped_message="${message//\\/\\\\}"
+    escaped_message="${escaped_message//\"/\\\"}"
+    escaped_message="${escaped_message//$'\n'/\\n}"
+    escaped_message="${escaped_message//$'\t'/\\t}"
+
+    # stderr : stdout est parfois capte par l'appelant (build_tailscale_up_flags)
     printf '{"ts":"%s","level":"%s","component":"%s","msg":"%s"%s}\n' \
-        "$ts" "$level" "$component" "$message" "$extra"
+        "$ts" "$level" "$component" "$escaped_message" "$extra" >&2
 }
 
 # ===========================================================================
 # Fonctions rÃƒÂ©seau
 # ===========================================================================
-
-# Wrapper pour ip6tables qui ignore les erreurs si la commande n'existe pas
-ipt6() { ip6tables "$@" 2>/dev/null || true; }
 
 # Trouve l'interface VPN (tun ou tap) active
 # Retourne le nom de l'interface ou vide si non trouvÃƒÂ©e
@@ -289,6 +295,58 @@ resolve_hostname() {
 # RÃƒÂ©sout un nom d'hÃƒÂ´te en TOUTES les IPs (retourne une IP par ligne)
 # FIX STABILITÃƒâ€° #10 (suite): RÃƒÂ©sout TOUTES les IPs pour un hostname
 # Usage: resolve_hostname_all HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
+resolve_vpn_ips() {
+    local hostname="$1"
+    shift
+    local dns_servers=("$@")
+
+    if [ ${#dns_servers[@]} -eq 0 ]; then
+        dns_servers=("$DEFAULT_DNS_SERVER_1" "$DEFAULT_DNS_SERVER_2")
+    fi
+
+    local dns ips
+    if command -v dig >/dev/null 2>&1; then
+        # B1 : "dig host A AAAA" est invalide - seul le dernier type est
+        # pris en compte (seule l'IPv6 revenait). Deux requetes explicites
+        # par serveur. +time=2 +tries=1 : sinon ~4 s par serveur muet,
+        # plusieurs minutes pour un .ovpn a une dizaine de remotes.
+        for dns in "${dns_servers[@]}"; do
+            ips=$(dig +short +time=2 +tries=1 @"$dns" "$hostname" A "$hostname" AAAA 2>/dev/null |
+                grep -E '^[0-9a-fA-F.:]+$' || true)
+            if [ -n "$ips" ]; then
+                echo "$ips"
+                return 0
+            fi
+        done
+        return 1
+    fi
+
+    # Repli nslookup : seulement si dig est absent (3.1 - sinon on double
+    # l'attente sur un DNS muet). Gerer les formats busybox ("Address 1: ip
+    # host"), classic ("Addresses:  ip, ip") et ignorer le serveur lui-meme.
+    # busybox nslookup n'a pas -timeout= ; on borne avec timeout(1).
+    for dns in "${dns_servers[@]}"; do
+        ips=$(timeout 5 nslookup "$hostname" "$dns" 2>/dev/null |
+            awk -v srv="$dns" '
+                /^Name:/ { inans = 1 }
+                inans && /Address/ {
+                    for (i = 1; i <= NF; i++) {
+                        ip = $i
+                        sub(/^Addresses?:?/, "", ip)
+                        sub(/^[0-9]+:/, "", ip)
+                        sub(/,$/, "", ip)
+                        if (ip != srv && ip != "" && ip ~ /^[0-9a-fA-F.:]+$/ && ip !~ /#/) print ip
+                    }
+                }' || true)
+        if [ -n "$ips" ]; then
+            echo "$ips"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 resolve_hostname_all() {
     local hostname="$1"
     shift
@@ -329,22 +387,27 @@ resolve_hostname_all() {
 # Tue un processus s'il est en cours d'exÃƒÂ©cution
 # Usage: kill_if_running PID
 kill_if_running() {
-    local pid="$1"
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    local pid="${1:-}"
+    # Refuse vide, 0 et non numerique : "kill 0" tuerait tout le groupe
+    # de processus de l'appelant (superviseur) et arreterait le conteneur.
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
+    kill "$pid" 2>/dev/null || true
 }
 
 # VÃƒÂ©rifie si un processus est en cours d'exÃƒÂ©cution
 # Usage: is_process_running PID
 is_process_running() {
-    local pid="$1"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
 # Attend qu'un processus se termine
 # Usage: wait_for_process PID [TIMEOUT]
 wait_for_process() {
-    local pid="$1"
+    local pid="${1:-}"
     local timeout="${2:-60}"
+
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
     local elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
@@ -392,6 +455,125 @@ get_vpn_port_proto() {
         VPN_PROTO=$(awk '/^proto /{print $2; exit}' "$conf")
         VPN_PROTO=${VPN_PROTO:-$DEFAULT_VPN_PROTO}
     fi
+
+    # Normalisation pour iptables : udp4/tcp4/udp6/tcp6/tcp-client/-server
+    case "$VPN_PROTO" in
+        udp*) VPN_PROTO="udp" ;;
+        tcp*) VPN_PROTO="tcp" ;;
+        *) VPN_PROTO="$DEFAULT_VPN_PROTO" ;;
+    esac
+}
+
+# Extrait les endpoints (remote) d'une configuration OpenVPN.
+# Robuste (R3) : ignore les CR (fichiers .ovpn Windows), gere la directive
+# "port", un remote sans port explicite (port par defaut de la conf, sinon
+# 1194), et normalise le protocole (udp/tcp, suffixes 4/6/-client/-server).
+# Emets "ip port proto" par remote (port jamais vide).
+# Usage: parse_vpn_remotes [CONFIG_FILE]
+parse_vpn_remotes() {
+    local conf="${1:-$DEFAULT_VPN_CONF}"
+    [ -f "$conf" ] || return 0
+
+    # B5 : deux passes - la 1re memorise les valeurs par defaut (port/proto)
+    # quel que soit leur ordre par rapport aux remote. Les valeurs portees
+    # par la ligne remote elle-meme ont toujours priorite (norme OpenVPN).
+    # 3.3 : les blocs <connection> portent leurs propres port/proto -
+    # memoriser les valeurs PAR BLOC en 1re passe et les restituer en 2e,
+    # sinon le 1er bloc herite des valeurs du dernier (regle fausse ->
+    # remote bloque par le kill switch).
+    awk '
+        function emit(host, port, proto) {
+            if (port == "") port = "1194"
+            if (proto == "") proto = "udp"
+            # Normalisation : udp4/udp6/tcp4/tcp6/tcp-client/tcp-server -> udp/tcp
+            if (proto ~ /^udp/) proto = "udp"
+            else if (proto ~ /^tcp/) proto = "tcp"
+            else return
+            print host, port, proto
+        }
+        # v6-3.2 : BOM UTF-8 - sinon la 1re directive du fichier
+        # nest pas reconnue. Le sub est inconditionnel et sans effet
+        # sur les lignes suivantes.
+        { sub(/^\xef\xbb\xbf/, ""); sub(/\r$/, "") }
+        FNR == NR {
+            if ($1 == "<connection>") { inblock = 1; bport = ""; bproto = ""; brport = ""; blkstart = nblk + 1 }
+            if ($1 == "</connection>") {
+                for (i = blkstart; i <= nblk; i++) { blkport[i] = bport; blkproto[i] = bproto; blkrport[i] = brport }
+                inblock = 0
+            }
+            if ($1 == "port" && $2 != "") {
+                if (inblock) bport = $2; else dport = $2
+            }
+            # v6-3.1 : rport fixe le port DISTANT (prioritaire sur port)
+            if ($1 == "rport" && $2 != "") {
+                if (inblock) brport = $2; else drport = $2
+            }
+            if ($1 == "proto" && $2 != "") {
+                if (inblock) bproto = $2; else dproto = $2
+            }
+            if ($1 == "remote" && inblock) { nblk++ }
+            next
+        }
+        $1 == "<connection>" { inblock2 = 1; next }
+        $1 == "</connection>" { inblock2 = 0; next }
+        $1 == "remote" {
+            host = $2
+            if (inblock2) {
+                # v5-3.2 : une option absente du bloc herite de la valeur
+                # globale (norme OpenVPN) - sinon proto tcp global + bloc
+                # sans proto donnait udp (regle fausse, VPN bloque).
+                k = ++blkseen
+                proto = blkproto[k]
+                if (proto == "") proto = dproto
+                # v7 : resolution du port PAR PORTEE, la plus locale lemporte
+                # (rport = port distant explicite, prioritaire sur port dans
+                # la meme portee). v6 applait rport global en fin de calcul
+                # et ecrasait le port propre au bloc.
+                if (blkrport[k] != "") port = blkrport[k]
+                else if (blkport[k] != "") port = blkport[k]
+                else if (drport != "") port = drport
+                else port = dport
+            } else {
+                proto = dproto
+                if (drport != "") port = drport
+                else port = dport
+            }
+            # Un port explicite sur la ligne remote reste au-dessus de tout
+            # (norme OpenVPN).
+            if ($3 ~ /^[0-9]+$/) {
+                port = $3
+                if ($4 != "") proto = $4
+            } else if ($3 != "") {
+                proto = $3
+            }
+            emit(host, port, proto)
+        }' "$conf" "$conf"
+}
+
+# Extrait le port et protocole de l'Endpoint WireGuard (wg0.conf)
+# Usage: get_wireguard_endpoint [CONFIG_FILE]
+get_wireguard_endpoint() {
+    local conf="${1:-${VPN_DIR}/wg0.conf}"
+    [ -f "$conf" ] || return 1
+
+    awk -F'=' '
+        /^[[:space:]]*Endpoint[[:space:]]*=/ {
+            ep = $2
+            gsub(/[[:space:]]/, "", ep)
+            # B4/§4-4 : "host:port" pour IPv4/hostname, "[v6]:port" pour IPv6.
+            # L ancien split(:) cassait sur les adresses IPv6.
+            if (ep ~ /^\[/) {
+                match(ep, /^\[[^]]*\]/)
+                host = substr(ep, 2, RLENGTH - 2)
+                port = substr(ep, RLENGTH + 2)
+            } else {
+                n = split(ep, a, ":")
+                host = a[1]
+                port = (n > 1) ? a[n] : ""
+            }
+            print host, port
+            exit
+        }' "$conf"
 }
 
 # ===========================================================================
