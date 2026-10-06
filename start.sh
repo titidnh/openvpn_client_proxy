@@ -176,6 +176,10 @@ configure_privoxy_auth() {
     # Restaurer le proprietaire attendu par le demon.
     chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
     chmod 640 "$PRIVOXY_CONF" 2>/dev/null || true
+    log_json DEBUG "configure_privoxy_auth" \
+        "privoxy config ownership" \
+        "file=${PRIVOXY_CONF}" "owner=$(stat -c '%U:%G' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')"
 }
 
 start_privoxy() {
