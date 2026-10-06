@@ -39,7 +39,18 @@ supervise_all() {
     local FW_FAIL_MAX=5
     local FW_FAIL_COUNT=0
 
-    validate_environment || true
+    # S10 : une configuration invalide n'est plus ignoree - les valeurs
+    # finissent dans des expressions arithmetiques et des regles iptables.
+    if ! validate_environment; then
+        log_json ERROR "supervisor" \
+            "invalid configuration - refusing to start (see errors above)"
+        return 1
+    fi
+
+    # S2 : jamais de proxy ouvert sans authentification.
+    if ! check_proxy_exposure; then
+        return 1
+    fi
 
     # Kill switch des la premiere seconde (H5) : sans cela le conteneur
     # tourne en ACCEPT par defaut pendant les phases blocklist/dnsmasq/unbound.
@@ -50,6 +61,10 @@ supervise_all() {
             "early lockdown failed - aborting (no kill switch possible)"
         return 1
     fi
+
+    # Memorise la route par defaut physique avant tout VPN : permet de la
+    # restaurer si elle disparait (cleanup_routes_on_restart, analyse v10 par. 2).
+    snapshot_default_route
 
     # Memorise l'IP publique reelle (reference anti-fuite pour check_vpn_ip)
     capture_real_ip
@@ -67,6 +82,10 @@ supervise_all() {
         if [ "$attempt" -gt 1 ]; then
             METRIC_RESTART_COUNT=$((METRIC_RESTART_COUNT + 1))
             METRIC_LAST_RESTART_TS=$(date +%s)
+            # S1 : le kill switch final n'autorise le DNS que via le tunnel,
+            # or ce cycle relance dnsmasq/unbound AVANT le VPN. Le proxy est
+            # arrete a ce stade : re-ouvrir le DNS de bootstrap est sans fuite.
+            firewall_open_bootstrap_dns
         fi
 
         # Phase 0 : Blocklist DNS
@@ -76,18 +95,38 @@ supervise_all() {
             fi
         fi
 
-        # Phase 1 : DNS classique
-        start_dnsmasq_classic
-
-        if ! wait_for_dns_ready 30; then
-            log_json WARN "supervisor" "classic dns not ready - continuing"
-        else
-            sleep_wait 2
+        # Analyse v10 par. 3 : a partir de l iteration 2, si le cache d IPs
+        # DoT existe (validees au bootstrap), TOUTE la phase de resolution
+        # classique est inutile et bloquante sous le kill switch (le port 53
+        # externe est ferme). On charge DOT_RESOLVED_IPS depuis le cache et
+        # on va droit a unbound (~10 s au lieu de plusieurs minutes).
+        if [ "${ENABLE_DOT:-false}" = "true" ] && [ -s "$DOT_IP_MAP_FILE" ]; then
+            log_json INFO "supervisor" \
+                "cached DoT IPs found - skipping classic DNS bootstrap phases"
+            DOT_RESOLVED_IPS=$(awk -F= '{printf "%s ", $2}' "$DOT_IP_MAP_FILE" 2>/dev/null || true)
+            unset DOT_HOST_IP_MAP 2>/dev/null || true
+            declare -gA DOT_HOST_IP_MAP=()
+            local map_host map_ips
+            for map_host in $(awk -F= '{print $1}' "$DOT_IP_MAP_FILE" 2>/dev/null); do
+                map_ips=$(grep "^${map_host}=" "$DOT_IP_MAP_FILE" 2>/dev/null | cut -d= -f2- || true)
+                DOT_HOST_IP_MAP["$map_host"]="$map_ips"
+            done
         fi
 
-        # Phase 1.5 : Pre-load DoT IPs
-        if [ "${ENABLE_DOT:-false}" = "true" ]; then
-            preload_dot_ips
+        # Phase 1 : DNS classique (uniquement si pas de cache DoT exploitable)
+        if [ "${ENABLE_DOT:-false}" != "true" ] || [ ! -s "$DOT_IP_MAP_FILE" ]; then
+            start_dnsmasq_classic
+
+            if ! wait_for_dns_ready 30; then
+                log_json WARN "supervisor" "classic dns not ready - continuing"
+            else
+                sleep_wait 2
+            fi
+
+            # Phase 1.5 : Pre-load DoT IPs
+            if [ "${ENABLE_DOT:-false}" = "true" ]; then
+                preload_dot_ips
+            fi
         fi
 
         # Phase 2 : Unbound / DoT
@@ -179,8 +218,20 @@ supervise_all() {
             sleep_wait 30
             continue
         fi
+        # S5 : l'echec IPv6 est aussi bloquant (fail-closed).
+        if ! setup_ip6tables; then
+            FW_FAIL_COUNT=$((FW_FAIL_COUNT + 1))
+            log_json ERROR "supervisor" \
+                "setup_ip6tables failed - refusing to start services (fail-closed)" \
+                "consecutive_failures=${FW_FAIL_COUNT}/${FW_FAIL_MAX}"
+            stop_stack
+            if [ "$FW_FAIL_COUNT" -ge "$FW_FAIL_MAX" ]; then
+                return 1
+            fi
+            sleep_wait 30
+            continue
+        fi
         FW_FAIL_COUNT=0
-        setup_ip6tables
         setup_proxy_routing
 
         if ! start_privoxy; then

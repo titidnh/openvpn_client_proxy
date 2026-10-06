@@ -21,23 +21,28 @@
 # l'image finale et permet à BuildKit de mettre en cache la couche de téléchargement
 # indépendamment.
 # ===========================================================================
-FROM alpine:3.23 AS tailscale-dl
+FROM alpine:3.24 AS tailscale-dl
 
 ARG TARGETARCH
-# TAILSCALE_VERSION peut être figé à l'époque de la construction: --build-arg TAILSCALE_VERSION=1.80.3
-# Si laissé vide, la dernière version stable est récupérée automatiquement.
-# Pour 2026, utiliser une version récente comme 1.80.3 ou supérieur
-ARG TAILSCALE_VERSION=""
+# S6 : version FIGEE + empreinte SHA256 verifiee (les binaires tournent en
+# root avec NET_ADMIN). Pour mettre a jour : lire "TarballsVersion" sur
+# https://pkgs.tailscale.com/stable/?mode=json puis recopier le contenu de
+# https://pkgs.tailscale.com/stable/tailscale_<version>_<arch>.tgz.sha256
+ARG TAILSCALE_VERSION=1.102.5
+ARG TAILSCALE_SHA256_AMD64=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12
+ARG TAILSCALE_SHA256_ARM64=60d60109e33d097318c66adc1f1b4e78e528fa1c0357e8bfe82af99f21a18b89
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
- && if [ -n "${TAILSCALE_VERSION}" ]; then \
-      URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz"; \
-    else \
-      URL="https://pkgs.tailscale.com/stable/tailscale_latest_${ARCH}.tgz"; \
-    fi \
+ && case "${ARCH}" in \
+      amd64) SHA="${TAILSCALE_SHA256_AMD64}" ;; \
+      arm64) SHA="${TAILSCALE_SHA256_ARM64}" ;; \
+      *) echo "Unsupported TARGETARCH=${ARCH} - add its SHA256 build arg" >&2; exit 1 ;; \
+    esac \
+ && URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" \
  && echo "Downloading: ${URL}" \
  && curl -fsSL "${URL}" -o tailscale.tgz \
+ && echo "${SHA}  tailscale.tgz" | sha256sum -c - \
  && PREFIX=$(tar -tz -f tailscale.tgz | head -1 | cut -d/ -f1) \
  && echo "Tailscale version: ${PREFIX}" \
  && tar -xz -f tailscale.tgz "${PREFIX}/tailscale" "${PREFIX}/tailscaled" \
@@ -48,7 +53,7 @@ RUN apk add --no-cache curl tar \
 # ===========================================================================
 # Stage 2 - Image finale
 # ===========================================================================
-FROM alpine:3.23
+FROM alpine:3.24
 
 # ---------------------------------------------------------------------------
 # Métadonnées de l'image
@@ -127,7 +132,6 @@ RUN apk add --no-cache \
       tini \
       unbound \
       libcap \
-      python3 \
       socat \
       wireguard-tools \
       wireguard-go
@@ -135,6 +139,19 @@ RUN apk add --no-cache \
 # S'assurer que les répertoires runtime d'unbound existent et sont détenus par l'utilisateur unbound
 RUN mkdir -p /var/lib/unbound /etc/unbound \
  && chown -R unbound:unbound /var/lib/unbound /etc/unbound 2>/dev/null || true
+
+# D1/D2 : ancre racine DNSSEC. Le 11 octobre 2026 la zone racine n'est plus
+# signee que par KSK-2024 (key tag 38696) ; unbound-anchor d'une image Alpine
+# plus ancienne peut ne livrer que 20326. On genere root.key avec unbound-anchor
+# (qui embarque 20326) puis on garantit la presence de la nouvelle ancre
+# officielle 38696 si elle manque. RFC 5011 ajoutera les ancres futures
+# automatiquement tant que root.key reste inscriptible par l'utilisateur
+# unbound (chown au runtime, voir lib/dot.sh).
+RUN unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || true \
+ && grep -q 38696 /var/lib/unbound/root.key 2>/dev/null \
+    || sed -i '1i . IN DS 38696 8 2 683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16' /var/lib/unbound/root.key 2>/dev/null || true \
+ && chown unbound:unbound /var/lib/unbound/root.key \
+ && chmod 644 /var/lib/unbound/root.key
 
 # ---------------------------------------------------------------------------
 # Binaires Tailscale depuis le stage 1

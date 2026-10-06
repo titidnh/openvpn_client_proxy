@@ -64,8 +64,21 @@ ipt6_must() {
 # DoT (DNS over TLS) - Firewall port 853 rules
 # ===========================================================================
 
+# S1 : mode du pare-feu. 0 = bootstrap (tunnel absent, services proxy
+# arretes : DNS/DoT autorises vers l'exterieur pour resoudre les remotes et
+# demarrer unbound). 1 = kill switch final (pose par setup_iptables) : tout
+# le DNS/DoT doit passer par le tunnel.
+FW_TUNNEL_ONLY="${FW_TUNNEL_ONLY:-0}"
+
 ipt_add_853() {
     local ip="$1"
+    # S1 : apres setup_iptables, le trafic DoT passe deja par les regles
+    # "-o tun+/tap+/wg+ -j ACCEPT". Une regle 853 SANS interface laisserait
+    # unbound joindre le serveur DoT via eth0 (IP reelle) des que le tunnel
+    # tombe : ne rien ajouter dans ce mode.
+    if [ "${FW_TUNNEL_ONLY:-0}" = "1" ]; then
+        return 0
+    fi
     # Idempotent : verifier (-C) avant d'ajouter (-A), sinon chaque refresh
     # DoT empile des regles dupliquees (regression C3).
     if [[ "$ip" =~ : ]]; then
@@ -85,6 +98,99 @@ ipt_del_853() {
     else
         iptables -D OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT 2>/dev/null || true
     fi
+}
+
+# S1 : re-ouvre le DNS de bootstrap (53 vers DNS_SERVER_1/2, toutes
+# interfaces) au debut d'un cycle de redemarrage complet du superviseur.
+# Le kill switch final (setup_iptables) n'autorise le DNS que via le tunnel ;
+# or un cycle complet relance dnsmasq/unbound AVANT le VPN. A ce stade
+# Privoxy/tinyproxy sont arretes : aucune requete client ne peut fuir.
+# setup_iptables referme ces regles (flush) avant de relancer le proxy.
+# Usage: firewall_open_bootstrap_dns
+firewall_open_bootstrap_dns() {
+    FW_TUNNEL_ONLY=0
+
+    local dns p
+    for dns in "${DNS_SERVER_1:-}" "${DNS_SERVER_2:-}"; do
+        [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        for p in udp tcp; do
+            iptables -C OUTPUT -p "$p" -d "$dns" --dport 53 -j ACCEPT 2>/dev/null ||
+                iptables -A OUTPUT -p "$p" -d "$dns" --dport 53 -j ACCEPT
+        done
+    done
+
+    log_json INFO "firewall" \
+        "bootstrap DNS re-opened for restart cycle (proxy stopped)"
+}
+
+# S5 : vrai si le conteneur a une connectivite IPv6 reelle (adresse globale).
+# Usage: ipv6_in_use
+ipv6_in_use() {
+    [ -f /proc/net/if_inet6 ] || return 1
+    ip -6 addr show scope global 2>/dev/null | grep -q 'inet6'
+}
+
+# S5 : vrai si ip6tables est installe ET utilisable sur ce noyau.
+# Usage: ip6tables_usable
+ip6tables_usable() {
+    command -v ip6tables >/dev/null 2>&1 && ip6tables -L -n >/dev/null 2>&1
+}
+
+# S3 : le proxy (Privoxy, lance sous l'utilisateur PROXY_RUN_USER) ne doit
+# pas servir de pivot vers les reseaux prives : tailnet (100.64.0.0/10),
+# hote Docker, conteneurs voisins, services locaux (dnsmasq, unbound,
+# metriques). Seul le DNS local (127.0.0.1:53) reste autorise.
+# Desactivable avec PROXY_ALLOW_PRIVATE_NETWORKS=true.
+PROXY_PRIVATE_NETS_V4="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16"
+PROXY_PRIVATE_NETS_V6="::1/128 fc00::/7 fe80::/10"
+
+# Usage: setup_proxy_egress_filter   (a appeler APRES le flush de setup_iptables)
+setup_proxy_egress_filter() {
+    if [ "${PROXY_ALLOW_PRIVATE_NETWORKS:-false}" = "true" ]; then
+        log_json WARN "proxy_egress" \
+            "PROXY_ALLOW_PRIVATE_NETWORKS=true - proxy clients can reach private networks"
+        return 0
+    fi
+
+    local user="${PROXY_RUN_USER:-vpn}"
+    local net
+
+    iptables -N PROXY_EGRESS 2>/dev/null || iptables -F PROXY_EGRESS
+    iptables -A PROXY_EGRESS -d 127.0.0.1 -p udp --dport 53 -j RETURN
+    iptables -A PROXY_EGRESS -d 127.0.0.1 -p tcp --dport 53 -j RETURN
+    for net in $PROXY_PRIVATE_NETS_V4; do
+        iptables -A PROXY_EGRESS -d "$net" -j REJECT
+    done
+
+    # NEW uniquement : les reponses de Privoxy vers ses clients (reseau
+    # Docker) sont ESTABLISHED et ne doivent pas etre bloquees.
+    if ! iptables -I OUTPUT 1 -m owner --uid-owner "$user" \
+            -m conntrack --ctstate NEW -j PROXY_EGRESS; then
+        log_json ERROR "proxy_egress" \
+            "cannot install owner-match rule (xt_owner missing?)" \
+            "hint=set PROXY_ALLOW_PRIVATE_NETWORKS=true to start without this protection"
+        return 1
+    fi
+
+    log_json INFO "proxy_egress" \
+        "proxy egress to private networks blocked" "user=${user}"
+}
+
+# Usage: setup_proxy_egress_filter_v6   (a appeler APRES le flush de setup_ip6tables)
+setup_proxy_egress_filter_v6() {
+    [ "${PROXY_ALLOW_PRIVATE_NETWORKS:-false}" = "true" ] && return 0
+
+    local user="${PROXY_RUN_USER:-vpn}"
+    local net
+
+    ipt6 -N PROXY_EGRESS 2>/dev/null || ipt6 -F PROXY_EGRESS
+    ipt6 -A PROXY_EGRESS -d ::1 -p udp --dport 53 -j RETURN
+    ipt6 -A PROXY_EGRESS -d ::1 -p tcp --dport 53 -j RETURN
+    for net in $PROXY_PRIVATE_NETS_V6; do
+        ipt6 -A PROXY_EGRESS -d "$net" -j REJECT
+    done
+    ipt6 -I OUTPUT 1 -m owner --uid-owner "$user" \
+        -m conntrack --ctstate NEW -j PROXY_EGRESS
 }
 
 # ===========================================================================
@@ -203,23 +309,58 @@ firewall_early_lockdown() {
         [ -n "$map_ips" ] && remote_map="$remote_map $map_host=$map_ips"
     done
     [ -n "$remote_map" ] && export VPN_REMOTE_MAP="${remote_map# }"
+
     if [ -n "$VPN_REMOTE_IPS" ]; then
         log_json INFO "firewall_early_lockdown" \
             "VPN remotes resolved during bootstrap" \
             "endpoints=$(echo $VPN_REMOTE_IPS | wc -w)"
     else
-        log_json WARN "firewall_early_lockdown" \
-            "no VPN remote resolved during bootstrap"
+        # Diagnostic : distinguer "fichier absent/vide" de "resolution
+        # DNS muette" - sinon l utilisateur ne sait pas quoi corriger.
+        local diag_conf="${VPN_CONF:-$DEFAULT_VPN_CONF}"
+        local diag_hosts=""
+        local dh
+        while read -r dh; do
+            [ -n "${dh:-}" ] && diag_hosts="${diag_hosts} ${dh}"
+        done < <(parse_vpn_remotes "$diag_conf" 2>/dev/null | awk '{print $1}' | sort -u)
+        if [ ! -f "$diag_conf" ]; then
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - config file not found" \
+                "conf=${diag_conf}" \
+                "hint=mount your vpn.conf at /vpn/vpn.conf (compose: ./data:/vpn:ro)"
+        elif [ -z "$diag_hosts" ]; then
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - no remote directive found" \
+                "conf=${diag_conf}" \
+                "hint=the config has no remote/connection line, nothing to pin"
+        else
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - DNS resolution failed" \
+                "conf=${diag_conf}" "hostnames=${diag_hosts# }" \
+                "dns=${DNS_SERVER_1:-none},${DNS_SERVER_2:-none}" \
+                "hint=check upstream DNS reachability, or use a remote IP directly in the .ovpn"
+        fi
     fi
 
-    ipt6 -P INPUT DROP
-    ipt6 -P FORWARD DROP
-    ipt6 -P OUTPUT DROP
+    # S5 : IPv6 actif mais ip6tables inutilisable = tout le trafic IPv6
+    # contournerait le VPN avec l'IPv6 reelle. Echec explicite (fail-closed).
+    if ipv6_in_use && ! ip6tables_usable; then
+        log_json ERROR "firewall_early_lockdown" \
+            "IPv6 is active but ip6tables is unusable - refusing to start (IPv6 would bypass the VPN)" \
+            "hint=add sysctl net.ipv6.conf.all.disable_ipv6=1 or load the ip6_tables kernel module"
+        return 1
+    fi
+    ipt6_must -P INPUT DROP || return 1
+    ipt6_must -P FORWARD DROP || return 1
+    ipt6_must -P OUTPUT DROP || return 1
     ipt6 -A INPUT -i lo -j ACCEPT
     ipt6 -A OUTPUT -o lo -j ACCEPT
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    ipt6 -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    # Meme condition qu'en IPv4 : 443 sortant uniquement pour les blocklists.
+    if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ]; then
+        ipt6 -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    fi
 
     log_json INFO "firewall_early_lockdown" "Early lockdown active (bootstrap: DNS + tcp/443)"
 }
@@ -421,31 +562,18 @@ setup_iptables() {
     iptables -P FORWARD DROP
     iptables -P OUTPUT DROP
 
-    # DNS bootstrap : uniquement hors DoT. En mode DoT le port 53 externe
-    # doit rester strictement bloque (anti-fuite, H5) : dnsmasq forward en
-    # local vers unbound (5053).
-    if [ "${ENABLE_DOT:-false}" != "true" ]; then
-        local dns
-        for dns in "$DNS_SERVER_1" "$DNS_SERVER_2"; do
-            iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-        done
-    fi
+    # S1 : kill switch final. Plus AUCUNE regle DNS (53) ni DoT (853) sans
+    # interface : le DNS sort uniquement par le tunnel (regles -o tun+/tap+/
+    # wg+ plus bas). Si le tunnel tombe, le DNS echoue au lieu de fuir par
+    # eth0 avec l'IP reelle. Les remotes VPN sont deja epingles par IP, la
+    # reconnexion n'a pas besoin de DNS. ipt_add_853 devient un no-op.
+    FW_TUNNEL_ONLY=1
 
-    # Healthcheck (ping sonde) - pas de port 53 externe : en mode DoT le
-    # port 53 hors tunnel doit rester strictement bloque (H5).
-    if [ "${ENABLE_DOT:-false}" != "true" ]; then
-        iptables -A OUTPUT -p udp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
+    # S3 : interdire au proxy de joindre les reseaux prives (apres le flush).
+    if ! setup_proxy_egress_filter; then
+        FW_FAILED=1
+        return 1
     fi
-    # Sonde de sante limitee a l'interface physique (reduit la brèche
-    # residuelle vers un seul hote, toutes interfaces). Les sondes peuvent
-    # aussi passer par le tunnel une fois celui-ci monte.
-    local hc_iface
-    hc_iface=$(get_physical_iface)
-    hc_iface="${hc_iface:-eth0}"
-    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 80 -j ACCEPT
-    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 443 -j ACCEPT
 
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -515,51 +643,19 @@ setup_iptables() {
     iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5053 -j ACCEPT
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5053 -j ACCEPT
 
-    # DoT
+    # S1 : DNS upstream (mode classique) et DoT (853) passent uniquement par
+    # le tunnel via les regles "-o tun+/tap+/wg+ -j ACCEPT" ci-dessus. Aucune
+    # regle 53/853 par destination ici.
     if [ "${ENABLE_DOT:-false}" = "true" ]; then
-        if [ -n "$DOT_RESOLVED_IPS" ]; then
-            local dot_ip
-
-            for dot_ip in $DOT_RESOLVED_IPS; do
-                ipt_add_853 "$dot_ip"
-
-                log_json INFO "setup_iptables" \
-                    "DoT: allowing TCP 853" \
-                    "ip=${dot_ip}"
-            done
-        else
-            log_json WARN "setup_iptables" \
-                "DoT: no resolved IPs - TCP 853 not explicitly allowed"
-        fi
-
         # Kill switch DNS externe.
         iptables -A OUTPUT -p udp ! -d 127.0.0.0/8 --dport 53 -j DROP
         iptables -A OUTPUT -p tcp ! -d 127.0.0.0/8 --dport 53 -j DROP
 
         log_json INFO "setup_iptables" \
             "DoT DNS leak prevention: external port 53 blocked"
-    else
-        # Mode DNS classique.
-        local _dns
-
-        for _dns in "$DNS_SERVER_1" "$DNS_SERVER_2"; do
-            [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-
-            iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
-
-            log_json INFO "setup_iptables" \
-                "allowing port 53" \
-                "ip=${_dns}"
-        done
-
-        while read -r _dns; do
-            [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-
-            iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
-        done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
+    log_json INFO "setup_iptables" \
+        "DNS/DoT upstream allowed through the VPN tunnel only"
 
     # Retire la regle de bootstrap tcp/443 posee par firewall_early_lockdown
     # (les regles VPN ciblees et l'interface tun prennent le relais).
@@ -647,6 +743,14 @@ setup_iptables() {
 setup_ip6tables() {
     log_json INFO "setup_ip6tables" "Configuring IPv6 firewall"
 
+    # S5 : fail-closed (voir firewall_early_lockdown).
+    if ipv6_in_use && ! ip6tables_usable; then
+        log_json ERROR "setup_ip6tables" \
+            "IPv6 is active but ip6tables is unusable - refusing to continue (IPv6 would bypass the VPN)" \
+            "hint=add sysctl net.ipv6.conf.all.disable_ipv6=1 or load the ip6_tables kernel module"
+        return 1
+    fi
+
     if ! command_exists ip6tables; then
         log_json WARN "setup_ip6tables" \
             "ip6tables not installed, skipping"
@@ -673,9 +777,12 @@ setup_ip6tables() {
     ipt6 -X
     ipt6 -t nat -F
 
-    ipt6 -P INPUT DROP
-    ipt6 -P FORWARD DROP
-    ipt6 -P OUTPUT DROP
+    ipt6_must -P INPUT DROP || return 1
+    ipt6_must -P FORWARD DROP || return 1
+    ipt6_must -P OUTPUT DROP || return 1
+
+    # S3 : meme filtre de sortie du proxy qu'en IPv4.
+    setup_proxy_egress_filter_v6
 
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -p icmpv6 -j ACCEPT
@@ -738,14 +845,9 @@ setup_ip6tables() {
 
         log_json INFO "setup_ip6tables" \
             "DoT DNS leak prevention: IPv6 port 53 blocked"
-    else
-        while read -r dns; do
-            [[ "$dns" =~ : ]] || continue
-
-            ipt6 -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-            ipt6 -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-        done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
+    # S1 : pas de regle DNS upstream par destination - le DNS IPv6 passe
+    # uniquement par le tunnel (regles -o tun+/tap+/wg+ ci-dessus).
 
     # B4 : les regles IPv6 des remotes ont ete posees par setup_iptables
     # (boucle VPN_REMOTE_IPS) MAIS le "ipt6 -F" en tete de cette fonction
@@ -948,9 +1050,44 @@ cleanup_routes_on_restart() {
     timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
 
     # Tripwire : si la route physique par defaut a disparu (bug anterieur,
-    # manip manuelle), rien ne sortira plus du conteneur - le dire.
+    # manip manuelle), rien ne sortira plus du conteneur. Docker ne la pose
+    # qu a la creation du conteneur : la restaurer depuis la passerelle
+    # memorisee au demarrage (analyse v10, section 2 - "reste utile").
     if ! ip route show default 2>/dev/null | grep -q .; then
-        log_json ERROR "cleanup_routes_on_restart" \
-            "no default route left in container - external network unreachable"
+        local saved_gw saved_iface
+        saved_gw=$(cat /tmp/.default_gw 2>/dev/null || true)
+        saved_iface=$(cat /tmp/.default_iface 2>/dev/null || true)
+        if [ -n "$saved_gw" ] && [ -n "$saved_iface" ]; then
+            if ip route replace default via "$saved_gw" dev "$saved_iface" 2>/dev/null; then
+                log_json WARN "cleanup_routes_on_restart" \
+                    "default route was missing - restored from startup snapshot" \
+                    "gw=${saved_gw}" "iface=${saved_iface}"
+            else
+                log_json ERROR "cleanup_routes_on_restart" \
+                    "no default route left and restore failed - external network unreachable" \
+                    "gw=${saved_gw}" "iface=${saved_iface}"
+            fi
+        else
+            log_json ERROR "cleanup_routes_on_restart" \
+                "no default route left in container - external network unreachable" \
+                "hint=no startup gateway snapshot found (/tmp/.default_gw)"
+        fi
     fi
+}
+
+# Memorise la route par defaut physique (a appeler une fois au demarrage,
+# avant tout VPN) afin de pouvoir la restaurer si elle disparait.
+# Usage: snapshot_default_route
+snapshot_default_route() {
+    local gw iface
+    gw=$(ip route show 2>/dev/null | grep "^default" |
+        grep -v "tun\|tap\|wg" | awk '{print $3}' | head -1)
+    iface=$(ip route show 2>/dev/null | grep "^default" |
+        grep -v "tun\|tap\|wg" | awk '{print $5}' | head -1)
+    [ -n "$gw" ] && [ -n "$iface" ] || return 0
+    echo "$gw" > /tmp/.default_gw
+    echo "$iface" > /tmp/.default_iface
+    log_json DEBUG "firewall" \
+        "default route snapshot saved" \
+        "gw=${gw}" "iface=${iface}"
 }

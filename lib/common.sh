@@ -99,11 +99,15 @@ validate_ip() {
     local var_name="$1"
     local var_value="$2"
     
-    if [[ "$var_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        return 0
-    fi
-    
-    if [[ "$var_value" =~ ^[0-9a-fA-F:]+$ ]]; then
+    # S10 : IPv4 stricte (chaque octet <= 255) - l'ancienne regex acceptait
+    # 999.1.1.1 ; IPv6 : au moins deux ':' (l'ancienne acceptait "abc").
+    if [[ "$var_value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        local i octets_ok=1
+        for i in 1 2 3 4; do
+            [ "$((10#${BASH_REMATCH[$i]}))" -le 255 ] || octets_ok=0
+        done
+        [ "$octets_ok" -eq 1 ] && return 0
+    elif [[ "$var_value" == *:*:* ]] && [[ "$var_value" =~ ^[0-9a-fA-F:]+$ ]]; then
         return 0
     fi
     
@@ -137,6 +141,23 @@ validate_environment() {
     # Valider les ports
     validate_number "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
     validate_port "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
+    # PROXY_PORT+1 sert de port Privoxy interne quand l'auth est active.
+    if [[ "${PROXY_PORT:-3128}" =~ ^[0-9]+$ ]] && [ "${PROXY_PORT:-3128}" -ge 65535 ]; then
+        log_json WARN "validate_environment" \
+            "Invalid PROXY_PORT: must be <= 65534 (PROXY_PORT+1 is used internally)"
+        validation_failed=1
+    fi
+
+    # S10 : toute variable utilisee dans une expression arithmetique $(( ))
+    # doit etre un entier - sinon bash evalue son contenu (injection).
+    local num_var
+    for num_var in VPN_REMOTE_REFRESH_INTERVAL SKIP_HEALTHCHECK_FIRST_MINUTES \
+                   DOT_IP_REFRESH_INTERVAL DNS_BLOCKLIST_REFRESH_INTERVAL \
+                   DNS_BLOCKLIST_MIN_AGE; do
+        if [ -n "${!num_var:-}" ]; then
+            validate_number "$num_var" "${!num_var}" || validation_failed=1
+        fi
+    done
 
     # Valider les serveurs DNS
     if [ -n "${DNS_SERVER_1:-}" ]; then
@@ -161,6 +182,29 @@ validate_environment() {
     log_json INFO "validate_environment" \
         "All environment variables validated successfully"
     return 0
+}
+
+# S2 : refuse d'exposer un proxy SANS authentification hors du reseau Docker.
+# Retourne 1 si ALLOW_EXTERNAL_PROXY_ACCESS=true sans PROXY_USER/PROXY_PASS,
+# sauf derogation explicite ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true.
+# Usage: check_proxy_exposure
+check_proxy_exposure() {
+    [ "${ALLOW_EXTERNAL_PROXY_ACCESS:-false}" = "true" ] || return 0
+
+    if [ -n "${PROXY_USER:-}" ] && [ -n "${PROXY_PASS:-}" ]; then
+        return 0
+    fi
+
+    if [ "${ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY:-false}" = "true" ]; then
+        log_json WARN "check_proxy_exposure" \
+            "OPEN PROXY: external access enabled WITHOUT authentication (ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true)"
+        return 0
+    fi
+
+    log_json ERROR "check_proxy_exposure" \
+        "ALLOW_EXTERNAL_PROXY_ACCESS=true requires PROXY_USER and PROXY_PASS - refusing to start an open proxy" \
+        "hint=set PROXY_USER/PROXY_PASS, or ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY=true to explicitly accept an open proxy"
+    return 1
 }
 
 # ===========================================================================
@@ -361,7 +405,7 @@ resolve_hostname_all() {
     
     # Essayer avec dig d'abord - retourne TOUTES les IPs
     for dns in "${dns_servers[@]}"; do
-        ips=$(dig +short "$hostname" @"$dns" A 2>/dev/null | grep -E '^[0-9.]+$' || true)
+        ips=$(dig +short +time=2 +tries=1 "$hostname" @"$dns" A 2>/dev/null | grep -E '^[0-9.]+$' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
@@ -370,7 +414,7 @@ resolve_hostname_all() {
     
     # Essayer avec nslookup - retourne TOUTES les IPs
     for dns in "${dns_servers[@]}"; do
-        ips=$(nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) print $2 }' || true)
+        ips=$(timeout 4 nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) print $2 }' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
@@ -762,6 +806,9 @@ init_environment() {
     
     # Security
     : "${DROP_CAPS:=false}"
+    : "${PROXY_RUN_USER:=vpn}"
+    : "${PROXY_ALLOW_PRIVATE_NETWORKS:=false}"
+    : "${ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY:=false}"
     
     # Directories and file paths
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"

@@ -65,6 +65,11 @@ preload_dot_ips() {
 
         ips=""
         max_attempts=5
+        # cache valide au bootstrap -> inutile d'insister (kill switch actif:
+        # le port 53 externe est ferme, chaque tentative coute 15-60 s)
+        if grep -q "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null; then
+            max_attempts=1
+        fi
         backoff=1
         
         for attempt in $(seq 1 "$max_attempts"); do
@@ -83,6 +88,16 @@ preload_dot_ips() {
                 [ "$backoff" -gt 10 ] && backoff=10
             fi
         done
+
+        if [ -z "$ips" ]; then
+            ips=$(grep "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null |
+                cut -d= -f2- || true)
+            if [ -n "$ips" ]; then
+                log_json WARN "preload_dot_ips" \
+                    "resolve failed - using cached DoT IPs" \
+                    "host=${host}"
+            fi
+        fi
 
         if [ -n "$ips" ]; then
             local first_ip=1
@@ -168,6 +183,11 @@ parse_dot_servers() {
 
         ips=""
         max_attempts=5
+        # cache valide au bootstrap -> inutile d'insister (kill switch actif:
+        # le port 53 externe est ferme, chaque tentative coute 15-60 s)
+        if grep -q "^${host}=" "$DOT_IP_MAP_FILE" 2>/dev/null; then
+            max_attempts=1
+        fi
         backoff=1
         
         for attempt in $(seq 1 "$max_attempts"); do
@@ -314,6 +334,23 @@ configure_unbound() {
         unbound-anchor \
             -a /var/lib/unbound/root.key \
             2>/dev/null || true
+        # D1 : apres le 11 octobre 2026 la zone racine n'est plus signee que
+        # par KSK-2024 (key tag 38696). Un unbound-anchor ancien (image Alpine
+        # non mise a jour) ne livre que 20326 : garantir la presence de la
+        # nouvelle ancre a CHAQUE demarrage, pas seulement au build, pour que
+        # la validation DNSSEC ne tombe pas en echec total a la bascule.
+        if [ -f /var/lib/unbound/root.key ] &&
+           ! grep -q 38696 /var/lib/unbound/root.key 2>/dev/null; then
+            sed -i '1i . IN DS 38696 8 2 683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16' \
+                /var/lib/unbound/root.key 2>/dev/null || true
+            log_json WARN "configure_unbound" \
+                "KSK-2024 (38696) was missing from root.key - added automatically"
+        fi
+        # D2 : le chown doit venir APRES unbound-anchor, sinon root.key est
+        # cree root:root et unbound (user unbound) ne peut pas le mettre a
+        # jour (RFC 5011 - bascule KSK racine du 11 octobre 2026).
+        chown unbound:unbound /var/lib/unbound/root.key 2>/dev/null || true
+        chmod 644 /var/lib/unbound/root.key 2>/dev/null || true
 
         log_json INFO "configure_unbound" \
             "DNSSEC strict validation enabled"
@@ -389,8 +426,11 @@ server:
     harden-glue: yes
     harden-dnssec-stripped: yes
     harden-below-nxdomain: yes
-    harden-referral-path: yes
-    use-caps-for-id: yes
+    # D5 : retirer en mode forward (forward-tls-upstream) : ces options
+    # servent a la recursion locale et ajoutent des echecs sans benefice
+    # derriere un forwarder (round 15, analyse v10, section D5).
+    harden-referral-path: no
+    use-caps-for-id: no
     unwanted-reply-threshold: 10000000
 
     cache-min-ttl: 60
@@ -524,7 +564,10 @@ start_unbound() {
 
     [ "${ENABLE_DOT:-false}" = "true" ] || return 0
 
-    if ! wait_for_dns_ready 30; then
+    if [ -s "$DOT_IP_MAP_FILE" ]; then
+        log_json INFO "start_unbound" \
+            "cached DoT IPs available - not waiting for classic DNS"
+    elif ! wait_for_dns_ready 30; then
         log_json WARN "start_unbound" \
             "classic DNS not ready - delaying unbound"
         return 0

@@ -4,10 +4,46 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
+  pull_request:
   workflow_dispatch:
 
+# Least privilege for the GITHUB_TOKEN (Docker Hub uses its own secrets).
+permissions:
+  contents: read
+
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck and bats
+        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+
+      - name: Bash syntax check
+        run: |
+          for f in $(git ls-files '*.sh'); do
+            bash -n "$f"
+          done
+
+      - name: ShellCheck (errors only)
+        run: shellcheck -S error $(git ls-files '*.sh') tests/security_regression.bats
+
+      - name: OpenVPN remote parser tests
+        run: CODE="$GITHUB_WORKSPACE" bash parse_tests.sh
+
+      - name: Security regression tests
+        run: bats tests/security_regression.bats
+
+      # The older bats files contain known-broken tests (see SECURITY_REVIEW.md, Q1).
+      # They run for visibility but do not block publishing until they are fixed.
+      - name: Legacy bats suite (non-blocking)
+        continue-on-error: true
+        run: bats tests/common.bats tests/dns_blocklist.bats tests/dns_runtime.bats tests/dot.bats tests/firewall.bats
+
   build-and-push:
+    needs: checks
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

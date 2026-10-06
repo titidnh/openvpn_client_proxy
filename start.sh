@@ -124,73 +124,16 @@ HANDLER
 # Capabilities
 # ===========================================================================
 
+# S4 : l'ancienne implementation appelait prctl(PR_CAPBSET_DROP) dans un
+# processus python3 ENFANT : seul ce processus perdait ses capabilities,
+# puis se terminait. Superviseur et demons gardaient tout - la fonction
+# n'a jamais rien fait. La reduction des capabilities se fait desormais au
+# niveau du conteneur (cap_drop / cap_add dans docker-compose, voir README).
 drop_capabilities() {
     [ "${DROP_CAPS:-false}" = "true" ] || return 0
 
-    if ! command_exists python3; then
-        log_json WARN "drop_caps" \
-            "python3 not found - capability drop skipped"
-        return 0
-    fi
-
-    log_json INFO "drop_caps" \
-        "dropping capabilities via prctl" \
-        "retaining=cap_net_admin(12),cap_net_raw(13)"
-
-    python3 - <<'PYCAPS'
-import ctypes
-import sys
-
-libc = ctypes.CDLL(None, use_errno=True)
-
-PR_CAPBSET_DROP = 24
-CAP_NET_RAW = 13
-CAP_NET_ADMIN = 12
-
-KEEP = {CAP_NET_ADMIN, CAP_NET_RAW}
-errors = []
-
-for cap in range(40):
-    if cap in KEEP:
-        continue
-
-    ret = libc.prctl(
-        PR_CAPBSET_DROP,
-        ctypes.c_ulong(cap),
-        0,
-        0,
-        0
-    )
-
-    if ret != 0:
-        err = ctypes.get_errno()
-
-        if err != 22:
-            errors.append(f"cap {cap}: errno {err}")
-
-if errors:
-    print(
-        f"[drop_caps] some caps could not be dropped: {errors}",
-        file=sys.stderr
-    )
-    sys.exit(1)
-
-print(
-    "[drop_caps] bounding set reduced - "
-    "kept CAP_NET_ADMIN(12) CAP_NET_RAW(13)"
-)
-PYCAPS
-
-    local rc=$?
-
-    if [ "$rc" -eq 0 ]; then
-        log_json INFO "drop_caps" \
-            "capabilities dropped successfully" \
-            "retained=cap_net_admin,cap_net_raw"
-    else
-        log_json WARN "drop_caps" \
-            "capability drop had errors - check stderr above"
-    fi
+    log_json WARN "drop_caps" \
+        "DROP_CAPS is deprecated and has no effect - use cap_drop/cap_add in docker-compose (see README)"
 }
 
 # ===========================================================================
@@ -227,6 +170,21 @@ configure_privoxy_auth() {
         log_json INFO "configure_privoxy_auth" \
             "no auth - privoxy on ${privoxy_addr}:${privoxy_port}"
     fi
+
+    # S3 : sed -i recree le fichier -> il redevient root:root. Privoxy lance
+    # avec --user refuse une config possedee par root (check_file_rights).
+    # Restaurer le proprietaire attendu par le demon. Le fichier est ouvert
+    # en lecture large (644) : la config Privoxy ne contient aucun secret
+    # (l auth est geree par tinyproxy) et stat() exige de traverser le
+    # repertoire - un mode trop strict fait echouer le demarrage du demon.
+    chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod 644 "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod a+rx "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || true
+    log_json DEBUG "configure_privoxy_auth" \
+        "privoxy config ownership" \
+        "file=${PRIVOXY_CONF}" "owner=$(stat -c '%U:%G' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "dir_mode=$(stat -c '%a' "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || echo '?')"
 }
 
 start_privoxy() {
@@ -235,8 +193,12 @@ start_privoxy() {
 
     configure_privoxy_auth
 
+    # S3/S7 : Privoxy analyse du contenu web non fiable - ne pas le laisser
+    # en root. Il abandonne ses privileges apres le bind du port. L'UID sert
+    # aussi au filtre iptables PROXY_EGRESS (setup_proxy_egress_filter).
     /usr/sbin/privoxy \
         --no-daemon \
+        --user "${PROXY_RUN_USER:-vpn}" \
         "$PRIVOXY_CONF" &
 
     SERVICE_PIDS["privoxy"]=$!
