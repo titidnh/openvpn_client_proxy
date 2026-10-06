@@ -137,8 +137,13 @@ services:
 
       # Paramètres communs aux deux profils
       PROXY_PORT: "3128"
-      # "true" exige PROXY_USER/PROXY_PASS (le conteneur refuse sinon de demarrer)
+      # "true" exige PROXY_USER/PROXY_PASS (le conteneur refuse sinon de
+      # demarrer). Derogation explicite pour un proxy ouvert sans auth :
+      # ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY: "true"
       ALLOW_EXTERNAL_PROXY_ACCESS: "false"
+      # Bypass explicite du garde-fou ci-dessus (proxy OUVERT sans authent).
+      # Decommenter uniquement en connaissance de cause.
+      # ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY: "false"
       # "true" = le proxy peut joindre LAN / hote Docker / tailnet (bloque par defaut)
       PROXY_ALLOW_PRIVATE_NETWORKS: "false"
       HEALTHCHECK_IP: "9.9.9.9"

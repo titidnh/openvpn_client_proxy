@@ -1378,6 +1378,26 @@ environment:
   PROXY_PORT: "3128"
 ```
 
+> ⚠️ **`ALLOW_EXTERNAL_PROXY_ACCESS=true` now requires `PROXY_USER` and `PROXY_PASS`.**
+> Without credentials the container refuses to start with:
+> `refusing to start an open proxy`.
+>
+> **Explicit override (bypass the check):** if you deliberately want an
+> **unauthenticated** proxy reachable from outside (trusted LAN, isolated
+> network), set:
+>
+> ```yaml
+> environment:
+>   ALLOW_EXTERNAL_PROXY_ACCESS: "true"
+>   ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY: "true"   # bypass: open proxy, no auth
+>   PROXY_PORT: "3128"
+> ```
+>
+> A `WARN` log (`OPEN PROXY: external access enabled WITHOUT authentication`)
+> confirms the override is active. Anyone who can reach the port can use
+> your VPN — restrict access at the network level (VLAN, firewall rule,
+> `ports:` bound to a specific LAN IP).
+
 Now the proxy is accessible from other hosts on your network:
 
 ```bash
