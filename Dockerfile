@@ -127,7 +127,6 @@ RUN apk add --no-cache \
       tini \
       unbound \
       libcap \
-      python3 \
       socat \
       wireguard-tools \
       wireguard-go

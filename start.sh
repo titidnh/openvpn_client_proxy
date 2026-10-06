@@ -124,73 +124,16 @@ HANDLER
 # Capabilities
 # ===========================================================================
 
+# S4 : l'ancienne implementation appelait prctl(PR_CAPBSET_DROP) dans un
+# processus python3 ENFANT : seul ce processus perdait ses capabilities,
+# puis se terminait. Superviseur et demons gardaient tout - la fonction
+# n'a jamais rien fait. La reduction des capabilities se fait desormais au
+# niveau du conteneur (cap_drop / cap_add dans docker-compose, voir README).
 drop_capabilities() {
     [ "${DROP_CAPS:-false}" = "true" ] || return 0
 
-    if ! command_exists python3; then
-        log_json WARN "drop_caps" \
-            "python3 not found - capability drop skipped"
-        return 0
-    fi
-
-    log_json INFO "drop_caps" \
-        "dropping capabilities via prctl" \
-        "retaining=cap_net_admin(12),cap_net_raw(13)"
-
-    python3 - <<'PYCAPS'
-import ctypes
-import sys
-
-libc = ctypes.CDLL(None, use_errno=True)
-
-PR_CAPBSET_DROP = 24
-CAP_NET_RAW = 13
-CAP_NET_ADMIN = 12
-
-KEEP = {CAP_NET_ADMIN, CAP_NET_RAW}
-errors = []
-
-for cap in range(40):
-    if cap in KEEP:
-        continue
-
-    ret = libc.prctl(
-        PR_CAPBSET_DROP,
-        ctypes.c_ulong(cap),
-        0,
-        0,
-        0
-    )
-
-    if ret != 0:
-        err = ctypes.get_errno()
-
-        if err != 22:
-            errors.append(f"cap {cap}: errno {err}")
-
-if errors:
-    print(
-        f"[drop_caps] some caps could not be dropped: {errors}",
-        file=sys.stderr
-    )
-    sys.exit(1)
-
-print(
-    "[drop_caps] bounding set reduced - "
-    "kept CAP_NET_ADMIN(12) CAP_NET_RAW(13)"
-)
-PYCAPS
-
-    local rc=$?
-
-    if [ "$rc" -eq 0 ]; then
-        log_json INFO "drop_caps" \
-            "capabilities dropped successfully" \
-            "retained=cap_net_admin,cap_net_raw"
-    else
-        log_json WARN "drop_caps" \
-            "capability drop had errors - check stderr above"
-    fi
+    log_json WARN "drop_caps" \
+        "DROP_CAPS is deprecated and has no effect - use cap_drop/cap_add in docker-compose (see README)"
 }
 
 # ===========================================================================
