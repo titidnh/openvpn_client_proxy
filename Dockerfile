@@ -21,7 +21,7 @@
 # l'image finale et permet à BuildKit de mettre en cache la couche de téléchargement
 # indépendamment.
 # ===========================================================================
-FROM alpine:3.23 AS tailscale-dl
+FROM alpine:3.24 AS tailscale-dl
 
 ARG TARGETARCH
 # S6 : version FIGEE + empreinte SHA256 verifiee (les binaires tournent en
@@ -53,7 +53,7 @@ RUN apk add --no-cache curl tar \
 # ===========================================================================
 # Stage 2 - Image finale
 # ===========================================================================
-FROM alpine:3.23
+FROM alpine:3.24
 
 # ---------------------------------------------------------------------------
 # Métadonnées de l'image
