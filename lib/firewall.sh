@@ -1026,9 +1026,44 @@ cleanup_routes_on_restart() {
     timeout 3 ip route del 128.0.0.0/1 dev wg0 2>/dev/null || true
 
     # Tripwire : si la route physique par defaut a disparu (bug anterieur,
-    # manip manuelle), rien ne sortira plus du conteneur - le dire.
+    # manip manuelle), rien ne sortira plus du conteneur. Docker ne la pose
+    # qu a la creation du conteneur : la restaurer depuis la passerelle
+    # memorisee au demarrage (analyse v10, section 2 - "reste utile").
     if ! ip route show default 2>/dev/null | grep -q .; then
-        log_json ERROR "cleanup_routes_on_restart" \
-            "no default route left in container - external network unreachable"
+        local saved_gw saved_iface
+        saved_gw=$(cat /tmp/.default_gw 2>/dev/null || true)
+        saved_iface=$(cat /tmp/.default_iface 2>/dev/null || true)
+        if [ -n "$saved_gw" ] && [ -n "$saved_iface" ]; then
+            if ip route replace default via "$saved_gw" dev "$saved_iface" 2>/dev/null; then
+                log_json WARN "cleanup_routes_on_restart" \
+                    "default route was missing - restored from startup snapshot" \
+                    "gw=${saved_gw}" "iface=${saved_iface}"
+            else
+                log_json ERROR "cleanup_routes_on_restart" \
+                    "no default route left and restore failed - external network unreachable" \
+                    "gw=${saved_gw}" "iface=${saved_iface}"
+            fi
+        else
+            log_json ERROR "cleanup_routes_on_restart" \
+                "no default route left in container - external network unreachable" \
+                "hint=no startup gateway snapshot found (/tmp/.default_gw)"
+        fi
     fi
+}
+
+# Memorise la route par defaut physique (a appeler une fois au demarrage,
+# avant tout VPN) afin de pouvoir la restaurer si elle disparait.
+# Usage: snapshot_default_route
+snapshot_default_route() {
+    local gw iface
+    gw=$(ip route show 2>/dev/null | grep "^default" |
+        grep -v "tun\|tap\|wg" | awk '{print $3}' | head -1)
+    iface=$(ip route show 2>/dev/null | grep "^default" |
+        grep -v "tun\|tap\|wg" | awk '{print $5}' | head -1)
+    [ -n "$gw" ] && [ -n "$iface" ] || return 0
+    echo "$gw" > /tmp/.default_gw
+    echo "$iface" > /tmp/.default_iface
+    log_json DEBUG "firewall" \
+        "default route snapshot saved" \
+        "gw=${gw}" "iface=${iface}"
 }

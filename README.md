@@ -1088,6 +1088,7 @@ services:
     volumes:
       - ./vpn:/vpn:ro
       - blocklist-cache:/tmp  # Optional: persist compiled blocklists across restarts
+      - unbound-anchor:/var/lib/unbound  # DNSSEC root trust anchor + RFC 5011 state
     ports:
       - "127.0.0.1:3128:3128"
     environment:
@@ -1102,6 +1103,7 @@ services:
 
 volumes:
   blocklist-cache:
+  unbound-anchor:
 ```
 
 ### Full — DoT + DNS Blocklist + Tailscale exit node
@@ -1127,6 +1129,7 @@ services:
       - ./vpn:/vpn:ro
       - tailscale-state:/var/lib/tailscale
       - blocklist-cache:/tmp
+      - unbound-anchor:/var/lib/unbound
     ports:
       - "3128:3128"
     environment:
@@ -1160,6 +1163,7 @@ services:
 volumes:
   tailscale-state:
   blocklist-cache:
+  unbound-anchor:
 ```
 
 ### Full — OpenVPN + Proxy auth + Tailscale exit node

@@ -62,6 +62,10 @@ supervise_all() {
         return 1
     fi
 
+    # Memorise la route par defaut physique avant tout VPN : permet de la
+    # restaurer si elle disparait (cleanup_routes_on_restart, analyse v10 par. 2).
+    snapshot_default_route
+
     # Memorise l'IP publique reelle (reference anti-fuite pour check_vpn_ip)
     capture_real_ip
 
@@ -91,18 +95,38 @@ supervise_all() {
             fi
         fi
 
-        # Phase 1 : DNS classique
-        start_dnsmasq_classic
-
-        if ! wait_for_dns_ready 30; then
-            log_json WARN "supervisor" "classic dns not ready - continuing"
-        else
-            sleep_wait 2
+        # Analyse v10 par. 3 : a partir de l iteration 2, si le cache d IPs
+        # DoT existe (validees au bootstrap), TOUTE la phase de resolution
+        # classique est inutile et bloquante sous le kill switch (le port 53
+        # externe est ferme). On charge DOT_RESOLVED_IPS depuis le cache et
+        # on va droit a unbound (~10 s au lieu de plusieurs minutes).
+        if [ "${ENABLE_DOT:-false}" = "true" ] && [ -s "$DOT_IP_MAP_FILE" ]; then
+            log_json INFO "supervisor" \
+                "cached DoT IPs found - skipping classic DNS bootstrap phases"
+            DOT_RESOLVED_IPS=$(awk -F= '{printf "%s ", $2}' "$DOT_IP_MAP_FILE" 2>/dev/null || true)
+            unset DOT_HOST_IP_MAP 2>/dev/null || true
+            declare -gA DOT_HOST_IP_MAP=()
+            local map_host map_ips
+            for map_host in $(awk -F= '{print $1}' "$DOT_IP_MAP_FILE" 2>/dev/null); do
+                map_ips=$(grep "^${map_host}=" "$DOT_IP_MAP_FILE" 2>/dev/null | cut -d= -f2- || true)
+                DOT_HOST_IP_MAP["$map_host"]="$map_ips"
+            done
         fi
 
-        # Phase 1.5 : Pre-load DoT IPs
-        if [ "${ENABLE_DOT:-false}" = "true" ]; then
-            preload_dot_ips
+        # Phase 1 : DNS classique (uniquement si pas de cache DoT exploitable)
+        if [ "${ENABLE_DOT:-false}" != "true" ] || [ ! -s "$DOT_IP_MAP_FILE" ]; then
+            start_dnsmasq_classic
+
+            if ! wait_for_dns_ready 30; then
+                log_json WARN "supervisor" "classic dns not ready - continuing"
+            else
+                sleep_wait 2
+            fi
+
+            # Phase 1.5 : Pre-load DoT IPs
+            if [ "${ENABLE_DOT:-false}" = "true" ]; then
+                preload_dot_ips
+            fi
         fi
 
         # Phase 2 : Unbound / DoT

@@ -140,6 +140,19 @@ RUN apk add --no-cache \
 RUN mkdir -p /var/lib/unbound /etc/unbound \
  && chown -R unbound:unbound /var/lib/unbound /etc/unbound 2>/dev/null || true
 
+# D1/D2 : ancre racine DNSSEC. Le 11 octobre 2026 la zone racine n'est plus
+# signee que par KSK-2024 (key tag 38696) ; unbound-anchor d'une image Alpine
+# plus ancienne peut ne livrer que 20326. On genere root.key avec unbound-anchor
+# (qui embarque 20326) puis on garantit la presence de la nouvelle ancre
+# officielle 38696 si elle manque. RFC 5011 ajoutera les ancres futures
+# automatiquement tant que root.key reste inscriptible par l'utilisateur
+# unbound (chown au runtime, voir lib/dot.sh).
+RUN unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || true \
+ && grep -q 38696 /var/lib/unbound/root.key 2>/dev/null \
+    || sed -i '1i . IN DS 38696 8 2 683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16' /var/lib/unbound/root.key 2>/dev/null || true \
+ && chown unbound:unbound /var/lib/unbound/root.key \
+ && chmod 644 /var/lib/unbound/root.key
+
 # ---------------------------------------------------------------------------
 # Binaires Tailscale depuis le stage 1
 # ---------------------------------------------------------------------------
