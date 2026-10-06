@@ -540,9 +540,9 @@ DNS-level blocklisting adds an extra layer of protection by sinkhole-blocking kn
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Docker Container                          │
 │                                                                  │
-│  App → dnsmasq → Blocklist rules (hosts/adblock/raw) → response │
+│  App → dnsmasq → Blocklist rules (hosts/adblock/raw) → response  │
 │        │                                                         │
-│        └─ If DoT enabled → unbound :5053 ──TLS:853──→ DoT srv   │
+│        └─ If DoT enabled → unbound :5053 ──TLS:853──→ DoT srv    │
 │                                                                  │
 │  iptables: DNS blocklist + VPN tunnel enforcement + leaks block  │
 └──────────────────────────────────────────────────────────────────┘
