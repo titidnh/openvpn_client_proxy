@@ -64,8 +64,21 @@ ipt6_must() {
 # DoT (DNS over TLS) - Firewall port 853 rules
 # ===========================================================================
 
+# S1 : mode du pare-feu. 0 = bootstrap (tunnel absent, services proxy
+# arretes : DNS/DoT autorises vers l'exterieur pour resoudre les remotes et
+# demarrer unbound). 1 = kill switch final (pose par setup_iptables) : tout
+# le DNS/DoT doit passer par le tunnel.
+FW_TUNNEL_ONLY="${FW_TUNNEL_ONLY:-0}"
+
 ipt_add_853() {
     local ip="$1"
+    # S1 : apres setup_iptables, le trafic DoT passe deja par les regles
+    # "-o tun+/tap+/wg+ -j ACCEPT". Une regle 853 SANS interface laisserait
+    # unbound joindre le serveur DoT via eth0 (IP reelle) des que le tunnel
+    # tombe : ne rien ajouter dans ce mode.
+    if [ "${FW_TUNNEL_ONLY:-0}" = "1" ]; then
+        return 0
+    fi
     # Idempotent : verifier (-C) avant d'ajouter (-A), sinon chaque refresh
     # DoT empile des regles dupliquees (regression C3).
     if [[ "$ip" =~ : ]]; then
@@ -85,6 +98,29 @@ ipt_del_853() {
     else
         iptables -D OUTPUT -p tcp -d "$ip" --dport 853 -j ACCEPT 2>/dev/null || true
     fi
+}
+
+# S1 : re-ouvre le DNS de bootstrap (53 vers DNS_SERVER_1/2, toutes
+# interfaces) au debut d'un cycle de redemarrage complet du superviseur.
+# Le kill switch final (setup_iptables) n'autorise le DNS que via le tunnel ;
+# or un cycle complet relance dnsmasq/unbound AVANT le VPN. A ce stade
+# Privoxy/tinyproxy sont arretes : aucune requete client ne peut fuir.
+# setup_iptables referme ces regles (flush) avant de relancer le proxy.
+# Usage: firewall_open_bootstrap_dns
+firewall_open_bootstrap_dns() {
+    FW_TUNNEL_ONLY=0
+
+    local dns p
+    for dns in "${DNS_SERVER_1:-}" "${DNS_SERVER_2:-}"; do
+        [[ "$dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        for p in udp tcp; do
+            iptables -C OUTPUT -p "$p" -d "$dns" --dport 53 -j ACCEPT 2>/dev/null ||
+                iptables -A OUTPUT -p "$p" -d "$dns" --dport 53 -j ACCEPT
+        done
+    done
+
+    log_json INFO "firewall" \
+        "bootstrap DNS re-opened for restart cycle (proxy stopped)"
 }
 
 # ===========================================================================
@@ -421,31 +457,12 @@ setup_iptables() {
     iptables -P FORWARD DROP
     iptables -P OUTPUT DROP
 
-    # DNS bootstrap : uniquement hors DoT. En mode DoT le port 53 externe
-    # doit rester strictement bloque (anti-fuite, H5) : dnsmasq forward en
-    # local vers unbound (5053).
-    if [ "${ENABLE_DOT:-false}" != "true" ]; then
-        local dns
-        for dns in "$DNS_SERVER_1" "$DNS_SERVER_2"; do
-            iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-        done
-    fi
-
-    # Healthcheck (ping sonde) - pas de port 53 externe : en mode DoT le
-    # port 53 hors tunnel doit rester strictement bloque (H5).
-    if [ "${ENABLE_DOT:-false}" != "true" ]; then
-        iptables -A OUTPUT -p udp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
-        iptables -A OUTPUT -p tcp -d "$HEALTHCHECK_IP" --dport 53 -j ACCEPT
-    fi
-    # Sonde de sante limitee a l'interface physique (reduit la brèche
-    # residuelle vers un seul hote, toutes interfaces). Les sondes peuvent
-    # aussi passer par le tunnel une fois celui-ci monte.
-    local hc_iface
-    hc_iface=$(get_physical_iface)
-    hc_iface="${hc_iface:-eth0}"
-    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 80 -j ACCEPT
-    iptables -A OUTPUT -o "$hc_iface" -p tcp -d "$HEALTHCHECK_IP" --dport 443 -j ACCEPT
+    # S1 : kill switch final. Plus AUCUNE regle DNS (53) ni DoT (853) sans
+    # interface : le DNS sort uniquement par le tunnel (regles -o tun+/tap+/
+    # wg+ plus bas). Si le tunnel tombe, le DNS echoue au lieu de fuir par
+    # eth0 avec l'IP reelle. Les remotes VPN sont deja epingles par IP, la
+    # reconnexion n'a pas besoin de DNS. ipt_add_853 devient un no-op.
+    FW_TUNNEL_ONLY=1
 
     # INPUT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -515,51 +532,19 @@ setup_iptables() {
     iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 5053 -j ACCEPT
     iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 5053 -j ACCEPT
 
-    # DoT
+    # S1 : DNS upstream (mode classique) et DoT (853) passent uniquement par
+    # le tunnel via les regles "-o tun+/tap+/wg+ -j ACCEPT" ci-dessus. Aucune
+    # regle 53/853 par destination ici.
     if [ "${ENABLE_DOT:-false}" = "true" ]; then
-        if [ -n "$DOT_RESOLVED_IPS" ]; then
-            local dot_ip
-
-            for dot_ip in $DOT_RESOLVED_IPS; do
-                ipt_add_853 "$dot_ip"
-
-                log_json INFO "setup_iptables" \
-                    "DoT: allowing TCP 853" \
-                    "ip=${dot_ip}"
-            done
-        else
-            log_json WARN "setup_iptables" \
-                "DoT: no resolved IPs - TCP 853 not explicitly allowed"
-        fi
-
         # Kill switch DNS externe.
         iptables -A OUTPUT -p udp ! -d 127.0.0.0/8 --dport 53 -j DROP
         iptables -A OUTPUT -p tcp ! -d 127.0.0.0/8 --dport 53 -j DROP
 
         log_json INFO "setup_iptables" \
             "DoT DNS leak prevention: external port 53 blocked"
-    else
-        # Mode DNS classique.
-        local _dns
-
-        for _dns in "$DNS_SERVER_1" "$DNS_SERVER_2"; do
-            [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-
-            iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
-
-            log_json INFO "setup_iptables" \
-                "allowing port 53" \
-                "ip=${_dns}"
-        done
-
-        while read -r _dns; do
-            [[ "$_dns" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-
-            iptables -A OUTPUT -p udp -d "$_dns" --dport 53 -j ACCEPT
-            iptables -A OUTPUT -p tcp -d "$_dns" --dport 53 -j ACCEPT
-        done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
+    log_json INFO "setup_iptables" \
+        "DNS/DoT upstream allowed through the VPN tunnel only"
 
     # Retire la regle de bootstrap tcp/443 posee par firewall_early_lockdown
     # (les regles VPN ciblees et l'interface tun prennent le relais).
@@ -738,14 +723,9 @@ setup_ip6tables() {
 
         log_json INFO "setup_ip6tables" \
             "DoT DNS leak prevention: IPv6 port 53 blocked"
-    else
-        while read -r dns; do
-            [[ "$dns" =~ : ]] || continue
-
-            ipt6 -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
-            ipt6 -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
-        done < <(get_dns_upstreams "$DNSMASQ_CONF")
     fi
+    # S1 : pas de regle DNS upstream par destination - le DNS IPv6 passe
+    # uniquement par le tunnel (regles -o tun+/tap+/wg+ ci-dessus).
 
     # B4 : les regles IPv6 des remotes ont ete posees par setup_iptables
     # (boucle VPN_REMOTE_IPS) MAIS le "ipt6 -F" en tete de cette fonction

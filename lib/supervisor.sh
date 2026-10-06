@@ -67,6 +67,10 @@ supervise_all() {
         if [ "$attempt" -gt 1 ]; then
             METRIC_RESTART_COUNT=$((METRIC_RESTART_COUNT + 1))
             METRIC_LAST_RESTART_TS=$(date +%s)
+            # S1 : le kill switch final n'autorise le DNS que via le tunnel,
+            # or ce cycle relance dnsmasq/unbound AVANT le VPN. Le proxy est
+            # arrete a ce stade : re-ouvrir le DNS de bootstrap est sans fuite.
+            firewall_open_bootstrap_dns
         fi
 
         # Phase 0 : Blocklist DNS
