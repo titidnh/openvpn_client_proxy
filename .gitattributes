@@ -30,3 +30,5 @@ Dockerfile text eol=lf
 *.filter text eol=lf
 Dockerfile text eol=lf
 Makefile text eol=lf
+*.bats text eol=lf
+.shellcheckrc text eol=lf
