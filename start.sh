@@ -173,13 +173,18 @@ configure_privoxy_auth() {
 
     # S3 : sed -i recree le fichier -> il redevient root:root. Privoxy lance
     # avec --user refuse une config possedee par root (check_file_rights).
-    # Restaurer le proprietaire attendu par le demon.
+    # Restaurer le proprietaire attendu par le demon. Le fichier est ouvert
+    # en lecture large (644) : la config Privoxy ne contient aucun secret
+    # (l auth est geree par tinyproxy) et stat() exige de traverser le
+    # repertoire - un mode trop strict fait echouer le demarrage du demon.
     chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
-    chmod 640 "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod 644 "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod a+rx "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || true
     log_json DEBUG "configure_privoxy_auth" \
         "privoxy config ownership" \
         "file=${PRIVOXY_CONF}" "owner=$(stat -c '%U:%G' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
-        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')"
+        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "dir_mode=$(stat -c '%a' "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || echo '?')"
 }
 
 start_privoxy() {
