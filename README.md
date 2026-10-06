@@ -402,7 +402,7 @@ By default, DNS queries are forwarded in plaintext to `DNS_SERVER_1` / `DNS_SERV
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Docker Container                          │
 │                                                                  │
-│  App → dnsmasq :53 → unbound :5053 ──TLS:853──→ DoT Server      │
+│  App → dnsmasq :53 → unbound :5053 ──TLS:853──→ DoT Server       │
 │                                        (via VPN tunnel tun0)     │
 │                                                                  │
 │  iptables: UDP/TCP 53 external → DROP  (DNS leak kill switch)    │
