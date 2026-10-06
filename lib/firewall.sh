@@ -123,6 +123,19 @@ firewall_open_bootstrap_dns() {
         "bootstrap DNS re-opened for restart cycle (proxy stopped)"
 }
 
+# S5 : vrai si le conteneur a une connectivite IPv6 reelle (adresse globale).
+# Usage: ipv6_in_use
+ipv6_in_use() {
+    [ -f /proc/net/if_inet6 ] || return 1
+    ip -6 addr show scope global 2>/dev/null | grep -q 'inet6'
+}
+
+# S5 : vrai si ip6tables est installe ET utilisable sur ce noyau.
+# Usage: ip6tables_usable
+ip6tables_usable() {
+    command -v ip6tables >/dev/null 2>&1 && ip6tables -L -n >/dev/null 2>&1
+}
+
 # ===========================================================================
 # Early lockdown : a appeler le plus tot possible au demarrage (avant la
 # phase blocklist/dnsmasq/unbound). Sans cela, le conteneur tourne avec la
@@ -248,14 +261,25 @@ firewall_early_lockdown() {
             "no VPN remote resolved during bootstrap"
     fi
 
-    ipt6 -P INPUT DROP
-    ipt6 -P FORWARD DROP
-    ipt6 -P OUTPUT DROP
+    # S5 : IPv6 actif mais ip6tables inutilisable = tout le trafic IPv6
+    # contournerait le VPN avec l'IPv6 reelle. Echec explicite (fail-closed).
+    if ipv6_in_use && ! ip6tables_usable; then
+        log_json ERROR "firewall_early_lockdown" \
+            "IPv6 is active but ip6tables is unusable - refusing to start (IPv6 would bypass the VPN)" \
+            "hint=add sysctl net.ipv6.conf.all.disable_ipv6=1 or load the ip6_tables kernel module"
+        return 1
+    fi
+    ipt6_must -P INPUT DROP || return 1
+    ipt6_must -P FORWARD DROP || return 1
+    ipt6_must -P OUTPUT DROP || return 1
     ipt6 -A INPUT -i lo -j ACCEPT
     ipt6 -A OUTPUT -o lo -j ACCEPT
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    ipt6 -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    # Meme condition qu'en IPv4 : 443 sortant uniquement pour les blocklists.
+    if [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ]; then
+        ipt6 -A OUTPUT -p tcp --dport 443 -j ACCEPT
+    fi
 
     log_json INFO "firewall_early_lockdown" "Early lockdown active (bootstrap: DNS + tcp/443)"
 }
@@ -632,6 +656,14 @@ setup_iptables() {
 setup_ip6tables() {
     log_json INFO "setup_ip6tables" "Configuring IPv6 firewall"
 
+    # S5 : fail-closed (voir firewall_early_lockdown).
+    if ipv6_in_use && ! ip6tables_usable; then
+        log_json ERROR "setup_ip6tables" \
+            "IPv6 is active but ip6tables is unusable - refusing to continue (IPv6 would bypass the VPN)" \
+            "hint=add sysctl net.ipv6.conf.all.disable_ipv6=1 or load the ip6_tables kernel module"
+        return 1
+    fi
+
     if ! command_exists ip6tables; then
         log_json WARN "setup_ip6tables" \
             "ip6tables not installed, skipping"
@@ -658,9 +690,9 @@ setup_ip6tables() {
     ipt6 -X
     ipt6 -t nat -F
 
-    ipt6 -P INPUT DROP
-    ipt6 -P FORWARD DROP
-    ipt6 -P OUTPUT DROP
+    ipt6_must -P INPUT DROP || return 1
+    ipt6_must -P FORWARD DROP || return 1
+    ipt6_must -P OUTPUT DROP || return 1
 
     ipt6 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A INPUT -p icmpv6 -j ACCEPT

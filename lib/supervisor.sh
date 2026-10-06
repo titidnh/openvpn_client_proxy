@@ -183,8 +183,20 @@ supervise_all() {
             sleep_wait 30
             continue
         fi
+        # S5 : l'echec IPv6 est aussi bloquant (fail-closed).
+        if ! setup_ip6tables; then
+            FW_FAIL_COUNT=$((FW_FAIL_COUNT + 1))
+            log_json ERROR "supervisor" \
+                "setup_ip6tables failed - refusing to start services (fail-closed)" \
+                "consecutive_failures=${FW_FAIL_COUNT}/${FW_FAIL_MAX}"
+            stop_stack
+            if [ "$FW_FAIL_COUNT" -ge "$FW_FAIL_MAX" ]; then
+                return 1
+            fi
+            sleep_wait 30
+            continue
+        fi
         FW_FAIL_COUNT=0
-        setup_ip6tables
         setup_proxy_routing
 
         if ! start_privoxy; then
