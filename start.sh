@@ -170,6 +170,12 @@ configure_privoxy_auth() {
         log_json INFO "configure_privoxy_auth" \
             "no auth - privoxy on ${privoxy_addr}:${privoxy_port}"
     fi
+
+    # S3 : sed -i recree le fichier -> il redevient root:root. Privoxy lance
+    # avec --user refuse une config possedee par root (check_file_rights).
+    # Restaurer le proprietaire attendu par le demon.
+    chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod 640 "$PRIVOXY_CONF" 2>/dev/null || true
 }
 
 start_privoxy() {
