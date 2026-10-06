@@ -334,6 +334,18 @@ configure_unbound() {
         unbound-anchor \
             -a /var/lib/unbound/root.key \
             2>/dev/null || true
+        # D1 : apres le 11 octobre 2026 la zone racine n'est plus signee que
+        # par KSK-2024 (key tag 38696). Un unbound-anchor ancien (image Alpine
+        # non mise a jour) ne livre que 20326 : garantir la presence de la
+        # nouvelle ancre a CHAQUE demarrage, pas seulement au build, pour que
+        # la validation DNSSEC ne tombe pas en echec total a la bascule.
+        if [ -f /var/lib/unbound/root.key ] &&
+           ! grep -q 38696 /var/lib/unbound/root.key 2>/dev/null; then
+            sed -i '1i . IN DS 38696 8 2 683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16' \
+                /var/lib/unbound/root.key 2>/dev/null || true
+            log_json WARN "configure_unbound" \
+                "KSK-2024 (38696) was missing from root.key - added automatically"
+        fi
         # D2 : le chown doit venir APRES unbound-anchor, sinon root.key est
         # cree root:root et unbound (user unbound) ne peut pas le mettre a
         # jour (RFC 5011 - bascule KSK racine du 11 octobre 2026).
