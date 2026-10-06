@@ -309,13 +309,37 @@ firewall_early_lockdown() {
         [ -n "$map_ips" ] && remote_map="$remote_map $map_host=$map_ips"
     done
     [ -n "$remote_map" ] && export VPN_REMOTE_MAP="${remote_map# }"
+
     if [ -n "$VPN_REMOTE_IPS" ]; then
         log_json INFO "firewall_early_lockdown" \
             "VPN remotes resolved during bootstrap" \
             "endpoints=$(echo $VPN_REMOTE_IPS | wc -w)"
     else
-        log_json WARN "firewall_early_lockdown" \
-            "no VPN remote resolved during bootstrap"
+        # Diagnostic : distinguer "fichier absent/vide" de "resolution
+        # DNS muette" - sinon l utilisateur ne sait pas quoi corriger.
+        local diag_conf="${VPN_CONF:-$DEFAULT_VPN_CONF}"
+        local diag_hosts=""
+        local dh
+        while read -r dh; do
+            [ -n "${dh:-}" ] && diag_hosts="${diag_hosts} ${dh}"
+        done < <(parse_vpn_remotes "$diag_conf" 2>/dev/null | awk '{print $1}' | sort -u)
+        if [ ! -f "$diag_conf" ]; then
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - config file not found" \
+                "conf=${diag_conf}" \
+                "hint=mount your vpn.conf at /vpn/vpn.conf (compose: ./data:/vpn:ro)"
+        elif [ -z "$diag_hosts" ]; then
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - no remote directive found" \
+                "conf=${diag_conf}" \
+                "hint=the config has no remote/connection line, nothing to pin"
+        else
+            log_json ERROR "firewall_early_lockdown" \
+                "no VPN remote resolved during bootstrap - DNS resolution failed" \
+                "conf=${diag_conf}" "hostnames=${diag_hosts# }" \
+                "dns=${DNS_SERVER_1:-none},${DNS_SERVER_2:-none}" \
+                "hint=check upstream DNS reachability, or use a remote IP directly in the .ovpn"
+        fi
     fi
 
     # S5 : IPv6 actif mais ip6tables inutilisable = tout le trafic IPv6
