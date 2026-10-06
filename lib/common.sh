@@ -99,11 +99,15 @@ validate_ip() {
     local var_name="$1"
     local var_value="$2"
     
-    if [[ "$var_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        return 0
-    fi
-    
-    if [[ "$var_value" =~ ^[0-9a-fA-F:]+$ ]]; then
+    # S10 : IPv4 stricte (chaque octet <= 255) - l'ancienne regex acceptait
+    # 999.1.1.1 ; IPv6 : au moins deux ':' (l'ancienne acceptait "abc").
+    if [[ "$var_value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        local i octets_ok=1
+        for i in 1 2 3 4; do
+            [ "$((10#${BASH_REMATCH[$i]}))" -le 255 ] || octets_ok=0
+        done
+        [ "$octets_ok" -eq 1 ] && return 0
+    elif [[ "$var_value" == *:*:* ]] && [[ "$var_value" =~ ^[0-9a-fA-F:]+$ ]]; then
         return 0
     fi
     
@@ -137,6 +141,23 @@ validate_environment() {
     # Valider les ports
     validate_number "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
     validate_port "PROXY_PORT" "${PROXY_PORT:-3128}" || validation_failed=1
+    # PROXY_PORT+1 sert de port Privoxy interne quand l'auth est active.
+    if [[ "${PROXY_PORT:-3128}" =~ ^[0-9]+$ ]] && [ "${PROXY_PORT:-3128}" -ge 65535 ]; then
+        log_json WARN "validate_environment" \
+            "Invalid PROXY_PORT: must be <= 65534 (PROXY_PORT+1 is used internally)"
+        validation_failed=1
+    fi
+
+    # S10 : toute variable utilisee dans une expression arithmetique $(( ))
+    # doit etre un entier - sinon bash evalue son contenu (injection).
+    local num_var
+    for num_var in VPN_REMOTE_REFRESH_INTERVAL SKIP_HEALTHCHECK_FIRST_MINUTES \
+                   DOT_IP_REFRESH_INTERVAL DNS_BLOCKLIST_REFRESH_INTERVAL \
+                   DNS_BLOCKLIST_MIN_AGE; do
+        if [ -n "${!num_var:-}" ]; then
+            validate_number "$num_var" "${!num_var}" || validation_failed=1
+        fi
+    done
 
     # Valider les serveurs DNS
     if [ -n "${DNS_SERVER_1:-}" ]; then

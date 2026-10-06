@@ -39,7 +39,13 @@ supervise_all() {
     local FW_FAIL_MAX=5
     local FW_FAIL_COUNT=0
 
-    validate_environment || true
+    # S10 : une configuration invalide n'est plus ignoree - les valeurs
+    # finissent dans des expressions arithmetiques et des regles iptables.
+    if ! validate_environment; then
+        log_json ERROR "supervisor" \
+            "invalid configuration - refusing to start (see errors above)"
+        return 1
+    fi
 
     # S2 : jamais de proxy ouvert sans authentification.
     if ! check_proxy_exposure; then

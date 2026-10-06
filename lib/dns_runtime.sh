@@ -125,8 +125,11 @@ start_dnsmasq_classic() {
         local dns_ok=0
 
         if command_exists timeout; then
-            if timeout 3 bash -c "echo > /dev/tcp/${DNS_SERVER_1}/53" 2>/dev/null || \
-               timeout 3 bash -c ": > /dev/udp/${DNS_SERVER_1}/53" 2>/dev/null; then
+            # S10 : l'IP est passee en argument ($1), jamais interpolee dans
+            # le code execute par bash -c (injection). La sonde /dev/udp a ete
+            # retiree : UDP n'a pas de poignee de main, elle reussissait
+            # toujours (B6).
+            if timeout 3 bash -c 'echo > "/dev/tcp/$1/53"' _ "${DNS_SERVER_1}" 2>/dev/null; then
                 dns_ok=1
             fi
         else
