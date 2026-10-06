@@ -405,7 +405,7 @@ resolve_hostname_all() {
     
     # Essayer avec dig d'abord - retourne TOUTES les IPs
     for dns in "${dns_servers[@]}"; do
-        ips=$(dig +short "$hostname" @"$dns" A 2>/dev/null | grep -E '^[0-9.]+$' || true)
+        ips=$(dig +short +time=2 +tries=1 "$hostname" @"$dns" A 2>/dev/null | grep -E '^[0-9.]+$' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
@@ -414,7 +414,7 @@ resolve_hostname_all() {
     
     # Essayer avec nslookup - retourne TOUTES les IPs
     for dns in "${dns_servers[@]}"; do
-        ips=$(nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) print $2 }' || true)
+        ips=$(timeout 4 nslookup "$hostname" "$dns" 2>/dev/null | awk '/^Address: /{ if ($2 !~ /:/) print $2 }' || true)
         if [ -n "$ips" ]; then
             echo "$ips"
             return 0
