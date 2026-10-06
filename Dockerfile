@@ -24,20 +24,25 @@
 FROM alpine:3.23 AS tailscale-dl
 
 ARG TARGETARCH
-# TAILSCALE_VERSION peut être figé à l'époque de la construction: --build-arg TAILSCALE_VERSION=1.80.3
-# Si laissé vide, la dernière version stable est récupérée automatiquement.
-# Pour 2026, utiliser une version récente comme 1.80.3 ou supérieur
-ARG TAILSCALE_VERSION=""
+# S6 : version FIGEE + empreinte SHA256 verifiee (les binaires tournent en
+# root avec NET_ADMIN). Pour mettre a jour : lire "TarballsVersion" sur
+# https://pkgs.tailscale.com/stable/?mode=json puis recopier le contenu de
+# https://pkgs.tailscale.com/stable/tailscale_<version>_<arch>.tgz.sha256
+ARG TAILSCALE_VERSION=1.102.5
+ARG TAILSCALE_SHA256_AMD64=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12
+ARG TAILSCALE_SHA256_ARM64=60d60109e33d097318c66adc1f1b4e78e528fa1c0357e8bfe82af99f21a18b89
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
- && if [ -n "${TAILSCALE_VERSION}" ]; then \
-      URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz"; \
-    else \
-      URL="https://pkgs.tailscale.com/stable/tailscale_latest_${ARCH}.tgz"; \
-    fi \
+ && case "${ARCH}" in \
+      amd64) SHA="${TAILSCALE_SHA256_AMD64}" ;; \
+      arm64) SHA="${TAILSCALE_SHA256_ARM64}" ;; \
+      *) echo "Unsupported TARGETARCH=${ARCH} - add its SHA256 build arg" >&2; exit 1 ;; \
+    esac \
+ && URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" \
  && echo "Downloading: ${URL}" \
  && curl -fsSL "${URL}" -o tailscale.tgz \
+ && echo "${SHA}  tailscale.tgz" | sha256sum -c - \
  && PREFIX=$(tar -tz -f tailscale.tgz | head -1 | cut -d/ -f1) \
  && echo "Tailscale version: ${PREFIX}" \
  && tar -xz -f tailscale.tgz "${PREFIX}/tailscale" "${PREFIX}/tailscaled" \
