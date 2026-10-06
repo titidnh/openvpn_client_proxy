@@ -227,7 +227,7 @@ start_wireguard() {
             if [[ "$endpoint_ip" =~ : ]]; then
                 gw=$(ip -6 route show dev "$phys" 2>/dev/null | awk '/^default/{print $3; exit}')
                 if [ -n "$gw" ]; then
-                    if ! ip -6 route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
+                    if ! ip -6 route replace "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
                         log_json ERROR "start_wireguard" \
                             "cannot add endpoint host route - aborting (fail-closed)" \
                             "ip=${endpoint_ip}" "gw=${gw}"
@@ -243,7 +243,7 @@ start_wireguard() {
                 if [ -n "$gw" ]; then
                     # R7 : route hote vers l'IP RESOLUE de l'endpoint (un
                     # hostname echouerait et wg0 bouclerait sur lui-meme).
-                    if ! ip route add "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
+                    if ! ip route replace "$endpoint_ip" via "$gw" dev "$phys" 2>/dev/null; then
                         log_json ERROR "start_wireguard" \
                             "cannot add endpoint host route - aborting (fail-closed)" \
                             "ip=${endpoint_ip}" "gw=${gw}"
