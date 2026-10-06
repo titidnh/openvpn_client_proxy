@@ -59,7 +59,7 @@
 | 🔀 **Split DNS** | Route specific domains to an internal resolver (`DNS_SPLIT="corp.local=10.0.0.53"`). Works in both plain and DoT modes. |
 | 🔄 **Dynamic DoT IP Refresh** | Periodically re-resolves DoT server hostnames and updates iptables rules atomically (zero connectivity interruption) |
 | 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint on `127.0.0.1:9100` with VPN status, restart count, DoT state, and uptime |
-| 🛡️ **Capability Drop** | Optional (`DROP_CAPS=true`) — drops all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after startup |
+| 🛡️ **Capability Drop** | Done at the container level with `cap_drop` / `cap_add` (see [Capability Drop](#capability-drop-optional)). The old `DROP_CAPS` variable is deprecated and has no effect. |
 | 📋 **Structured JSON Logs** | All log output is JSON (`{"ts":"...","level":"INFO","component":"...","msg":"..."}`), ready for Loki/Splunk/any log aggregator |
 
 ---
@@ -338,7 +338,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node — all Tailscale clients can route traffic through the VPN. |
 | `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
 | `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com,tls://dns.quad9.net` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
-| `HEALTHCHECK_IP` | `9.9.9.9` | IP address used by health checks (ping / connectivity probes). |
+| `HEALTHCHECK_IP` | `9.9.9.9` | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
 | `ROUTE_TEST_IP` | `9.9.9.9` | IP used to test basic routing/connectivity from inside the container. |
 | `SKIP_HEALTHCHECK_FIRST_MINUTES` | `2` | Number of minutes to skip the healthcheck after container startup. Useful to avoid false failures during initialization. |
 | `TAILSCALE_RUN_DIR` | `/var/run/tailscale` | Directory where `tailscaled` creates its runtime socket (override if needed). |
@@ -356,8 +356,11 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `DNS_BLOCKLIST_ALLOWLIST` | *(empty)* | Comma or newline-separated list of domains to whitelist (prevent from being blocked by the DNS blocklist). Example: `example.com,trusted.local`. |
 | `DNS_SPLIT` | *(empty)* | Comma-separated list of `domain=resolver[:port]` entries for split DNS. Routes those domains to an internal resolver instead of the default upstream. Works in both DoT and plain modes. Example: `corp.local=10.0.0.53,internal.net=10.0.1.53:5353` |
 | `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint on `127.0.0.1:9100`. The port is loopback-only (iptables enforced). |
-| `DROP_CAPS` | `false` | Set to `true` to drop all Linux capabilities except `CAP_NET_ADMIN` and `CAP_NET_RAW` after all services have started. |
-| `ALLOW_EXTERNAL_PROXY_ACCESS` | `false` | Set to `true` to allow external connections to the proxy port (`PROXY_PORT`, default: 3128). By default, the port is only accessible from the Docker network. Enable this only if you trust your network and need to access the proxy from other physical hosts (e.g., cross-RPi proxy access). ⚠️ **Firewall-permissive mode** — only use if you understand the security implications. |
+| `DROP_CAPS` | `false` | **Deprecated - has no effect.** The previous implementation only dropped capabilities inside a short-lived helper process. Use `cap_drop` / `cap_add` in docker-compose instead (see [Capability Drop](#capability-drop-optional)). A warning is logged if set to `true`. |
+| `ALLOW_EXTERNAL_PROXY_ACCESS` | `false` | Set to `true` to allow external connections to the proxy port (`PROXY_PORT`, default: 3128). By default, the port is only accessible from the Docker network. **Requires `PROXY_USER` and `PROXY_PASS`**: the container refuses to start an unauthenticated proxy that is reachable from outside (see `ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY`). ⚠️ **Firewall-permissive mode** — only use if you understand the security implications. |
+| `ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY` | `false` | Explicit override: allow `ALLOW_EXTERNAL_PROXY_ACCESS=true` **without** credentials. This creates an open proxy - anyone who can reach the port can use your VPN. Not recommended. |
+| `PROXY_ALLOW_PRIVATE_NETWORKS` | `false` | By default, proxy clients **cannot** reach private networks through the proxy (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, the Tailscale range `100.64.0.0/10`, link-local, and the container's own loopback services). Set to `true` to allow it (e.g. to browse LAN or tailnet web UIs through the proxy). |
+| `PROXY_RUN_USER` | `vpn` | Unprivileged user that Privoxy runs as. Also used by the iptables rule that blocks proxy access to private networks. |
 
 ---
 
@@ -367,12 +370,14 @@ At container startup, `start.sh` installs iptables rules with a **DROP-by-defaul
 
 - **No traffic exits the container** unless it goes through the VPN tunnel (`tun+` / `tap+` interfaces)
 - If the VPN tunnel drops, internet connectivity is fully blocked — nothing leaks in plaintext
-- DNS is only permitted to `127.0.0.1:53` (local dnsmasq) and the upstream IPs declared in `dnsmasq.conf`
+- Once the kill switch is active, upstream DNS (plain port 53 and DoT port 853) is only allowed **through the tunnel**. If the tunnel drops, DNS resolution fails instead of leaking through the physical interface. The VPN server IPs are pinned at startup, so reconnecting does not need DNS.
+- During startup (and during a full supervisor restart cycle, while the proxy is stopped), DNS to `DNS_SERVER_1` / `DNS_SERVER_2` is temporarily allowed outside the tunnel to resolve the VPN and DoT server names. It is closed again before the proxy starts.
 - The Docker internal network (`eth0` subnet) is always allowed so the container remains reachable on port `PROXY_PORT` (default: `3128`)
+- Proxy clients cannot reach private networks (LAN, Docker host, tailnet, loopback services) unless `PROXY_ALLOW_PRIVATE_NETWORKS=true`
 
 The kill switch is re-applied on every service restart cycle, including supervised restarts after a failure.
 
-**IPv6 is also covered:** `ip6tables` rules mirror the IPv4 rules. If IPv6 is unavailable in the runtime, the setup is skipped gracefully.
+**IPv6 is also covered:** `ip6tables` rules mirror the IPv4 rules. If the container has a global IPv6 address but `ip6tables` does not work, the container **refuses to start** (otherwise IPv6 traffic would bypass the VPN). Fix it by loading the `ip6_tables` kernel module, or disable IPv6 in the container with the sysctl `net.ipv6.conf.all.disable_ipv6=1`.
 
 ---
 
@@ -775,18 +780,30 @@ Fields: `ts` (ISO-8601 UTC), `level` (`INFO`/`WARN`/`ERROR`), `component`, `msg`
 
 ## Capability Drop (Optional)
 
-Enable with `DROP_CAPS=true`. After all services have started (first cycle only), the supervisor process drops all Linux capabilities from its bounding set **except**:
+> **`DROP_CAPS` is deprecated and has no effect.** The previous implementation called `prctl(PR_CAPBSET_DROP)` from a short-lived `python3` child process, which only reduced the capabilities of that child. The supervisor and every daemon kept all of their capabilities. Setting `DROP_CAPS=true` now only logs a warning.
 
-- `CAP_NET_ADMIN` (`12`) — required for iptables, ip route, tunnel management
-- `CAP_NET_RAW` (`13`) — required for ping, healthcheck
-
-Implementation uses `python3` + `ctypes` to call `prctl(PR_CAPBSET_DROP, cap)` directly on the **current process** (bash). This is the only reliable method — `capsh --drop` only affects child processes.
+Reduce capabilities at the **container** level instead. Start from Docker's default set, drop everything, and add back only what the stack uses:
 
 ```yaml
-DROP_CAPS: "true"
+services:
+  openvpn-proxy:
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN         # iptables, routes, tun/wg interfaces
+      - NET_RAW           # iptables / ping
+      - NET_BIND_SERVICE  # dnsmasq binds port 53
+      - SETUID            # privoxy / dnsmasq / unbound drop to unprivileged users
+      - SETGID
+      - CHOWN             # chown of unbound runtime files
+      - DAC_OVERRIDE      # root edits files owned by other users (privoxy config)
+      - FOWNER            # chmod of files owned by other users
+      - KILL              # supervisor stops daemons running as other users
+    security_opt:
+      - no-new-privileges:true
 ```
 
-> **Note:** This only affects the supervisor bash process itself — child processes (OpenVPN, unbound, Privoxy, etc.) that were already started retain their own capabilities. If `python3` is missing, the drop is skipped gracefully (logged as WARN).
+> ⚠️ Test this on your setup before relying on it (start the container, check the logs for `Operation not permitted`, confirm the proxy and tunnel work). Remove a capability only after checking that nothing breaks.
 
 ---
 
@@ -1050,7 +1067,6 @@ services:
       # DOT_TLS_CERT_BUNDLE: "/vpn/dot-ca.pem"
       # DNS_SPLIT: "corp.local=10.0.0.53"
       ENABLE_METRICS: "true"
-      DROP_CAPS: "true"
 ```
 
 ### With DNS Blocklist (strict filtering)
@@ -1140,7 +1156,6 @@ services:
 
       # Metrics
       ENABLE_METRICS: "true"
-      DROP_CAPS: "true"
 
 volumes:
   tailscale-state:
@@ -1239,10 +1254,14 @@ docker buildx build \
   --push .
 ```
 
-You can pin the Tailscale version at build time:
+The Tailscale version is pinned in the `Dockerfile` (`TAILSCALE_VERSION`) and each downloaded archive is verified against a SHA256 checksum (`TAILSCALE_SHA256_AMD64` / `TAILSCALE_SHA256_ARM64`). The build fails if the checksum does not match. To use another version, pass the version **and** its checksums, taken from `https://pkgs.tailscale.com/stable/tailscale_<version>_<arch>.tgz.sha256`:
 
 ```sh
-docker build --build-arg TAILSCALE_VERSION=1.80.3 -t openvpn-client-proxy:latest .
+docker build \
+  --build-arg TAILSCALE_VERSION=<version> \
+  --build-arg TAILSCALE_SHA256_AMD64=<sha256 of the amd64 archive> \
+  --build-arg TAILSCALE_SHA256_ARM64=<sha256 of the arm64 archive> \
+  -t openvpn-client-proxy:latest .
 ```
 
 The CI/CD pipeline (`.github/workflows/docker-publish.yml`) automatically builds and pushes to Docker Hub on every push to `main` or on version tags (`v*`).
