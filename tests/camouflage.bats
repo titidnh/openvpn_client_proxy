@@ -99,3 +99,50 @@ CONF
     run stop_stunnel
     [ "$status" -eq 0 ]
 }
+
+@test "generate_stunnel_conf ignores non-camouflage endpoints (fallback pins)" {
+    VPN_REMOTE_IPS="1.2.3.4|443|tcp 1.2.3.4|1194|udp"
+    generate_stunnel_conf "$CAMOUFLAGE_STUNNEL_CONF"
+    grep -q '^connect = 1.2.3.4:443$' "$CAMOUFLAGE_STUNNEL_CONF"
+    run grep -q '^connect = .*:1194$' "$CAMOUFLAGE_STUNNEL_CONF"
+    [ "$status" -ne 0 ]
+}
+
+@test "generate_stunnel_conf always sets CAfile when verifying (no host)" {
+    VPN_REMOTE_MAP=""
+    generate_stunnel_conf "$CAMOUFLAGE_STUNNEL_CONF"
+    grep -q '^CAfile = ' "$CAMOUFLAGE_STUNNEL_CONF"
+    run grep -q '^verify = 2$' "$CAMOUFLAGE_STUNNEL_CONF"
+    [ "$status" -ne 0 ]
+}
+
+@test "generate_stunnel_conf skips checkHost with several hostnames" {
+    VPN_REMOTE_MAP="a.example.com=1.2.3.4 b.example.com=5.6.7.8"
+    generate_stunnel_conf "$CAMOUFLAGE_STUNNEL_CONF"
+    run grep -q '^checkHost' "$CAMOUFLAGE_STUNNEL_CONF"
+    [ "$status" -ne 0 ]
+    grep -q '^verifyChain = yes$' "$CAMOUFLAGE_STUNNEL_CONF"
+}
+
+@test "build_camouflaged_openvpn_conf strips UDP-only options" {
+    src="$(mktemp)"
+    printf 'client\nproto udp\nremote h 1194\nfast-io\nfragment 1300\nexplicit-exit-notify 2\nverb 3\n' > "$src"
+    out="$(mktemp)"
+    build_camouflaged_openvpn_conf "$src" "$out"
+    run grep -Eq '^(fast-io|fragment|explicit-exit-notify)' "$out"
+    [ "$status" -ne 0 ]
+    grep -q '^verb 3$' "$out"
+    rm -f "$src" "$out"
+}
+
+@test "camouflage_select_endpoints fails when no server speaks TLS" {
+    camouflage_probe_tls() { return 1; }
+    run camouflage_select_endpoints
+    [ "$status" -ne 0 ]
+}
+
+@test "camouflage_select_endpoints keeps only TLS-capable endpoints" {
+    camouflage_probe_tls() { [ "$1" = "5.6.7.8" ]; }
+    camouflage_select_endpoints
+    [ "$CAMOUFLAGE_ENDPOINTS" = "5.6.7.8|443|tcp" ]
+}

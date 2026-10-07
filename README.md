@@ -342,6 +342,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `HEALTHCHECK_IP` | `9.9.9.9` |
 | `ENABLE_CAMOUFLAGE` | `false` | Set to `true` to enable Camouflage mode: the OpenVPN/TCP tunnel is wrapped in a TLS session via stunnel (`CAMOUFLAGE_PORT`, default 443), so the traffic is indistinguishable from HTTPS for an ISP/DPI/hotspot (same as Surfshark's Camouflage mode). OpenVPN only. Your VPN server must accept OpenVPN/TCP on `CAMOUFLAGE_PORT`. |
 | `CAMOUFLAGE_PORT` | `443` | Remote TCP port of the VPN servers used for the TLS-wrapped tunnel. Surfshark Camouflage uses 443. |
+| `CAMOUFLAGE_FALLBACK` | `true` | If no VPN server answers a TLS handshake on `CAMOUFLAGE_PORT`, start plain (non-obfuscated) OpenVPN with your original `vpn.conf` instead of failing (loud `WARN` in the logs). `false` = fail closed with an explicit error. The kill switch pins the same VPN server IPs on both ports. |
 | `CAMOUFLAGE_LOCAL_PORT` | `1194` | Local loopback port stunnel listens on for the inner OpenVPN connection (127.0.0.1 only). |
 | `CAMOUFLAGE_TLS_VERIFY` | `true` | Verify the VPN server's TLS certificate chain and hostname (SNI). Set to `false` only for testing with self-signed servers — the inner OpenVPN TLS layer still authenticates the server. | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
 | `ROUTE_TEST_IP` | `9.9.9.9` | IP used to test basic routing/connectivity from inside the container. |
@@ -366,6 +367,33 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY` | `false` | Explicit override: allow `ALLOW_EXTERNAL_PROXY_ACCESS=true` **without** credentials. This creates an open proxy - anyone who can reach the port can use your VPN. Not recommended. |
 | `PROXY_ALLOW_PRIVATE_NETWORKS` | `false` | By default, proxy clients **cannot** reach private networks through the proxy (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, the Tailscale range `100.64.0.0/10`, link-local, and the container's own loopback services). Set to `true` to allow it (e.g. to browse LAN or tailnet web UIs through the proxy). |
 | `PROXY_RUN_USER` | `vpn` | Unprivileged user that Privoxy runs as. Also used by the iptables rule that blocks proxy access to private networks. |
+
+### 🥸 Camouflage mode — how to enable it (and when it cannot work)
+
+**Chain:** `OpenVPN -> 127.0.0.1:1194 -> stunnel (TLS client) -> <server>:443`.
+
+**Requirement — read this first.** `stunnel` sends a TLS `ClientHello`. The server must therefore *terminate TLS* on `CAMOUFLAGE_PORT` and forward to OpenVPN (server-side `stunnel`/`sslh`, or a provider "OpenVPN over SSL/TLS" endpoint). A standard `OpenVPN/TCP 443` server (CyberGhost `*.cg-dialup.net:443`, Surfshark `.ovpn` files) speaks **plain OpenVPN** on 443: it ignores the TLS handshake and the tunnel never comes up. Surfshark's in-app "Camouflage" is a server-side XOR obfuscation that is not available through manual `.ovpn` files, so it cannot be reproduced with `stunnel`.
+
+**Enable:**
+
+```yaml
+environment:
+  ENABLE_CAMOUFLAGE: "true"
+  CAMOUFLAGE_PORT: "443"        # TLS port of YOUR server
+  CAMOUFLAGE_TLS_VERIFY: "true" # "false" for a self-signed server
+  CAMOUFLAGE_FALLBACK: "true"   # see below
+```
+
+`vpn.conf` stays your normal provider file (`remote`, `proto`, `<connection>` are ignored/rewritten in a temporary copy; UDP-only options `fast-io`, `fragment`, `explicit-exit-notify` are dropped).
+
+**What happens at startup** (look for `component=camouflage` in `docker logs`):
+
+1. The container probes each `tcp/CAMOUFLAGE_PORT` endpoint with a TLS handshake.
+2. `TLS probe OK` -> stunnel starts and OpenVPN connects through it (`camouflage mode active`).
+3. `TLS probe FAILED` on every server -> with `CAMOUFLAGE_FALLBACK=true` the VPN starts **without** obfuscation using your original `vpn.conf` (`camouflage UNAVAILABLE - falling back`); with `false` the container stops with an explicit error.
+
+Debug: `docker exec <ctr> cat /tmp/stunnel-camouflage.log` (stunnel) and `docker logs <ctr> | grep camouflage`.
+
 
 ---
 

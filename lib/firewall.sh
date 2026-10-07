@@ -285,17 +285,30 @@ firewall_early_lockdown() {
         # d origine (OpenVPN se connecte a stunnel en local sur lo).
         while read -r r_host r_port r_proto; do
             [ -n "${r_host:-}" ] || continue
+            # Endpoints a epingler : en camouflage, tcp/CAMOUFLAGE_PORT ; avec
+            # CAMOUFLAGE_FALLBACK (defaut true), on epingle AUSSI le port/proto
+            # d origine pour que le repli en OpenVPN classique reste possible
+            # (memes IPs de serveurs VPN : aucune ouverture vers un tiers).
+            local r_eps="$r_port|$r_proto"
             if [ "${ENABLE_CAMOUFLAGE:-false}" = "true" ]; then
-                r_proto="tcp"
-                r_port="${CAMOUFLAGE_PORT:-443}"
+                r_eps="${CAMOUFLAGE_PORT:-443}|tcp"
+                if [ "${CAMOUFLAGE_FALLBACK:-true}" != "false" ] &&
+                    [ "$r_eps" != "$r_port|$r_proto" ]; then
+                    r_eps="$r_eps $r_port|$r_proto"
+                fi
             fi
+            local r_ep
             if [[ "$r_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$r_host" =~ : ]]; then
-                VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_host|$r_port|$r_proto"
+                for r_ep in $r_eps; do
+                    VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_host|$r_ep"
+                done
             else
                 resolve_cached "$r_host"
                 while read -r r_ip; do
                     [ -n "${r_ip:-}" ] || continue
-                    VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_ip|$r_port|$r_proto"
+                    for r_ep in $r_eps; do
+                        VPN_REMOTE_IPS="$VPN_REMOTE_IPS $r_ip|$r_ep"
+                    done
                 done <<< "${RESOLVE_CACHE[$r_host]}"
             fi
         done < <(parse_vpn_remotes "$VPN_CONF")

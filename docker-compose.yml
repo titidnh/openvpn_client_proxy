@@ -107,12 +107,16 @@ services:
       # de l'app Surfshark). Le tunnel OpenVPN est encapsule dans une
       # session TLS via stunnel sur le port 443 : indifferenciable du
       # HTTPS pour un FAI / DPI / hotspot. Necessite un serveur VPN
-      # qui accepte OpenVPN/TCP sur le port CAMOUFLAGE_PORT.
+      # qui TERMINE le TLS sur CAMOUFLAGE_PORT (stunnel/sslh cote serveur).
+      # CyberGhost / Surfshark (.ovpn) : NON supportes -> sonde + repli.
       # =================================================================
       ENABLE_CAMOUFLAGE: "false"
       CAMOUFLAGE_PORT: "443"
       CAMOUFLAGE_LOCAL_PORT: "1194"
       CAMOUFLAGE_TLS_VERIFY: "true"
+      # true = si aucun serveur ne repond en TLS sur CAMOUFLAGE_PORT, repli
+      # sur OpenVPN classique (WARN) ; false = le conteneur echoue.
+      CAMOUFLAGE_FALLBACK: "true"
 
       # =================================================================
       # PROFIL: STRICT-FILTERING (DoT + DNS Blocklist)

@@ -121,30 +121,48 @@ fi
 # local et se connecte aux serveurs VPN epingles en tcp/CAMOUFLAGE_PORT.
 # ===========================================================================
 if [ "${ENABLE_CAMOUFLAGE:-false}" = "true" ]; then
+    camo_ok=0
+    camo_reason=""
+
     if ! command_exists stunnel; then
-        log_json ERROR "openvpn.sh" \
-            "ENABLE_CAMOUFLAGE=true but stunnel is not installed"
-        exit 1
-    fi
-    if ! start_stunnel; then
-        log_json ERROR "openvpn.sh" "camouflage: stunnel failed to start"
-        exit 1
-    fi
-    umask 077
-    camo_conf="$(mktemp /dev/shm/vpn.camouflage.XXXXXX 2>/dev/null \
-        || mktemp /run/vpn.camouflage.XXXXXX 2>/dev/null \
-        || mktemp /tmp/vpn.camouflage.XXXXXX)"
-    if build_camouflaged_openvpn_conf "$conf" "$camo_conf"; then
-        conf="$camo_conf"
-        log_json INFO "openvpn.sh" \
-            "camouflage mode active - OpenVPN wrapped in TLS via stunnel" \
-            "remote_port=${CAMOUFLAGE_PORT:-443}"
+        camo_reason="stunnel is not installed"
+    elif ! camouflage_select_endpoints; then
+        camo_reason="no VPN server answers a TLS handshake on tcp/${CAMOUFLAGE_PORT:-443} (standard OpenVPN/TCP servers speak plain OpenVPN there - they need a TLS-terminating front)"
+    elif ! start_stunnel; then
+        camo_reason="stunnel failed to start"
     else
-        log_json ERROR "openvpn.sh" \
-            "camouflage: failed to build the camouflaged config"
-        rm -f "$camo_conf"
-        stop_stunnel
-        exit 1
+        umask 077
+        camo_conf="$(mktemp /dev/shm/vpn.camouflage.XXXXXX 2>/dev/null \
+            || mktemp /run/vpn.camouflage.XXXXXX 2>/dev/null \
+            || mktemp /tmp/vpn.camouflage.XXXXXX)"
+        if build_camouflaged_openvpn_conf "$conf" "$camo_conf"; then
+            conf="$camo_conf"
+            camo_ok=1
+            log_json INFO "openvpn.sh" \
+                "camouflage mode active - OpenVPN wrapped in TLS via stunnel" \
+                "remote_port=${CAMOUFLAGE_PORT:-443}" \
+                "endpoints=${CAMOUFLAGE_ENDPOINTS:-}"
+        else
+            camo_reason="failed to build the camouflaged config"
+            rm -f "$camo_conf"
+            stop_stunnel
+        fi
+    fi
+
+    if [ "$camo_ok" -eq 0 ]; then
+        if [ "${CAMOUFLAGE_FALLBACK:-true}" != "false" ]; then
+            # Les IPs des serveurs VPN sont deja epinglees au pare-feu sur le
+            # port/proto d origine (firewall.sh) : le repli reste fail-closed.
+            log_json WARN "openvpn.sh" \
+                "camouflage UNAVAILABLE - falling back to plain OpenVPN (NOT obfuscated)" \
+                "reason=${camo_reason}" \
+                "hint=set ENABLE_CAMOUFLAGE=false to silence, or CAMOUFLAGE_FALLBACK=false to fail instead"
+        else
+            log_json ERROR "openvpn.sh" \
+                "camouflage requested but unavailable (CAMOUFLAGE_FALLBACK=false)" \
+                "reason=${camo_reason}"
+            exit 1
+        fi
     fi
 fi
 

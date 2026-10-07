@@ -758,6 +758,7 @@ init_environment() {
     : "${CAMOUFLAGE_PORT:=443}"
     : "${CAMOUFLAGE_LOCAL_PORT:=1194}"
     : "${CAMOUFLAGE_TLS_VERIFY:=true}"
+    : "${CAMOUFLAGE_FALLBACK:=true}"
 
     # VPN configuration
     : "${VPN_TYPE:=openvpn}"
