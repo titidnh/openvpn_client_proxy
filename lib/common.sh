@@ -170,6 +170,7 @@ validate_environment() {
 
     # Valider les boolÃƒÂ©ens
     validate_boolean "ENABLE_DOT" "${ENABLE_DOT:-false}" || validation_failed=1
+    validate_boolean "DNS_BYPASS_VPN" "${DNS_BYPASS_VPN:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNS_BLOCKLIST" "${ENABLE_DNS_BLOCKLIST:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
 
@@ -767,6 +768,9 @@ init_environment() {
     : "${DNS_PORT:=$DEFAULT_DNS_PORT}"
     : "${HEALTHCHECK_IP:=$DEFAULT_HEALTHCHECK_IP}"
     : "${ROUTE_TEST_IP:=$DEFAULT_ROUTE_TEST_IP}"
+    # false = DNS via le tunnel uniquement (comportement historique).
+    # true  = DNS_SERVER_1/2 et serveurs DoT/DoH joints via le reseau local.
+    : "${DNS_BYPASS_VPN:=false}"
     
     # DoT
     : "${ENABLE_DOT:=false}"

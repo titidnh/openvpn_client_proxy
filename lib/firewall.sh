@@ -75,8 +75,10 @@ ipt_add_853() {
     # S1 : apres setup_iptables, le trafic DoT passe deja par les regles
     # "-o tun+/tap+/wg+ -j ACCEPT". Une regle 853 SANS interface laisserait
     # unbound joindre le serveur DoT via eth0 (IP reelle) des que le tunnel
-    # tombe : ne rien ajouter dans ce mode.
-    if [ "${FW_TUNNEL_ONLY:-0}" = "1" ]; then
+    # tombe : ne rien ajouter dans ce mode. EXCEPTION DNS_BYPASS_VPN : le
+    # DoT est volontairement epingle hors du tunnel (DNS local), la regle
+    # reste necessaire apres un redemarrage d unbound sous kill switch.
+    if [ "${FW_TUNNEL_ONLY:-0}" = "1" ] && ! dns_bypass_enabled; then
         return 0
     fi
     # Idempotent : verifier (-C) avant d'ajouter (-A), sinon chaque refresh
@@ -121,6 +123,148 @@ firewall_open_bootstrap_dns() {
 
     log_json INFO "firewall" \
         "bootstrap DNS re-opened for restart cycle (proxy stopped)"
+}
+
+# ===========================================================================
+# Bypass VPN pour DNS locaux (DNS_BYPASS_VPN=true)
+#
+# Par defaut (false), tout le DNS amont passe par le tunnel (S1) : comportement
+# historique, aucune fuite. Avec un resolveur LOCAL (DNS de la box, Pi-hole du
+# LAN...), le tunnel ne peut pas l'atteindre : DNS_BYPASS_VPN=true epingle ces
+# serveurs hors du tunnel, pour DNS_SERVER_1/2 (53) en mode classique comme
+# pour les serveurs DoT/DoH (853/443) - regles ACCEPT par destination (sans
+# restriction d interface) et routes hotes via la passerelle physique, sinon
+# redirect-gateway / routes /1 du VPN avalent le trafic DNS.
+#
+# Contrepartie assumee : ces requetes sortent par le reseau local (en clair
+# en mode classique) et restent fonctionnelles tunnel tombe. A activer
+# uniquement avec un DNS du reseau local, jamais avec un DNS public.
+# ===========================================================================
+
+# Usage: dns_bypass_enabled
+dns_bypass_enabled() {
+    [ "${DNS_BYPASS_VPN:-false}" = "true" ]
+}
+
+# IPs a epingle hors du tunnel : DNS_SERVER_1/2 en mode classique, sinon les
+# IPs resolues des serveurs DoT/DoH (variable courante + cache persistant
+# DOT_IP_MAP_FILE, alimente au bootstrap et apres chaque refresh).
+# Usage: dns_bypass_ips
+dns_bypass_ips() {
+    if [ "${ENABLE_DOT:-false}" = "true" ]; then
+        {
+            printf '%s\n' ${DOT_RESOLVED_IPS:-}
+            [ -f "${DOT_IP_MAP_FILE:-}" ] &&
+                cut -d= -f2- "${DOT_IP_MAP_FILE}" 2>/dev/null
+        } | awk 'NF'
+    else
+        printf '%s\n' ${DNS_SERVER_1:-} ${DNS_SERVER_2:-} | awk 'NF'
+    fi
+}
+
+# Port DoT/DoH d une IP resolue : lu dans DOT_FORWARD_ADDRS_FILE
+# ("forward-addr: ip@port#host", 853 pour tls://, 443 pour https://).
+# Usage: _dns_bypass_dot_port <ip> <port_defaut>
+_dns_bypass_dot_port() {
+    local ip="$1" default_port="$2" line
+    [ -f "${DOT_FORWARD_ADDRS_FILE:-}" ] || { printf '%s\n' "$default_port"; return 0; }
+    line=$(grep -F "${ip}@" "${DOT_FORWARD_ADDRS_FILE}" 2>/dev/null | head -1 || true)
+    line="${line#*@}"
+    line="${line%%#*}"
+    if [ -n "$line" ] && [ "$line" != "$ip" ]; then
+        printf '%s\n' "$line"
+    else
+        printf '%s\n' "$default_port"
+    fi
+}
+
+# Regles ACCEPT du bypass, idempotentes (-C avant -A). Sans restriction
+# d interface : le DNS local reste joignable via le reseau physique meme si
+# le tunnel tombe (c est le but du bypass, pas une fuite accidentelle).
+# A appeler APRES le flush de setup_iptables / setup_ip6tables.
+# Usage: dns_bypass_allow_firewall
+dns_bypass_allow_firewall() {
+    dns_bypass_enabled || return 0
+
+    local ip port added=0 proto
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if [ "${ENABLE_DOT:-false}" = "true" ]; then
+            port=$(_dns_bypass_dot_port "$ip" 853)
+            if [[ "$ip" =~ : ]]; then
+                ipt6 -C OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT 2>/dev/null ||
+                    ipt6 -A OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT
+            else
+                iptables -C OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT 2>/dev/null ||
+                    iptables -A OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT
+            fi
+        else
+            # DNS classique : 53 uniquement en IPv4 (DNS_SERVER_* valides IPv4)
+            [[ "$ip" =~ : ]] && continue
+            for proto in udp tcp; do
+                iptables -C OUTPUT -p "$proto" -d "$ip" --dport 53 -j ACCEPT 2>/dev/null ||
+                    iptables -A OUTPUT -p "$proto" -d "$ip" --dport 53 -j ACCEPT
+            done
+        fi
+        added=$((added + 1))
+    done < <(dns_bypass_ips)
+
+    if [ "$added" -gt 0 ]; then
+        log_json INFO "dns_bypass" \
+            "DNS upstream pinned outside the VPN tunnel (DNS_BYPASS_VPN=true)" \
+            "servers=${added}" \
+            "mode=$( [ "${ENABLE_DOT:-false}" = "true" ] && printf dot || printf classic )"
+    else
+        log_json WARN "dns_bypass" \
+            "DNS_BYPASS_VPN=true but no DNS server found to pin"
+    fi
+    return 0
+}
+
+# Routes hotes vers les serveurs DNS epingles via la passerelle physique.
+# Sans cela, redirect-gateway (OpenVPN) ou les routes 0.0.0.0/1+128.0.0.0/1
+# (WireGuard) envoient les requetes DNS DANS le tunnel ou le resolveur local
+# est injoignable. Idempotent (ip route replace) : rappelable a chaque
+# retour de tunnel ou refresh d IPs DoT. Passerelle IPv4 de repli lue dans
+# le snapshot de demarrage (un redirect-gateway sans def1 supprime le
+# default physique, snapshot_default_route).
+# Usage: dns_bypass_install_routes
+dns_bypass_install_routes() {
+    dns_bypass_enabled || return 0
+
+    local phys_iface gw="" gw6="" ip ok=0
+    phys_iface=$(get_physical_iface)
+    phys_iface="${phys_iface:-eth0}"
+
+    gw=$(ip -4 route show dev "$phys_iface" 2>/dev/null |
+        awk '/^default/{print $3; exit}')
+    [ -n "$gw" ] || gw=$(cat /tmp/.default_gw 2>/dev/null || true)
+    gw6=$(ip -6 route show dev "$phys_iface" 2>/dev/null |
+        awk '/^default/{print $3; exit}')
+
+    if [ -z "$gw" ] && [ -z "$gw6" ]; then
+        log_json WARN "dns_bypass" \
+            "no physical gateway found - DNS bypass routes not installed" \
+            "iface=${phys_iface}"
+        return 1
+    fi
+
+    while IFS= read -r ip; do
+        [ -n "$ip" ] || continue
+        if [[ "$ip" =~ : ]]; then
+            [ -n "$gw6" ] || continue
+            ip -6 route replace "$ip" via "$gw6" dev "$phys_iface" 2>/dev/null || true
+        else
+            [ -n "$gw" ] || continue
+            ip route replace "${ip}/32" via "$gw" dev "$phys_iface" 2>/dev/null || true
+        fi
+        ok=$((ok + 1))
+    done < <(dns_bypass_ips)
+
+    [ "$ok" -gt 0 ] && log_json INFO "dns_bypass" \
+        "DNS bypass host routes installed" \
+        "iface=${phys_iface}" "gw=${gw:-v6}" "servers=${ok}"
+    return 0
 }
 
 # S5 : vrai si le conteneur a une connectivite IPv6 reelle (adresse globale).
@@ -657,6 +801,11 @@ setup_iptables() {
     log_json INFO "setup_iptables" \
         "DNS/DoT upstream allowed through the VPN tunnel only"
 
+    # DNS_BYPASS_VPN=true : serveurs DNS locaux epingles hors du tunnel
+    # (regles ACCEPT par destination + routes hotes). No-op sinon.
+    dns_bypass_allow_firewall
+    dns_bypass_install_routes
+
     # Retire la regle de bootstrap tcp/443 posee par firewall_early_lockdown
     # (les regles VPN ciblees et l'interface tun prennent le relais).
     iptables -D OUTPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
@@ -862,6 +1011,10 @@ setup_ip6tables() {
         ipt6 -A OUTPUT -o "$phys_iface_v6" -d "$r6_ip" -p "$r6_proto" --dport "$r6_port" -j ACCEPT
     done
 
+    # DNS_BYPASS_VPN=true : regles ACCEPT IPv6 des serveurs DoT epingles
+    # hors du tunnel (le ipt6 -F ci-dessus a efface celles de setup_iptables).
+    dns_bypass_allow_firewall
+
     ipt6 -t nat -A POSTROUTING -o tun+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o tap+ -j MASQUERADE
     ipt6 -t nat -A POSTROUTING -o wg+ -j MASQUERADE
@@ -1013,6 +1166,12 @@ setup_return_routes() {
     log_json INFO "setup_return_routes" \
         "return routes configured" \
         "iface=${iface}"
+
+    # DNS_BYPASS_VPN=true : re-affirme les routes hotes des serveurs DNS
+    # locaux - le tunnel vient de poser ses routes par defaut (redirect-gateway
+    # ou 0.0.0.0/1+128.0.0.0/1), les routes DNS doivent rester via eth0.
+    # Idempotent ; appele aussi apres chaque restart du VPN.
+    dns_bypass_install_routes
 }
 
 # ===========================================================================

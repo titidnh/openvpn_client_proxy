@@ -234,3 +234,66 @@ leaky_dns_rules() {
     run ! grep -qE 'ip (-6 )?route add "\$endpoint_ip"' "$REPO/lib/wireguard.sh"
     grep -qE 'ip route replace "\$endpoint_ip"' "$REPO/lib/wireguard.sh"
 }
+
+@test "S10: validate_environment rejects an invalid DNS_BYPASS_VPN" {
+    export DNS_BYPASS_VPN="maybe"
+    run validate_environment
+    [ "$status" -eq 1 ]
+    export DNS_BYPASS_VPN="true"
+    run validate_environment
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# DNS Blocklist : le fragment compile doit etre charge quel que soit le mode
+# (DoT on/off x DNSSEC on/off). Regression : le blocage ne doit jamais
+# dependre de ces options.
+# ---------------------------------------------------------------------------
+
+@test "blocklist fragment is loaded by dnsmasq in classic mode (DoT off, DNSSEC irrelevant)" {
+    source "$REPO/lib/dns_runtime.sh"
+
+    ENABLE_DOT="false"
+    ENABLE_DNS_BLOCKLIST="true"
+    DNS_BLOCKLIST_COMPILED_DNSMASQ="$BATS_TEST_TMPDIR/blocklist_dnsmasq.conf"
+    printf 'address=/ads.example.com/0.0.0.0\n' > "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+
+    local sec
+    for sec in false true; do
+        ENABLE_DNSSEC="$sec"
+        configure_dnsmasq
+        grep -q "conf-file=${DNS_BLOCKLIST_COMPILED_DNSMASQ}" "$DNSMASQ_CONF"
+    done
+}
+
+
+@test "blocklist fragment is included by unbound in DoT mode with and without DNSSEC" {
+    source "$REPO/lib/dns_runtime.sh"
+    source "$REPO/lib/dot.sh"
+
+    ENABLE_DOT="true"
+    ENABLE_DNS_BLOCKLIST="true"
+    DNS_BLOCKLIST_COMPILED_UNBOUND="$BATS_TEST_TMPDIR/blocklist_unbound.conf"
+    DOT_FORWARD_ADDRS_FILE="$BATS_TEST_TMPDIR/dot_forward_addrs"
+    DOT_IP_MAP_FILE="$BATS_TEST_TMPDIR/dot_ip_map"
+    UNBOUND_CONF="$BATS_TEST_TMPDIR/unbound.conf"
+    printf 'local-zone: "ads.example." always_nxdomain\n' > "$DNS_BLOCKLIST_COMPILED_UNBOUND"
+    printf '        forward-addr: 94.140.14.49@853#dns.adguard-dns.com\n' > "$DOT_FORWARD_ADDRS_FILE"
+
+    # Pas de reseau : la resolution des hotes DoT est neutralisee.
+    parse_dot_servers() { return 0; }
+    # unbound est "present", unbound-checkconf "absent" (chemin ecriture seule).
+    command_exists() { [ "$1" = "unbound" ] && return 0; return 1; }
+    # Side effects systeme neutralises : le test ne doit pas exiger le root.
+    mkdir() { return 0; }
+    chown() { return 0; }
+    unbound-anchor() { return 0; }
+
+    local sec
+    for sec in false true; do
+        ENABLE_DNSSEC="$sec"
+        : > "$UNBOUND_CONF"
+        configure_unbound
+        grep -q "include: \"${DNS_BLOCKLIST_COMPILED_UNBOUND}\"" "$UNBOUND_CONF"
+    done
+}

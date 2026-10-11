@@ -327,6 +327,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
 | `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Family — blocks ads and adult content). |
+| `DNS_BYPASS_VPN` | `false` | Route upstream DNS servers (`DNS_SERVER_1`/`DNS_SERVER_2` in plain mode, DoT/DoH servers in `ENABLE_DOT=true` mode) through the **local network** instead of the VPN tunnel — firewall ACCEPT rules + host routes via the physical gateway. Only for a **local** resolver (box DNS, LAN Pi-hole). `false` (default): all DNS goes through the tunnel. See [Local DNS bypass](#local-dns-bypass-dns_bypass_vpn). |
 | `PROXY_PORT` | `3128` | TCP port for the HTTP proxy. **Without auth:** Privoxy listens on `0.0.0.0:PROXY_PORT`. **With auth:** Privoxy listens internally on `127.0.0.1:PROXY_PORT+1` and tinyproxy fronts on `0.0.0.0:PROXY_PORT`. Example: `PROXY_PORT=8080` → tinyproxy `0.0.0.0:8080` → Privoxy `127.0.0.1:8081`. |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
 | `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth (tinyproxy `BasicAuth`). **Only `[A-Za-z0-9._-]` characters are accepted** — tinyproxy rejects passwords containing spaces or special characters like `! @ $ : / , ;` (the container fails fast with an explicit error). For arbitrary passwords, front the proxy with Squid/3proxy instead. |
@@ -372,6 +373,7 @@ At container startup, `start.sh` installs iptables rules with a **DROP-by-defaul
 - If the VPN tunnel drops, internet connectivity is fully blocked — nothing leaks in plaintext
 - Once the kill switch is active, upstream DNS (plain port 53 and DoT port 853) is only allowed **through the tunnel**. If the tunnel drops, DNS resolution fails instead of leaking through the physical interface. The VPN server IPs are pinned at startup, so reconnecting does not need DNS.
 - During startup (and during a full supervisor restart cycle, while the proxy is stopped), DNS to `DNS_SERVER_1` / `DNS_SERVER_2` is temporarily allowed outside the tunnel to resolve the VPN and DoT server names. It is closed again before the proxy starts.
+- **Exception — `DNS_BYPASS_VPN=true`:** the configured DNS servers (`DNS_SERVER_1`/`DNS_SERVER_2`, or the DoT/DoH servers when `ENABLE_DOT=true`) are deliberately pinned outside the tunnel (firewall ACCEPT by destination + host route via the physical gateway). They remain reachable through the local network even when the tunnel is down. This is an opt-in deviation intended **only** for a local resolver — see [Local DNS bypass](#local-dns-bypass-dns_bypass_vpn).
 - The Docker internal network (`eth0` subnet) is always allowed so the container remains reachable on port `PROXY_PORT` (default: `3128`)
 - Proxy clients cannot reach private networks (LAN, Docker host, tailnet, loopback services) unless `PROXY_ALLOW_PRIVATE_NETWORKS=true`
 
@@ -531,6 +533,51 @@ docker exec <container> nslookup example.com 8.8.8.8
 
 # Should work — via local chain: dnsmasq → unbound → DoT
 docker exec <container> nslookup example.com 127.0.0.1
+```
+
+---
+
+## Local DNS bypass (DNS_BYPASS_VPN)
+
+By default, **all upstream DNS traffic goes through the VPN tunnel** (kill switch): `DNS_SERVER_1` / `DNS_SERVER_2` in plain mode, the DoT/DoH servers when `ENABLE_DOT=true`. This is the correct behaviour for a public resolver.
+
+But if your DNS server is **local** (your box's resolver, a Pi-hole on the LAN, a corporate resolver), the tunnel cannot reach it: private LAN addresses are not routable through the VPN. Set `DNS_BYPASS_VPN=true` to pin those servers through the **local network** instead of the tunnel:
+
+```yaml
+environment:
+  DNS_SERVER_1: "192.168.1.1"     # local resolver (box)
+  DNS_SERVER_2: "192.168.1.1"
+  DNS_BYPASS_VPN: "true"
+```
+
+Works in both modes:
+
+| Mode | Pinned servers | Ports |
+|---|---|---|
+| `ENABLE_DOT=false` (plain) | `DNS_SERVER_1` / `DNS_SERVER_2` | 53 (UDP+TCP) |
+| `ENABLE_DOT=true` (DoT/DoH) | resolved IPs of `DOT_DNS_SERVERS` | 853 (DoT) / 443 (DoH), per resolved IP |
+
+### How it works
+
+- The firewall adds idempotent ACCEPT rules by destination (no interface restriction), re-applied on every kill-switch rebuild and after every unbound restart.
+- Host routes (`ip route replace <ip>/32 via <physical gateway>`) keep the DNS traffic on the physical interface when the tunnel is up — otherwise `redirect-gateway` (OpenVPN) or the `0.0.0.0/1` + `128.0.0.0/1` routes (WireGuard) would swallow it into the tunnel. Routes are re-asserted after every tunnel (re)connection and after every DoT IP refresh.
+- DoT/DoH IPs are read from the resolved cache (`DOT_IP_MAP_FILE`), so a dynamic-IP DoT server keeps working.
+
+### Security trade-offs (opt-in)
+
+- DNS queries to those servers leave through your **local network** — in plaintext (port 53) in plain mode, encrypted in DoT/DoH mode.
+- They also keep working when the tunnel is **down** (that's the point — but it means DNS does not fail-closed anymore for those destinations).
+- Only enable this with a **local** resolver. With a public DNS, leave `DNS_BYPASS_VPN=false` (default) so all DNS stays tunnel-only.
+- `DNS_SPLIT` resolvers are not covered by this option; they are only reachable while the tunnel is up.
+
+### Verify
+
+```sh
+docker exec <container> ip route | grep -F "$(docker exec <container> printenv DNS_SERVER_1)"
+# → host route via the physical gateway, not tun0
+
+docker exec <container> iptables -S OUTPUT | grep 'dport 53'
+# → ACCEPT rules for the local DNS servers
 ```
 
 ---

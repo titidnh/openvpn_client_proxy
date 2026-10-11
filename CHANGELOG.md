@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Local DNS bypass** (`DNS_BYPASS_VPN`, default `false`): pins the upstream DNS servers outside the VPN tunnel so a **local** resolver (box DNS, LAN Pi-hole) stays reachable through the physical network
+  - Works in plain mode (`DNS_SERVER_1`/`DNS_SERVER_2`, ports 53 UDP+TCP) and in DoT/DoH mode (resolved server IPs, ports 853/443 per `DOT_FORWARD_ADDRS_FILE`)
+  - Idempotent firewall ACCEPT rules by destination, re-applied on every kill-switch rebuild, unbound restart and DoT IP refresh
+  - Host routes via the physical gateway (`ip route replace`) so `redirect-gateway` (OpenVPN) or the `0.0.0.0/1`+`128.0.0.0/1` routes (WireGuard) don't swallow DNS traffic into the tunnel; re-asserted after every tunnel (re)connection
+  - Security trade-off documented in the README: queries leave through the local network and keep working when the tunnel is down — only enable for local resolvers
+
+---
+
 ## [3.0.0] - 2026-10-07
 
 ### Added

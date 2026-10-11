@@ -650,6 +650,9 @@ restart_unbound_if_needed() {
 
         reconfigure_dnsmasq_to_unbound
 
+        # DNS_BYPASS_VPN : routes hotes a re-affirmer (no-op si desactive)
+        dns_bypass_install_routes
+
         log_json INFO "supervisor" \
             "unbound restarted" \
             "pid=${SERVICE_PIDS[unbound]}"
@@ -670,6 +673,9 @@ restart_unbound_if_needed() {
         SERVICE_PIDS[unbound]=$!
 
         reconfigure_dnsmasq_to_unbound
+
+        # DNS_BYPASS_VPN : routes hotes a re-affirmer (no-op si desactive)
+        dns_bypass_install_routes
 
         return 1
     fi
@@ -794,6 +800,13 @@ _dot_refresh_loop() {
                             "pid=${ub_pid}" \
                             "host=${host}" \
                             "new_ip_count=$(echo "$new_ips" | wc -l)"
+
+                        # DNS_BYPASS_VPN=true : les nouvelles IPs heritent des
+                        # regles ACCEPT et des routes hotes du bypass (les
+                        # anciennes ont ete retirees par ipt_del_853 ci-dessus).
+                        # No-op si le bypass est desactive.
+                        dns_bypass_allow_firewall
+                        dns_bypass_install_routes
                     else
                         log_json WARN "dot_refresh" \
                             "unbound reload validation timeout" \

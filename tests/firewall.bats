@@ -393,3 +393,181 @@ teardown() {
     grep -q -- 'ip route del 0.0.0.0/1' "$out"
     grep -q -- 'ip route del 128.0.0.0/1' "$out"
 }
+
+# ============================================================================
+# Test Group 9: DNS_BYPASS_VPN - bypass des serveurs DNS locaux
+# ============================================================================
+
+@test "dns_bypass_enabled is false by default, true only when set" {
+    unset DNS_BYPASS_VPN
+    ! dns_bypass_enabled
+    DNS_BYPASS_VPN="false"
+    ! dns_bypass_enabled
+    DNS_BYPASS_VPN="true"
+    dns_bypass_enabled
+}
+
+@test "dns_bypass_ips classic mode lists DNS_SERVER_1/2" {
+    ENABLE_DOT="false"
+    local ips
+    ips=$(dns_bypass_ips)
+    grep -qx "8.8.8.8" <<< "$ips"
+    grep -qx "8.8.4.4" <<< "$ips"
+}
+
+@test "dns_bypass_ips DoT mode lists resolved IPs, not classic servers" {
+    ENABLE_DOT="true"
+    local tmp
+    tmp=$(mktemp)
+    printf 'dot.local=1.1.1.1\ndot.local=1.0.0.1\n' > "$tmp"
+    DOT_IP_MAP_FILE="$tmp"
+    DOT_RESOLVED_IPS="1.1.1.1"
+    local ips
+    ips=$(dns_bypass_ips)
+    grep -qx "1.1.1.1" <<< "$ips"
+    grep -qx "1.0.0.1" <<< "$ips"
+    ! grep -qx "8.8.8.8" <<< "$ips"
+    rm -f "$tmp"
+}
+
+@test "_dns_bypass_dot_port reads the port from DOT_FORWARD_ADDRS_FILE" {
+    local fwd
+    fwd=$(mktemp)
+    printf '        forward-addr: 1.1.1.1@853#dot.local\n        forward-addr: 2.2.2.2@443#doh.local\n' > "$fwd"
+    DOT_FORWARD_ADDRS_FILE="$fwd"
+    [ "$(_dns_bypass_dot_port 1.1.1.1 853)" = "853" ]
+    [ "$(_dns_bypass_dot_port 2.2.2.2 853)" = "443" ]
+    [ "$(_dns_bypass_dot_port 9.9.9.9 853)" = "853" ]
+    rm -f "$fwd"
+}
+
+@test "dns_bypass_allow_firewall is a no-op when the bypass is disabled" {
+    : > "$TEST_IPTABLES_LOG"
+    : > "$TEST_IP6TABLES_LOG"
+    DNS_BYPASS_VPN="false"
+    iptables() { echo "iptables $*" >> "$TEST_IPTABLES_LOG"; return 1; }
+    ip6tables() { echo "ip6tables $*" >> "$TEST_IP6TABLES_LOG"; return 1; }
+    export -f iptables ip6tables
+    dns_bypass_allow_firewall
+    [ ! -s "$TEST_IPTABLES_LOG" ]
+    [ ! -s "$TEST_IP6TABLES_LOG" ]
+}
+
+@test "dns_bypass_allow_firewall pins classic DNS servers on port 53" {
+    : > "$TEST_IPTABLES_LOG"
+    DNS_BYPASS_VPN="true"
+    ENABLE_DOT="false"
+    iptables() {
+        [ "$1" = "-C" ] && return 1
+        echo "ADD $*" >> "$TEST_IPTABLES_LOG"
+        return 0
+    }
+    export -f iptables
+    ip6tables() { return 0; }
+    export -f ip6tables
+    dns_bypass_allow_firewall
+    grep -q -- '-d 8.8.8.8 --dport 53 -j ACCEPT' "$TEST_IPTABLES_LOG"
+    grep -q -- '-d 8.8.4.4 --dport 53 -j ACCEPT' "$TEST_IPTABLES_LOG"
+    grep -q -- '-p udp' "$TEST_IPTABLES_LOG"
+    grep -q -- '-p tcp' "$TEST_IPTABLES_LOG"
+}
+
+@test "dns_bypass_allow_firewall pins DoT on 853 and DoH on 443" {
+    : > "$TEST_IPTABLES_LOG"
+    DNS_BYPASS_VPN="true"
+    ENABLE_DOT="true"
+    local fwd map
+    fwd=$(mktemp)
+    map=$(mktemp)
+    printf '        forward-addr: 1.1.1.1@853#dot.local\n        forward-addr: 2.2.2.2@443#doh.local\n' > "$fwd"
+    printf 'dot.local=1.1.1.1\ndoh.local=2.2.2.2\n' > "$map"
+    DOT_FORWARD_ADDRS_FILE="$fwd"
+    DOT_IP_MAP_FILE="$map"
+    DOT_RESOLVED_IPS="1.1.1.1 2.2.2.2"
+    iptables() {
+        [ "$1" = "-C" ] && return 1
+        echo "ADD $*" >> "$TEST_IPTABLES_LOG"
+        return 0
+    }
+    export -f iptables
+    ip6tables() {
+        [ "$1" = "-C" ] && return 1
+        echo "ADD6 $*" >> "$TEST_IP6TABLES_LOG"
+        return 0
+    }
+    export -f ip6tables
+    dns_bypass_allow_firewall
+    grep -q -- '-d 1.1.1.1 --dport 853 -j ACCEPT' "$TEST_IPTABLES_LOG"
+    grep -q -- '-d 2.2.2.2 --dport 443 -j ACCEPT' "$TEST_IPTABLES_LOG"
+    rm -f "$fwd" "$map"
+}
+
+@test "dns_bypass_allow_firewall pins IPv6 DoT servers via ipt6" {
+    : > "$TEST_IP6TABLES_LOG"
+    DNS_BYPASS_VPN="true"
+    ENABLE_DOT="true"
+    local map
+    map=$(mktemp)
+    printf 'dot6.local=2001:4860:4860::8888\n' > "$map"
+    DOT_IP_MAP_FILE="$map"
+    DOT_RESOLVED_IPS=""
+    DOT_FORWARD_ADDRS_FILE=""
+    ip6tables() {
+        [ "$1" = "-C" ] && return 1
+        echo "ADD6 $*" >> "$TEST_IP6TABLES_LOG"
+        return 0
+    }
+    export -f ip6tables
+    dns_bypass_allow_firewall
+    grep -q -- '-d 2001:4860:4860::8888 --dport 853 -j ACCEPT' "$TEST_IP6TABLES_LOG"
+    rm -f "$map"
+}
+
+@test "dns_bypass_install_routes pins host routes via the physical gateway" {
+    local out; out=$(mktemp)
+    : > "$out"
+    DNS_BYPASS_VPN="true"
+    ENABLE_DOT="false"
+    ip() {
+        local a="$*"
+        case "$a" in
+            *"route show default"*) echo "default via 172.17.0.1 dev eth0"; return 0 ;;
+            *"-4 route show dev"*) echo "default via 172.17.0.1 dev eth0"; return 0 ;;
+            *"-6 route show dev"*) return 0 ;;
+            *) echo "ip $a" >> "$out"; return 0 ;;
+        esac
+    }
+    export -f ip
+    dns_bypass_install_routes
+    grep -q -- 'ip route replace 8.8.8.8/32 via 172.17.0.1 dev eth0' "$out"
+    grep -q -- 'ip route replace 8.8.4.4/32 via 172.17.0.1 dev eth0' "$out"
+}
+
+@test "dns_bypass_install_routes is a no-op when the bypass is disabled" {
+    local out; out=$(mktemp)
+    : > "$out"
+    DNS_BYPASS_VPN="false"
+    ip() { echo "ip $*" >> "$out"; return 0; }
+    export -f ip
+    dns_bypass_install_routes
+    [ ! -s "$out" ]
+}
+
+@test "ipt_add_853 stays no-op under kill switch unless DNS_BYPASS_VPN" {
+    : > "$TEST_IPTABLES_LOG"
+    FW_TUNNEL_ONLY=1
+    DNS_BYPASS_VPN="false"
+    iptables() {
+        [ "$1" = "-C" ] && return 1
+        echo "ADD $*" >> "$TEST_IPTABLES_LOG"
+        return 0
+    }
+    export -f iptables
+    ipt_add_853 1.2.3.4
+    [ ! -s "$TEST_IPTABLES_LOG" ]
+
+    DNS_BYPASS_VPN="true"
+    ipt_add_853 1.2.3.4
+    grep -q -- '-d 1.2.3.4 --dport 853 -j ACCEPT' "$TEST_IPTABLES_LOG"
+    FW_TUNNEL_ONLY=0
+}

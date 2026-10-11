@@ -86,6 +86,13 @@ services:
       ENABLE_DOT: "false"
       DNS_SERVER_1: "94.140.14.14"      # AdGuard Default (ads only)
       DNS_SERVER_2: "94.140.15.15"
+
+      # Bypass VPN pour DNS locaux : "false" (défaut) = tout le DNS passe par
+      # le tunnel VPN (recommandé avec un DNS public). "true" = les serveurs
+      # DNS (DNS_SERVER_1/2 en mode classique, serveurs DoT/DoH en mode DoT)
+      # sont joints via le réseau local (eth0) au lieu du tunnel - à réserver
+      # à un résolveur LOCAL (DNS de la box, Pi-hole du LAN).
+      DNS_BYPASS_VPN: "false"
       
       # DNS Blocklist désactivée
       ENABLE_DNS_BLOCKLIST: "false"
@@ -112,6 +119,8 @@ services:
       # DOT_DNS_SERVERS: "tls://dns.adguard-dns.com"
       # DOT_IP_REFRESH_INTERVAL: "3600"       # Refresh DoT IPs toutes les heures
       # ENABLE_DNSSEC: "false"                # Set to true si tous les upstreams supportent DNSSEC
+      # DNS_BYPASS_VPN s'applique aussi en DoT : "true" joint les serveurs
+      # DoT/DoH (853/443) via le réseau local - uniquement pour un DoT local.
       
       # DNS Blocklist (ad-blocking au niveau DNS)
       # ENABLE_DNS_BLOCKLIST: "true"
