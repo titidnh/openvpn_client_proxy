@@ -1,0 +1,23 @@
+# ===========================================================================
+# .gitignore - openvpn_client_proxy
+# Review sécurité 2026-10 : aucun secret ne doit être versionné.
+# Le fichier .env a été retiré du dépôt : utilisez .env.example comme modèle.
+# ===========================================================================
+
+# Configuration locale (peut contenir PROXY_PASS, TAILSCALE_AUTHKEY, ...)
+.env
+.env.*
+!.env.example
+
+# Profils VPN locaux (certificats, clés privées, vpn.auth, wg0.conf)
+vpn/
+*.ovpn
+*.key
+*.pem
+*.crt
+*.p12
+
+# Divers locaux
+*.log
+*.tmp
+.DS_Store

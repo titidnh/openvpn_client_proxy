@@ -114,9 +114,23 @@ if [ -n "${VPN_REMOTE_MAP:-}" ]; then
     fi
 fi
 
+# R1 (review sécurité 2026-10) : openvpn tourne sinon en root pendant toute
+# sa vie, alors qu il traite des options poussees par le serveur VPN
+# (routes, dhcp-option, scripts up/down). --user/--group abandonnent les
+# privileges une fois le tun cree ; --persist-tun/--persist-key permettent
+# les reconnexions SIGUSR1 sans re-ouvrir /dev/net/tun (impossible en
+# non-root). Desactivation explicite : OPENVPN_DROP_PRIVILEGES=false
+# (ex: config avec scripts up/down exigeant root).
+extra_flags=()
+if [ "${OPENVPN_DROP_PRIVILEGES:-true}" = "true" ]; then
+    extra_flags+=(--user vpn --group vpn --persist-tun --persist-key)
+    log_json INFO "openvpn.sh" \
+        "privilege drop enabled - openvpn will run as vpn:vpn after tun setup"
+fi
+
 log_json INFO "openvpn.sh" \
     "Starting OpenVPN" \
     "config=${conf}" \
     "dir=${dir}"
 
-exec openvpn --cd "$dir" --config "$conf"
+exec openvpn --cd "$dir" --config "$conf" "${extra_flags[@]}"
