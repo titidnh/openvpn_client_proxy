@@ -758,6 +758,19 @@ setup_iptables() {
     iptables -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
+    # NetBird : l'interface kernel par defaut est wt0 - memes regles que
+    # Tailscale (flux montants du mesh vers le tunnel uniquement, le
+    # retour passe par conntrack ESTABLISHED,RELATED).
+    iptables -A FORWARD -i wt+ -o tun+ -j ACCEPT
+    iptables -A FORWARD -i wt+ -o tap+ -j ACCEPT
+    iptables -A FORWARD -i wt+ -o wg+ -j ACCEPT
+    iptables -A FORWARD -i tun+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A FORWARD -i tap+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A FORWARD -i wg+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
     # OUTPUT - interfaces autorisées
     iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A OUTPUT -o lo -j ACCEPT
@@ -765,6 +778,7 @@ setup_iptables() {
     iptables -A OUTPUT -o tap+ -j ACCEPT
     iptables -A OUTPUT -o wg+ -j ACCEPT
     iptables -A OUTPUT -o tailscale+ -j ACCEPT
+    iptables -A OUTPUT -o wt+ -j ACCEPT
 
     if [ -n "$docker_network" ]; then
         iptables -A OUTPUT -d "$docker_network" -j ACCEPT
@@ -965,11 +979,23 @@ setup_ip6tables() {
     ipt6 -A FORWARD -i wg+ -o tailscale+ \
         -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
+    # NetBird (interface wt0) - cf regles IPv4.
+    ipt6 -A FORWARD -i wt+ -o tun+ -j ACCEPT
+    ipt6 -A FORWARD -i wt+ -o tap+ -j ACCEPT
+    ipt6 -A FORWARD -i wt+ -o wg+ -j ACCEPT
+    ipt6 -A FORWARD -i tun+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ipt6 -A FORWARD -i tap+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ipt6 -A FORWARD -i wg+ -o wt+ \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
     ipt6 -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     ipt6 -A OUTPUT -o lo -j ACCEPT
     ipt6 -A OUTPUT -o tun+ -j ACCEPT
     ipt6 -A OUTPUT -o tap+ -j ACCEPT
     ipt6 -A OUTPUT -o tailscale+ -j ACCEPT
+    ipt6 -A OUTPUT -o wt+ -j ACCEPT
     ipt6 -A OUTPUT -o wg+ -j ACCEPT
 
     if [ -n "$docker6_network" ]; then

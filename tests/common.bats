@@ -62,3 +62,24 @@ setup() {
     # Should warn or validate
     [ "$status" -eq 0 ]  # May not block startup, but should warn
 }
+
+# Test: NetBird defaults are populated by init_environment
+@test "init_environment populates NetBird variables" {
+    init_environment
+
+    [ "${ENABLE_NETBIRD:-}" = "false" ]
+    [ -z "${NETBIRD_SETUP_KEY:-}" ]
+    [ -z "${NETBIRD_MANAGEMENT_URL:-}" ]
+    [ -z "${NETBIRD_FLAGS:-}" ]
+    [ "${NETBIRD_DATA_DIR:-}" = "/var/lib/netbird" ]
+    [ "${SERVICE_PIDS[netbird]:-0}" = "0" ]
+}
+
+# Test: ENABLE_NETBIRD is validated like the other feature flags
+@test "validate_environment rejects an invalid ENABLE_NETBIRD" {
+    init_environment
+    ENABLE_NETBIRD="invalid"
+
+    run validate_environment
+    [ "$status" -ne 0 ]
+}

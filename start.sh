@@ -701,6 +701,83 @@ start_tailscale() {
 }
 
 # ===========================================================================
+# NetBird
+# ===========================================================================
+
+netbird_has_state() {
+    [ -s "${NETBIRD_DATA_DIR:-/var/lib/netbird}/store.json" ] ||
+        [ -s /etc/netbird/config.json ]
+}
+
+build_netbird_up_flags() {
+    local up_flags="${NETBIRD_FLAGS:-}"
+
+    if [ -n "${NETBIRD_MANAGEMENT_URL:-}" ]; then
+        up_flags="$up_flags --management-url=${NETBIRD_MANAGEMENT_URL}"
+    fi
+
+    printf '%s\n' "$up_flags"
+}
+
+start_netbird() {
+    log_json INFO "start_netbird" \
+        "Starting NetBird"
+
+    [ "${ENABLE_NETBIRD:-false}" = "true" ] || return 0
+
+    # Idempotent (cf start_tailscale) : le keepalive peut appeler
+    # start_netbird en differe ; ne jamais lancer un deuxieme daemon.
+    if [ "${SERVICE_PIDS[netbird]:-0}" -ne 0 ] &&
+       is_process_running "${SERVICE_PIDS[netbird]}"; then
+        log_json DEBUG "start_netbird" \
+            "netbird already running - skipping"
+        return 0
+    fi
+
+    if ! command_exists netbird; then
+        log_json WARN "start_netbird" \
+            "netbird not installed - skipping"
+        return 0
+    fi
+
+    if [ -z "${NETBIRD_SETUP_KEY:-}" ] && ! netbird_has_state; then
+        log_json WARN "start_netbird" \
+            "no setup key and no persisted state - skipping 'netbird up'"
+        return 0
+    fi
+
+    mkdir -p \
+        "${NETBIRD_DATA_DIR:-/var/lib/netbird}" \
+        /etc/netbird || true
+
+    local up_flags
+    up_flags=$(build_netbird_up_flags)
+
+    log_json INFO "start_netbird" \
+        "starting netbird in foreground mode"
+
+    # --foreground-mode : le daemon tourne dans le processus lui-meme (pas
+    # de service systeme en conteneur), le superviseur suit son PID. La
+    # setup key et l'URL de management sont passees par l'environnement au
+    # processus netbird uniquement : le CLI netbird lit nativement
+    # NB_SETUP_KEY / NB_MANAGEMENT_URL, la cle n'apparait jamais dans ps.
+    (
+        if [ -n "${NETBIRD_SETUP_KEY:-}" ]; then
+            export NB_SETUP_KEY="${NETBIRD_SETUP_KEY}"
+        fi
+
+        if [ -n "${NETBIRD_MANAGEMENT_URL:-}" ]; then
+            export NB_MANAGEMENT_URL="${NETBIRD_MANAGEMENT_URL}"
+        fi
+
+        # shellcheck disable=SC2086
+        exec netbird up --foreground-mode $up_flags
+    ) >/var/log/netbird.log 2>&1 &
+
+    SERVICE_PIDS["netbird"]=$!
+}
+
+# ===========================================================================
 # Signals
 # ===========================================================================
 
