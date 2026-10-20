@@ -100,7 +100,7 @@
 - **dnsmasq** listens on `127.0.0.1:53` and forwards queries either directly to `DNS_SERVER_1` / `DNS_SERVER_2` (plain DNS mode) or to `unbound` on `127.0.0.1:5053` (DoT mode). Default upstream: AdGuard `94.140.14.14` / `94.140.15.15`. No process inside or outside the container can reach another resolver.
 - **Privoxy** listens on `0.0.0.0:3128` and routes all HTTP/HTTPS traffic through the VPN tunnel.
 - **iptables** enforces a DROP-everything-by-default policy. Only traffic going out via `tun+` / `tap+` interfaces is allowed.
-- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure. It also runs optional services: `socat` metrics endpoint on `:9100`, dynamic DoT IP refresh, and post-startup capability drop.
+- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure. It also runs optional services: `socat` metrics endpoint on `:9100` and the dynamic DoT IP refresh.
 
 ---
 
@@ -110,7 +110,7 @@
 - A valid OpenVPN configuration file (`.ovpn` or `.conf`)
 - The host kernel must have the `tun` module loaded: `modprobe tun`
 - `NET_ADMIN` capability and access to `/dev/net/tun`
-- `python3` and `socat` are bundled in the image — no host-side installation needed
+- `socat` is bundled in the image — no host-side installation needed
 
 ---
 
@@ -962,7 +962,7 @@ Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **120s**
 The image declares a native `HEALTHCHECK` in the `Dockerfile` — no configuration needed:
 
 ```dockerfile
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=20s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
 ```
 
@@ -1821,7 +1821,7 @@ docker logs <container> | grep metrics
 docker logs <container> | grep drop_caps
 ```
 
-If `python3` is missing, the drop is skipped gracefully (logged as WARN). The container remains fully functional.
+Setting `DROP_CAPS=true` has no effect (deprecated) — it only logs a warning. Reduce capabilities at the container level with `cap_drop` / `cap_add` instead (see [Capability Drop](#capability-drop-optional)).
 
 ### Tailscale not starting
 
@@ -1845,7 +1845,7 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 
 | File | Location in container | Description |
 |---|---|---|
-| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh, capability drop |
+| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh |
 | `openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
 | `healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
 | `privoxy.config` | `/etc/privoxy/privoxy.config` | Privoxy HTTP proxy main config |
@@ -1876,7 +1876,7 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 | DNSSEC validation | ✅ Implemented — `ENABLE_DNSSEC=true` |
 | DoT certificate pinning | ✅ Implemented — `DOT_TLS_CERT_BUNDLE` |
 | DNS-over-HTTPS (DoH) | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
-| Drop capabilities | ✅ Implemented — `DROP_CAPS=true` |
+| Drop capabilities | ✅ Implemented at the container level — `cap_drop` / `cap_add` in compose (`DROP_CAPS` is deprecated and has no effect) |
 | Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (TLS terminator + mounted certificate) |
 | Read-only filesystem | 💡 `--read-only` flag with targeted tmpfs mounts to reduce attack surface |
 
