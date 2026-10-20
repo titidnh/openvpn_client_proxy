@@ -106,7 +106,6 @@ ENV ENABLE_TAILSCALE=false \
     TAILSCALE_HOSTNAME="openvpn-client-proxy" \
     TAILSCALE_ADVERTISE_EXIT_NODE=false \
     ENABLE_NETBIRD=false \
-    NETBIRD_SETUP_KEY="" \
     NETBIRD_MANAGEMENT_URL="" \
     NETBIRD_FLAGS="" \
     NETBIRD_DATA_DIR="/var/lib/netbird" \
