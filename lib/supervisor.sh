@@ -299,6 +299,7 @@ supervise_all() {
                 touch "$VPN_HEALTHY_FILE"
                 METRIC_VPN_UP=1
                 start_tailscale
+                start_netbird
             else
                 log_json WARN "supervisor" \
                     "tunnel not fully operational yet - Tailscale deferred to keepalive loop"
@@ -317,7 +318,7 @@ supervise_all() {
 
         update_metrics
 
-        log_json INFO "supervisor" "all services running" "vpn=${SERVICE_PIDS[vpn]}" "dnsmasq=${SERVICE_PIDS[dnsmasq]:-unknown}" "privoxy=${SERVICE_PIDS[privoxy]:-unknown}" "nginx_auth=${SERVICE_PIDS[nginx]:-disabled}" "unbound=${SERVICE_PIDS[unbound]:-disabled}" "metrics=${SERVICE_PIDS[metrics]:-disabled}" "dot_refresh=${SERVICE_PIDS[dot_refresh]:-disabled}" "blocklist_refresh=${SERVICE_PIDS[blocklist_refresh]:-disabled}"
+        log_json INFO "supervisor" "all services running" "vpn=${SERVICE_PIDS[vpn]}" "dnsmasq=${SERVICE_PIDS[dnsmasq]:-unknown}" "privoxy=${SERVICE_PIDS[privoxy]:-unknown}" "nginx_auth=${SERVICE_PIDS[nginx]:-disabled}" "tailscaled=${SERVICE_PIDS[tailscaled]:-disabled}" "netbird=${SERVICE_PIDS[netbird]:-disabled}" "unbound=${SERVICE_PIDS[unbound]:-disabled}" "metrics=${SERVICE_PIDS[metrics]:-disabled}" "dot_refresh=${SERVICE_PIDS[dot_refresh]:-disabled}" "blocklist_refresh=${SERVICE_PIDS[blocklist_refresh]:-disabled}"
 
         log_json INFO "supervisor" "waiting 40s before first healthcheck for stability..."
         sleep_wait 40
@@ -338,6 +339,11 @@ supervise_all() {
         if [ "${ENABLE_TAILSCALE:-false}" = "true" ] && \
            [ "${SERVICE_PIDS[tailscaled]:-0}" -eq 0 ]; then
             tailscale_pending=1
+        fi
+        local netbird_pending=0
+        if [ "${ENABLE_NETBIRD:-false}" = "true" ] && \
+           [ "${SERVICE_PIDS[netbird]:-0}" -eq 0 ]; then
+            netbird_pending=1
         fi
         while true; do
             sleep_wait 10
@@ -409,6 +415,12 @@ supervise_all() {
                         tailscale_pending=0
                         log_json INFO "supervisor" \
                             "tunnel now fully operational - Tailscale started"
+                    fi
+                    if [ "$netbird_pending" -eq 1 ] && \
+                       check_vpn_ip && start_netbird; then
+                        netbird_pending=0
+                        log_json INFO "supervisor" \
+                            "tunnel now fully operational - NetBird started"
                     fi
                     if [ $((keepalive_cycles % 6)) -eq 0 ]; then
                         log_json DEBUG "supervisor" "tunnel health confirmed" "cycles=${keepalive_cycles}" "vpn_healthy=true"
@@ -495,6 +507,13 @@ supervise_all() {
                 fi
             fi
 
+            if [ "$fail" -eq 0 ] && [ "${SERVICE_PIDS[netbird]:-0}" -ne 0 ]; then
+                if ! is_process_running "${SERVICE_PIDS[netbird]}"; then
+                    log_json ERROR "supervisor" "netbird process died"
+                    fail=1
+                fi
+            fi
+
             if [ "$fail" -eq 0 ]; then
                 update_metrics
                 stable_cycles=$((stable_cycles + 1))
@@ -526,11 +545,12 @@ supervise_all() {
         kill_if_running "${SERVICE_PIDS[nginx]}"
         kill_if_running "${SERVICE_PIDS[dnsmasq]}"
         kill_if_running "${SERVICE_PIDS[tailscaled]}"
+        kill_if_running "${SERVICE_PIDS[netbird]}"
         kill_if_running "${SERVICE_PIDS[unbound]}"
 
         local pids_to_wait=""
         local pid
-        for pid in "${SERVICE_PIDS[vpn]}" "${SERVICE_PIDS[privoxy]}" "${SERVICE_PIDS[nginx]}" "${SERVICE_PIDS[dnsmasq]}" "${SERVICE_PIDS[tailscaled]}" "${SERVICE_PIDS[unbound]}"; do
+        for pid in "${SERVICE_PIDS[vpn]}" "${SERVICE_PIDS[privoxy]}" "${SERVICE_PIDS[nginx]}" "${SERVICE_PIDS[dnsmasq]}" "${SERVICE_PIDS[tailscaled]}" "${SERVICE_PIDS[netbird]}" "${SERVICE_PIDS[unbound]}"; do
             if [ -n "$pid" ] && [ "$pid" -ne 0 ]; then
                 pids_to_wait="$pids_to_wait $pid"
             fi
@@ -547,6 +567,7 @@ supervise_all() {
         SERVICE_PIDS[nginx]=0
         SERVICE_PIDS[dnsmasq]=0
         SERVICE_PIDS[tailscaled]=0
+        SERVICE_PIDS[netbird]=0
         SERVICE_PIDS[unbound]=0
 
         DOT_RESOLVED_IPS=""

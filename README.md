@@ -1,6 +1,6 @@
 # OpenVPN / WireGuard Client Proxy
 
-> **Lightweight Docker container** running an OpenVPN or WireGuard client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale** integration.
+> **Lightweight Docker container** running an OpenVPN or WireGuard client, an HTTP proxy ([Privoxy](https://www.privoxy.org/)), and a local DNS resolver ([dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)) — featuring a network **kill switch**, **DNS leak protection**, **optional proxy authentication**, and optional **Tailscale**/**NetBird** integration.
 
 ---
 
@@ -28,6 +28,7 @@
 - [Supervision & Auto-Restart](#supervision--auto-restart)
 - [Healthcheck](#healthcheck)
 - [Tailscale Integration (Optional)](#tailscale-integration-optional)
+- [NetBird Integration (Optional)](#netbird-integration-optional)
 - [Docker Compose Examples](#docker-compose-examples)
 - [Build](#build)
 - [Using the Proxy](#using-the-proxy)
@@ -51,6 +52,7 @@
 | 🧹 **Ad/Content Filtering** | DNS-level filtering via upstream resolver — configurable with `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard, ads only) |
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
+| 🔗 **NetBird Integration** | Optional — join a [NetBird](https://netbird.io) network (open-source, self-hostable Tailscale alternative) and route it through the VPN tunnel |
 | 📦 **Minimal Image** | Based on `alpine:3.22` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
 | 🔐 **DNS-over-TLS** | Optional — all DNS queries encrypted via `unbound` → DoT upstream (port 853). Blocks plain DNS port 53 leaks when enabled. |
 | 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor |
@@ -337,6 +339,11 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `TAILSCALE_ACCEPT_ROUTES` | `false` | Pass `--accept-routes` to `tailscale up`. |
 | `TAILSCALE_HOSTNAME` | `openvpn-client-proxy` | Hostname registered in Tailscale (`--hostname`). |
 | `TAILSCALE_ADVERTISE_EXIT_NODE` | `false` | Advertise this container as a Tailscale exit node — all Tailscale clients can route traffic through the VPN. |
+| `ENABLE_NETBIRD` | `false` | Set to `true` to start the [NetBird](https://netbird.io) mesh VPN client (foreground daemon) once the VPN tunnel is healthy. |
+| `NETBIRD_SETUP_KEY` | *(empty)* | NetBird setup key for unattended peer registration. Passed to the client via its environment (`NB_SETUP_KEY`) — never on the command line. |
+| `NETBIRD_MANAGEMENT_URL` | *(empty)* | Management URL for **self-hosted** NetBird (e.g. `https://netbird.example.com:443`). Empty = NetBird cloud (`https://api.netbird.io:443`). |
+| `NETBIRD_FLAGS` | *(empty)* | Extra flags appended verbatim to `netbird up` (e.g. `--extra-dns-labels vpc1`). |
+| `NETBIRD_DATA_DIR` | `/var/lib/netbird` | NetBird state directory — mount it as a volume to persist the peer identity between container recreations. |
 | `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
 | `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com,tls://dns.quad9.net` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
 | `HEALTHCHECK_IP` | `9.9.9.9` | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
@@ -935,12 +942,13 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 | Condition | Action |
 |---|---|
 | OpenVPN process died | Kills and restarts OpenVPN only. Waits up to 5s for routing. If restored → continue normally. If not → full restart. |
-| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + tinyproxy + OpenVPN + Tailscale) |
+| OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + tinyproxy + OpenVPN + Tailscale + NetBird) |
 | Privoxy not listening on its port | Full service restart |
 | tinyproxy auth proxy died or not listening (if enabled) | Full service restart |
 | dnsmasq process died | Full service restart |
 | DNS resolution via `127.0.0.1` fails | Full service restart |
 | Tailscale process died (if enabled) | Full service restart |
+| NetBird process died (if enabled) | Full service restart |
 | unbound process died or not listening on `:5053` (if DoT enabled) | Full service restart |
 | Metrics endpoint (`socat`) died (if metrics enabled) | Logged only — non-critical |
 | DoT IP refresh loop died | Logged only — refreshed on next full restart cycle |
@@ -1026,6 +1034,83 @@ volumes:
   - tailscale-state:/var/lib/tailscale
   - ./vpn:/vpn:ro
 ```
+
+---
+
+## NetBird Integration (Optional)
+
+[NetBird](https://netbird.io) is an open-source, WireGuard®-based mesh VPN and a self-hostable alternative to Tailscale. The `netbird` binary is installed inside the image (pinned release, SHA256-verified); the supervisor starts it in **foreground mode** only when `ENABLE_NETBIRD=true` and the VPN tunnel is healthy, and skips it silently otherwise.
+
+### Basic NetBird usage
+
+```sh
+docker run \
+  --cap-add=NET_ADMIN \
+  --cap-add=SYS_ADMIN \
+  --cap-add=SYS_RESOURCE \
+  --device /dev/net/tun \
+  --rm \
+  -e ENABLE_NETBIRD=true \
+  -e NETBIRD_SETUP_KEY="AABBCCDDEEFF-0123456789" \
+  -v ./vpn:/vpn:ro \
+  -v netbird-data:/var/lib/netbird \
+  -p 3128:3128 \
+  titidnh/openvpn_client_proxy:latest
+```
+
+Notes:
+
+- The setup key is passed to the client through its environment (`NB_SETUP_KEY`) and **never appears on a command line** (nothing sensitive in `ps` output).
+- The peer name registered in NetBird comes from the **container hostname** — set `hostname:` in docker-compose (or `--hostname` with `docker run`) to name the peer.
+- `SYS_ADMIN` and `SYS_RESOURCE` are recommended by NetBird in addition to `NET_ADMIN` (eBPF / raw sockets).
+- For **self-hosted** NetBird, set `NETBIRD_MANAGEMENT_URL` (e.g. `https://netbird.example.com:443`). Empty = NetBird cloud (`https://api.netbird.io:443`).
+
+### Docker Compose
+
+```yaml
+services:
+  vpnproxy:
+    image: titidnh/openvpn_client_proxy:latest
+    container_name: vpn_proxy
+    hostname: vpn-proxy          # peer name in NetBird
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN              # recommended by NetBird
+      - SYS_RESOURCE           # recommended by NetBird
+    devices:
+      - /dev/net/tun
+    volumes:
+      - ./vpn:/vpn:ro
+      - netbird-data:/var/lib/netbird
+    environment:
+      ENABLE_NETBIRD: "true"
+      NETBIRD_SETUP_KEY: "AABBCCDDEEFF-0123456789"
+      # Self-hosted only (default: NetBird cloud):
+      # NETBIRD_MANAGEMENT_URL: "https://netbird.example.com:443"
+
+volumes:
+  netbird-data:
+```
+
+### Routing the NetBird network through the VPN
+
+The kill switch allows forwarding between the NetBird interface (`wt0`) and the VPN tunnel (`tun+`/`tap+`/`wg+`), in IPv4 and IPv6. Configure this container as a **routing peer** in the NetBird dashboard (network routes) and peers will reach the internet through the VPN tunnel. Kernel IP forwarding must be enabled — same sysctls as the Tailscale exit node:
+
+```yaml
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+```
+
+> **Note:** Reaching the HTTP proxy from NetBird peers requires `ALLOW_EXTERNAL_PROXY_ACCESS=true` (same behavior as tailnet access).
+
+### Persist NetBird identity
+
+Mount `/var/lib/netbird` so the peer doesn't re-register on every container recreation. Once the state exists, `NETBIRD_SETUP_KEY` can be removed — the client reuses the persisted identity (`netbird up` without a key).
+
+### Tailscale or NetBird?
+
+Both can run simultaneously (`ENABLE_TAILSCALE=true` + `ENABLE_NETBIRD=true`), but running two mesh VPNs in one container is unusual — pick one unless you really need both. The supervisor logs a warning when both are enabled.
 
 ---
 

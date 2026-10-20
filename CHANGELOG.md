@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **NetBird integration** (`ENABLE_NETBIRD`, default `false`): optional [NetBird](https://netbird.io) mesh VPN client alongside Tailscale — open-source and self-hostable alternative
+  - `netbird` binary (v0.81.3, SHA256-verified) installed via a dedicated Docker stage, same pattern as the Tailscale binaries
+  - Configuration via environment / docker-compose: `NETBIRD_SETUP_KEY`, `NETBIRD_MANAGEMENT_URL` (self-hosted), `NETBIRD_FLAGS`, `NETBIRD_DATA_DIR`
+  - Setup key passed to the client via its environment (`NB_SETUP_KEY`), never on the command line (not visible in `ps`)
+  - Client started in foreground mode and supervised like the other services: deferred start until the tunnel is healthy, idempotent restarts, full restart if the process dies
+  - Kill switch extended: forwarding between the NetBird interface (`wt+`) and the VPN tunnel (`tun+`/`tap+`/`wg+`) allowed in IPv4 and IPv6
+  - `/var/lib/netbird` volume for persistent peer identity; docs and docker-compose examples updated (Tailscale and NetBird can run simultaneously, with a supervisor warning)
 - **Local DNS bypass** (`DNS_BYPASS_VPN`, default `false`): pins the upstream DNS servers outside the VPN tunnel so a **local** resolver (box DNS, LAN Pi-hole) stays reachable through the physical network
   - Works in plain mode (`DNS_SERVER_1`/`DNS_SERVER_2`, ports 53 UDP+TCP) and in DoT/DoH mode (resolved server IPs, ports 853/443 per `DOT_FORWARD_ADDRS_FILE`)
   - Idempotent firewall ACCEPT rules by destination, re-applied on every kill-switch rebuild, unbound restart and DoT IP refresh
