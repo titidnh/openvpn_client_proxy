@@ -6,7 +6,7 @@
 # - HTTP proxy (Privoxy)
 # - Local DNS resolver (dnsmasq)
 # - DNS-over-TLS (Unbound)
-# - Optionnellement Tailscale
+# - Optionnellement Tailscale / NetBird
 # 
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
@@ -51,7 +51,38 @@ RUN apk add --no-cache curl tar \
  && chmod 755 tailscale tailscaled
 
 # ===========================================================================
-# Stage 2 - Image finale
+# Stage 2 - Téléchargement du binaire NetBird
+# ===========================================================================
+# Même approche que Tailscale : stage dédié, version FIGÉE + empreinte
+# SHA256 vérifiée (le binaire tourne en root avec NET_ADMIN). Pour mettre à
+# jour : lire l'empreinte de netbird_<version>_linux_<arch>.tar.gz sur
+# https://github.com/netbirdio/netbird/releases (asset
+# netbird_<version>_checksums.txt) puis recopier la valeur correspondante.
+# ===========================================================================
+FROM alpine:3.24 AS netbird-dl
+
+ARG TARGETARCH
+ARG NETBIRD_VERSION=0.81.3
+ARG NETBIRD_SHA256_AMD64=cbdea310068e35449f034544d5137fefee8f6d948fffd020883ffc8b3bab63b1
+ARG NETBIRD_SHA256_ARM64=980eef938177108bdfa7d802566b6309123592a58631349a78f11cd97c76c22d
+
+RUN apk add --no-cache curl tar \
+ && ARCH="${TARGETARCH:-amd64}" \
+ && case "${ARCH}" in \
+      amd64) SHA="${NETBIRD_SHA256_AMD64}" ;; \
+      arm64) SHA="${NETBIRD_SHA256_ARM64}" ;; \
+      *) echo "Unsupported TARGETARCH=${ARCH} - add its SHA256 build arg" >&2; exit 1 ;; \
+    esac \
+ && URL="https://github.com/netbirdio/netbird/releases/download/v${NETBIRD_VERSION}/netbird_${NETBIRD_VERSION}_linux_${ARCH}.tar.gz" \
+ && echo "Downloading: ${URL}" \
+ && curl -fsSL "${URL}" -o netbird.tgz \
+ && echo "${SHA}  netbird.tgz" | sha256sum -c - \
+ && tar -xz -f netbird.tgz netbird \
+ && rm -f netbird.tgz \
+ && chmod 755 netbird
+
+# ===========================================================================
+# Stage 3 - Image finale
 # ===========================================================================
 FROM alpine:3.24
 
@@ -59,7 +90,7 @@ FROM alpine:3.24
 # Métadonnées de l'image
 # ---------------------------------------------------------------------------
 LABEL org.opencontainers.image.title="openvpn-client-proxy" \
-      org.opencontainers.image.description="Lightweight Docker container running an OpenVPN client, an HTTP proxy (Privoxy), and a local DNS resolver (dnsmasq) — featuring a network kill switch, DNS leak protection, optional proxy authentication, and optional Tailscale integration." \
+      org.opencontainers.image.description="Lightweight Docker container running an OpenVPN client, an HTTP proxy (Privoxy), and a local DNS resolver (dnsmasq) — featuring a network kill switch, DNS leak protection, optional proxy authentication, and optional Tailscale and NetBird integration." \
       org.opencontainers.image.version="2.0.0" \
       org.opencontainers.image.authors="titidnh" \
       org.opencontainers.image.url="https://github.com/titidnh/openvpn_client_proxy" \
@@ -74,6 +105,10 @@ ENV ENABLE_TAILSCALE=false \
     TAILSCALE_ACCEPT_ROUTES=false \
     TAILSCALE_HOSTNAME="openvpn-client-proxy" \
     TAILSCALE_ADVERTISE_EXIT_NODE=false \
+    ENABLE_NETBIRD=false \
+    NETBIRD_MANAGEMENT_URL="" \
+    NETBIRD_FLAGS="" \
+    NETBIRD_DATA_DIR="/var/lib/netbird" \
     VPN_TYPE="openvpn" \
     OPENVPN_ENABLED="true" \
     WIREGUARD_ENABLED="false" \
@@ -160,6 +195,11 @@ COPY --from=tailscale-dl /tailscale  /usr/local/bin/tailscale
 COPY --from=tailscale-dl /tailscaled /usr/local/bin/tailscaled
 
 # ---------------------------------------------------------------------------
+# Binaire NetBird depuis le stage 2
+# ---------------------------------------------------------------------------
+COPY --from=netbird-dl /netbird /usr/local/bin/netbird
+
+# ---------------------------------------------------------------------------
 # Scripts d'application et configuration Privoxy
 # ---------------------------------------------------------------------------
 # Créer le répertoire lib
@@ -192,7 +232,7 @@ COPY --chown=vpn:vpn \
 # ---------------------------------------------------------------------------
 # Volumes et healthcheck
 # ---------------------------------------------------------------------------
-VOLUME ["/vpn", "/var/lib/tailscale"]
+VOLUME ["/vpn", "/var/lib/tailscale", "/var/lib/netbird"]
 
 HEALTHCHECK --interval=30s --timeout=20s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1

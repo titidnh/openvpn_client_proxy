@@ -173,6 +173,16 @@ validate_environment() {
     validate_boolean "DNS_BYPASS_VPN" "${DNS_BYPASS_VPN:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNS_BLOCKLIST" "${ENABLE_DNS_BLOCKLIST:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
+    validate_boolean "ENABLE_TAILSCALE" "${ENABLE_TAILSCALE:-false}" || validation_failed=1
+    validate_boolean "ENABLE_NETBIRD" "${ENABLE_NETBIRD:-false}" || validation_failed=1
+
+    # Deux mesh VPN simultanes est inhabituel (conflits de routage
+    # possibles) : autorise mais signale explicitement.
+    if [ "${ENABLE_TAILSCALE:-false}" = "true" ] &&
+       [ "${ENABLE_NETBIRD:-false}" = "true" ]; then
+        log_json WARN "validate_environment" \
+            "both Tailscale and NetBird are enabled - two mesh VPNs will run concurrently, verify routing requirements"
+    fi
 
     if [ "$validation_failed" -eq 1 ]; then
         log_json WARN "validate_environment" \
@@ -799,6 +809,13 @@ init_environment() {
     : "${TAILSCALE_HOSTNAME:=openvpn-client-proxy}"
     : "${TAILSCALE_ADVERTISE_EXIT_NODE:=false}"
     
+    # NetBird (mesh VPN alternatif, cf start.sh / README)
+    : "${ENABLE_NETBIRD:=false}"
+    : "${NETBIRD_SETUP_KEY:=}"
+    : "${NETBIRD_MANAGEMENT_URL:=}"
+    : "${NETBIRD_FLAGS:=}"
+    : "${NETBIRD_DATA_DIR:=/var/lib/netbird}"
+    
     # Metrics
     : "${ENABLE_METRICS:=false}"
     : "${METRICS_PORT:=$DEFAULT_METRICS_PORT}"
@@ -844,6 +861,7 @@ init_environment() {
     SERVICE_PIDS[dnsmasq]="${SERVICE_PIDS[dnsmasq]:-0}"
     SERVICE_PIDS[unbound]="${SERVICE_PIDS[unbound]:-0}"
     SERVICE_PIDS[tailscaled]="${SERVICE_PIDS[tailscaled]:-0}"
+    SERVICE_PIDS[netbird]="${SERVICE_PIDS[netbird]:-0}"
     SERVICE_PIDS[metrics]="${SERVICE_PIDS[metrics]:-0}"
     SERVICE_PIDS[dot_refresh]="${SERVICE_PIDS[dot_refresh]:-0}"
     SERVICE_PIDS[blocklist_refresh]="${SERVICE_PIDS[blocklist_refresh]:-0}"

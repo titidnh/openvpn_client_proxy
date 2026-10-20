@@ -18,6 +18,10 @@
 #      Cas d'usage: Configuration de sécurité maximale
 #      Décommentez la section "# PROFIL: STRICT-FILTERING" ci-dessous
 #
+#   Optionnel (les deux profils) : mesh VPN
+#      - Tailscale (ENABLE_TAILSCALE=true) ou NetBird (ENABLE_NETBIRD=true)
+#      - Démarré une fois le tunnel VPN opérationnel
+#
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
 # Version: 2.0.0
@@ -33,6 +37,9 @@ services:
     # Capacités Linux requises pour le VPN et le firewall
     cap_add:
       - NET_ADMIN
+      # NetBird recommande en plus (eBPF / raw sockets) si ENABLE_NETBIRD=true:
+      # - SYS_ADMIN
+      # - SYS_RESOURCE
     
     # Périphériques requis pour OpenVPN/WireGuard
     devices:
@@ -42,7 +49,8 @@ services:
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
       - net.ipv6.conf.all.disable_ipv6=0
-      # Décommentez si TAILSCALE_ADVERTISE_EXIT_NODE=true:
+      # Décommentez si TAILSCALE_ADVERTISE_EXIT_NODE=true ou si ce peer
+      # NetBird sert de routing peer (routes NetBird via le tunnel) :
       # - net.ipv4.ip_forward=1
       # - net.ipv6.conf.all.forwarding=1
     
@@ -60,6 +68,8 @@ services:
       - ./vpn:/vpn:ro
       # Données persistantes Tailscale
       - tailscale-data:/var/lib/tailscale
+      # Données persistantes NetBird (identité du peer)
+      - netbird-data:/var/lib/netbird
       # Cache des listes de blocage (optionnel)
       - blocklist-cache:/tmp
       # D2 : ancre racine DNSSEC (root.key) et etat RFC 5011 persistants -
@@ -104,6 +114,7 @@ services:
       # Features optionnelles
       ENABLE_METRICS: "false"
       ENABLE_TAILSCALE: "false"
+      ENABLE_NETBIRD: "false"
       ENABLE_DNSSEC: "false"
 
       # Re-résolution périodique des remotes VPN (dette "IP figées")
@@ -144,6 +155,21 @@ services:
       # ENABLE_TAILSCALE: "false"
       # =================================================================
 
+      # =================================================================
+      # NetBird (optionnel - mesh VPN alternatif à Tailscale)
+      # La setup key est passée au client par son environnement
+      # (NB_SETUP_KEY), jamais sur la ligne de commande.
+      # Le nom du peer vient du hostname du conteneur (voir "hostname:"
+      # du service dans la doc NetBird).
+      # =================================================================
+      # ENABLE_NETBIRD: "true"
+      # NETBIRD_SETUP_KEY: "AABBCCDDEEFF-0123456789"
+      # NetBird auto-hébergé uniquement (défaut cloud : https://api.netbird.io:443):
+      # NETBIRD_MANAGEMENT_URL: "https://netbird.exemple.com:443"
+      # NETBIRD_FLAGS: ""                 # Flags supplémentaires pour "netbird up"
+      # NETBIRD_DATA_DIR: "/var/lib/netbird"
+      # =================================================================
+
       # Paramètres communs aux deux profils
       PROXY_PORT: "3128"
       # "true" exige PROXY_USER/PROXY_PASS (le conteneur refuse sinon de
@@ -170,6 +196,8 @@ services:
 volumes:
   tailscale-data:
     # Permet de persister l'identité Tailscale entre les recreations de conteneur
+  netbird-data:
+    # Permet de persister l'identité NetBird entre les recreations de conteneur
   blocklist-cache:
     # Cache des listes de blocage compilées (optionnel)
   unbound-anchor:
