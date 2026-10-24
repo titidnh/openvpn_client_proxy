@@ -12,7 +12,7 @@ Un workflow unique, `docker-publish.yml`, exécute deux jobs :
 2. **ShellCheck** — `shellcheck -S error` sur tous les scripts + `tests/security_regression.bats`
 3. **Tests du parser OpenVPN** — `CODE="$GITHUB_WORKSPACE" bash tests/parse_tests.sh` (autonome : ni root ni réseau)
 4. **Tests de régression sécurité** — `bats tests/security_regression.bats` (bloquant)
-5. **Suite bats legacy** — `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` en `continue-on-error` : des tests connus sont cassés (voir docs/SECURITY_REVIEW.md, backlog Q1) ; ils ne bloquent pas la publication tant qu'ils ne sont pas réparés
+5. **Suite bats legacy** — `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` — réparée (octobre 2026, backlog Q1 de docs/SECURITY_REVIEW.md) et désormais bloquante
 
 ### Job `build-and-push` (après `checks`, hors pull request)
 
@@ -47,7 +47,7 @@ shfmt -i 4 -w scripts/*.sh lib/*.sh  # réécriture
 sudo apt-get install bats       # Debian/Ubuntu
 CODE="$PWD" bash tests/parse_tests.sh # tests du parser (sans root)
 bats tests/security_regression.bats
-bats tests/*.bats               # suite legacy (tests cassés connus, non bloquants)
+bats tests/*.bats               # suite complète (legacy + régression sécurité)
 ```
 
 ### Hook pre-commit
@@ -65,4 +65,4 @@ chmod +x .git/hooks/pre-commit
 |---|---|---|
 | `tests/parse_tests.sh` | Parsing des `remote` OpenVPN (CRLF, BOM, blocs `<connection>`, `rport`) — autonome | Bloquant |
 | `tests/security_regression.bats` | Régressions sécurité | Bloquant |
-| `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` | Suite legacy — cassée par endroits | Non bloquant (Q1) |
+| `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` | Suite legacy — réparée (octobre 2026) | Bloquant |

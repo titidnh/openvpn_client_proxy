@@ -33,6 +33,16 @@ teardown() {
     rm -rf "$TEST_TMP"
 }
 
+# La compilation refuse les listes de moins de 100 domaines (garde-fou
+# anti "liste quasi-vide qui casse la résolution DNS", cf. lib/dns_blocklist.sh)
+# : chaque test de compilation amène donc son propre remplissage.
+fill_domains() {
+    local i
+    for ((i = 1; i <= $1; i++)); do
+        echo "filler${i}.example.invalid"
+    done
+}
+
 # ============================================================================
 # Test Group 1: Module Loading
 # ============================================================================
@@ -66,12 +76,16 @@ teardown() {
     export ENABLE_DNS_BLOCKLIST=true
     export DNS_BLOCKLIST_MIN_AGE=3600
     
-    # Simulate cached state (less than 1h old)
-    echo "999999999" > "$DNS_BLOCKLIST_STATE_FILE"
+    # Simulate cached state (30 min old, less than MIN_AGE=1h)
+    # NB : l'ancien "999999999" datait de 2001 - le cache paraissait
+    # périmé et la fonction tentait un vrai téléchargement.
+    echo $(( $(date +%s) - 1800 )) > "$DNS_BLOCKLIST_STATE_FILE"
     
     run download_blocklists
     # Should skip download due to recent cache
     [ "$status" -eq 0 ]
+    # No download attempted : raw dir stays empty
+    [ -z "$(ls -A "$DNS_BLOCKLIST_RAW_DIR")" ]
 }
 
 # ============================================================================
@@ -87,12 +101,14 @@ teardown() {
 @test "compile_blocklists parses hosts format correctly" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    # Create a sample hosts file
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Create a sample hosts file (filler pour dépasser le seuil de 100 domaines)
+    { fill_domains 100
+      cat << 'EOF'
 127.0.0.1 ads.example.com
 0.0.0.0 tracker.test.org
 127.0.0.1 malware.net
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
@@ -101,54 +117,64 @@ EOF
     [ -f "$DNS_BLOCKLIST_COMPILED_DNSMASQ" ]
     grep -q "address=/ads.example.com/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
     grep -q "address=/tracker.test.org/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/malware.net/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
 }
 
 @test "compile_blocklists parses adblock format correctly" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    # Create an adblock format file
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Create an adblock format file (filler pour dépasser le seuil)
+    { fill_domains 100
+      cat << 'EOF'
 ||ads.doubleclick.net^
 ||google-analytics.com^
 ||tracking-pixel.org^
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
     
     [ -f "$DNS_BLOCKLIST_COMPILED_DNSMASQ" ]
     grep -q "address=/ads.doubleclick.net/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/google-analytics.com/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/tracking-pixel.org/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
 }
 
 @test "compile_blocklists parses raw domain list format" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    # Create raw domain list
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Create raw domain list (filler pour dépasser le seuil)
+    { fill_domains 100
+      cat << 'EOF'
 ads.example.com
 tracker.test.org
 malware.net
 suspicious.link
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
     
     [ -f "$DNS_BLOCKLIST_COMPILED_DNSMASQ" ]
     grep -q "address=/ads.example.com/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/suspicious.link/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
 }
 
 @test "compile_blocklists respects allowlist exclusions" {
     export ENABLE_DNS_BLOCKLIST=true
     export DNS_BLOCKLIST_ALLOWLIST="trusted.example.com,cdn.trusted.org"
     
-    # Mix of domains, some in allowlist
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Mix of domains, some in allowlist (filler pour dépasser le seuil)
+    { fill_domains 100
+      cat << 'EOF'
 ads.example.com
 trusted.example.com
 tracker.test.org
 cdn.trusted.org
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
@@ -184,7 +210,7 @@ EOF
     [ "$status" -eq 0 ]
     
     [ -f "$DNS_BLOCKLIST_COMPILED_UNBOUND" ]
-    grep -q 'local-zone: "ads1.example.com" always_nxdomain' "$DNS_BLOCKLIST_COMPILED_UNBOUND"
+    grep -q 'local-zone: "ads1.example.com." always_nxdomain' "$DNS_BLOCKLIST_COMPILED_UNBOUND"
 }
 
 # ============================================================================
@@ -192,17 +218,27 @@ EOF
 # ============================================================================
 
 @test "blocklist environment variables are initialized in common.sh" {
-    # Verify that lib/common.sh initializes blocklist variables
-    [ -n "${ENABLE_DNS_BLOCKLIST+x}" ]
-    [ -n "${DNS_BLOCKLIST_URLS+x}" ]
-    [ -n "${DNS_BLOCKLIST_REFRESH_INTERVAL+x}" ]
-    [ -n "${DNS_BLOCKLIST_MIN_AGE+x}" ]
-    [ -n "${DNS_BLOCKLIST_ALLOWLIST+x}" ]
-    
-    # Check defaults
-    [ "${ENABLE_DNS_BLOCKLIST}" = "false" ]  # Should be disabled by default
-    [ "${DNS_BLOCKLIST_REFRESH_INTERVAL}" = "86400" ]  # 24h
-    [ "${DNS_BLOCKLIST_MIN_AGE}" = "3600" ]  # 1h
+    # Vérifie les valeurs par défaut dans un sous-shell propre : le setup de
+    # ce fichier exporte ses propres valeurs de test, les défauts ne sont
+    # donc observables qu'après `env -u ...` dans un bash frais.
+    local lib
+    lib="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)/lib/common.sh"
+    run env -u ENABLE_DNS_BLOCKLIST -u DNS_BLOCKLIST_URLS \
+        -u DNS_BLOCKLIST_REFRESH_INTERVAL -u DNS_BLOCKLIST_MIN_AGE \
+        -u DNS_BLOCKLIST_ALLOWLIST \
+        bash -c 'source "$1" || exit 1
+                 init_environment
+                 printf "ENABLE_DNS_BLOCKLIST=%s\n" "${ENABLE_DNS_BLOCKLIST}"
+                 printf "REFRESH_INTERVAL=%s\n" "${DNS_BLOCKLIST_REFRESH_INTERVAL}"
+                 printf "MIN_AGE=%s\n" "${DNS_BLOCKLIST_MIN_AGE}"
+                 printf "URLS_SET=%s\n" "${DNS_BLOCKLIST_URLS+x}"
+                 printf "ALLOWLIST_SET=%s\n" "${DNS_BLOCKLIST_ALLOWLIST+x}"' _ "$lib"
+    [ "$status" -eq 0 ]
+    grep -q '^ENABLE_DNS_BLOCKLIST=false$' <<< "$output"
+    grep -q '^REFRESH_INTERVAL=86400$' <<< "$output"
+    grep -q '^MIN_AGE=3600$' <<< "$output"
+    grep -q '^URLS_SET=x$' <<< "$output"
+    grep -q '^ALLOWLIST_SET=x$' <<< "$output"
 }
 
 # ============================================================================
@@ -212,14 +248,16 @@ EOF
 @test "compile_blocklists handles mixed formats in single file" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    # Mix all three formats in one file
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Mix all three formats in one file (filler pour dépasser le seuil)
+    { fill_domains 100
+      cat << 'EOF'
 127.0.0.1 ads.example.com
 ||tracker.net^
 malware.org
 suspicious.link
 0.0.0.0 spam.test.com
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
@@ -234,11 +272,14 @@ EOF
 @test "compile_blocklists normalizes domain case to lowercase" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Mixed-case domains + filler pour dépasser le seuil de 100
+    { fill_domains 100
+      cat << 'EOF'
 127.0.0.1 ADS.EXAMPLE.COM
 ||Tracker.NET^
 MalWare.ORG
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
@@ -252,13 +293,15 @@ EOF
 @test "compile_blocklists deduplicates domains" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    # Repeat same domain multiple times
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Repeat same domain multiple times (+ filler pour dépasser le seuil)
+    { fill_domains 100
+      cat << 'EOF'
 127.0.0.1 ads.example.com
 127.0.0.1 ads.example.com
 ads.example.com
 ||ads.example.com^
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]
@@ -272,13 +315,16 @@ EOF
 @test "compile_blocklists excludes invalid domains" {
     export ENABLE_DNS_BLOCKLIST=true
     
-    cat > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt" << 'EOF'
+    # Invalid entries + filler pour dépasser le seuil de 100
+    { fill_domains 100
+      cat << 'EOF'
 127.0.0.1 ads.example.com
 127.0.0.1 invalid
 127.0.0.1 -invalid.domain
 127.0.0.1 _underscore.com
 127.0.0.1 validDomain123.org
 EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
     
     run compile_blocklists
     [ "$status" -eq 0 ]

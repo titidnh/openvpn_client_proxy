@@ -35,10 +35,9 @@ jobs:
       - name: Security regression tests
         run: bats tests/security_regression.bats
 
-      # The older bats files contain known-broken tests (see docs/SECURITY_REVIEW.md, Q1).
-      # They run for visibility but do not block publishing until they are fixed.
-      - name: Legacy bats suite (non-blocking)
-        continue-on-error: true
+      # Legacy bats suite: repaired in October 2026 (docs/SECURITY_REVIEW.md,
+      # backlog Q1) and now blocking, like the rest of the checks.
+      - name: Legacy bats suite
         run: bats tests/common.bats tests/dns_blocklist.bats tests/dns_runtime.bats tests/dot.bats tests/firewall.bats
 
   build-and-push:

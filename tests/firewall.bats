@@ -53,41 +53,51 @@ teardown() {
 @test "ipt_add_853 IPv4 is idempotent - no duplicate rules" {
     local test_ip="1.2.3.4"
     
-    # Mock iptables to simulate rule existence check
+    # Mock iptables : l'implémentation réelle appelle "iptables -C ..." puis
+    # "iptables -A ..." (option en $1). -C réussit une fois la règle posée
+    # (simulé par la présence du log d'ajout).
     iptables() {
-        if [ "$2" = "-C" ]; then
-            # First call: rule doesn't exist, return 1 (failure)
-            # Subsequent calls: rule exists, return 0 (success)
-            if [ -z "$(grep -c "rule_added" "$TEST_IPTABLES_LOG" 2>/dev/null || echo 0)" ]; then
-                echo "rule_added" >> "$TEST_IPTABLES_LOG"
-                return 1
-            fi
-            return 0
-        elif [ "$2" = "-A" ]; then
-            echo "Added: $*" >> "$TEST_IPTABLES_LOG"
-            return 0
-        fi
+        case "$1" in
+            -C)
+                grep -q '^Added:' "$TEST_IPTABLES_LOG" 2>/dev/null || return 1
+                return 0
+                ;;
+            -A)
+                echo "Added: $*" >> "$TEST_IPTABLES_LOG"
+                return 0
+                ;;
+        esac
         return 0
     }
     export -f iptables
     
-    # First call: should add rule (check returns 1)
+    # First call: rule doesn't exist (-C fails) -> rule added (-A)
     ipt_add_853 "$test_ip"
-    local count_after_first=$(wc -l < "$TEST_IPTABLES_LOG" 2>/dev/null || echo 0)
-    [ "$count_after_first" -ge 1 ]
+    local count_after_first
+    count_after_first=$(grep -c '^Added:' "$TEST_IPTABLES_LOG" 2>/dev/null || echo 0)
+    [ "$count_after_first" -eq 1 ]
+    
+    # Second call: -C succeeds -> no duplicate -A
+    ipt_add_853 "$test_ip"
+    local count_after_second
+    count_after_second=$(grep -c '^Added:' "$TEST_IPTABLES_LOG" 2>/dev/null || echo 0)
+    [ "$count_after_second" -eq 1 ]
 }
 
 @test "ipt_add_853 IPv6 is idempotent" {
     local test_ip="2001:4860:4860::8888"
     
-    # Mock ip6tables
+    # Mock ip6tables (option en $1, cf. ipt6/ipt_add_853)
     ip6tables() {
-        if [ "$2" = "-C" ]; then
-            return 0  # Pretend rule exists
-        elif [ "$2" = "-A" ]; then
-            echo "IPv6 rule NOT added (already exists)" >> "$TEST_IP6TABLES_LOG"
-            return 1
-        fi
+        case "$1" in
+            -C)
+                return 0  # Pretend rule exists
+                ;;
+            -A)
+                echo "IPv6 rule NOT added (already exists)" >> "$TEST_IP6TABLES_LOG"
+                return 1
+                ;;
+        esac
         return 0
     }
     export -f ip6tables
@@ -108,15 +118,16 @@ teardown() {
     local ipv4="1.2.3.4"
     local ipv6="2001:4860:4860::8888"
     
-    # Mock to distinguish calls
+    # Mock to distinguish calls (options en $1 ; toujours réussir pour que
+    # ipt_add_853 ne propage pas d'échec)
     iptables() {
         echo "IPv4 iptables called" >> "$TEST_IPTABLES_LOG"
-        return 1
+        return 0
     }
     
     ip6tables() {
         echo "IPv6 ip6tables called" >> "$TEST_IP6TABLES_LOG"
-        return 1
+        return 0
     }
     
     export -f iptables ip6tables
@@ -128,19 +139,20 @@ teardown() {
     
     # Test IPv6
     ipt_add_853 "$ipv6"
-    if [ -f "$TEST_IP6TABLES_LOG" ]; then
-        grep -q "IPv6 ip6tables called" "$TEST_IP6TABLES_LOG" || true
-    fi
+    [ -f "$TEST_IP6TABLES_LOG" ]
+    grep -q "IPv6 ip6tables called" "$TEST_IP6TABLES_LOG"
 }
 
 @test "ipt_del_853 removes IPv4 rules cleanly" {
     local test_ip="1.2.3.4"
     
     iptables() {
-        if [ "$2" = "-D" ]; then
-            echo "Deleted: $*" >> "$TEST_IPTABLES_LOG"
-            return 0
-        fi
+        case "$1" in
+            -D)
+                echo "Deleted: $*" >> "$TEST_IPTABLES_LOG"
+                return 0
+                ;;
+        esac
         return 0
     }
     export -f iptables
@@ -157,9 +169,11 @@ teardown() {
     
     # Mock iptables to return error (rule doesn't exist)
     iptables() {
-        if [ "$2" = "-D" ]; then
-            return 1  # Rule doesn't exist
-        fi
+        case "$1" in
+            -D)
+                return 1  # Rule doesn't exist
+                ;;
+        esac
         return 0
     }
     export -f iptables
@@ -312,7 +326,7 @@ teardown() {
 @test "refresh_vpn_remote_ips adds ACCEPT rules for the NEW remote IPs" {
     export VPN_REMOTE_MAP="vpn.example.com=1.1.1.1,2.2.2.2"
     export VPN_REMOTE_IPS="1.1.1.1|1194|udp 2.2.2.2|1194|udp"
-    local out="$TEST_TMP/refresh_iptables.log"
+    local out="$BATS_TEST_TMPDIR/refresh_iptables.log"
     : > "$out"
 
     iptables() { echo "iptables $*" >> "$out"; return 0; }
@@ -343,7 +357,7 @@ teardown() {
 @test "refresh_vpn_remote_ips keeps old IPs when re-resolve fails" {
     export VPN_REMOTE_MAP="vpn.example.com=1.1.1.1"
     export VPN_REMOTE_IPS="1.1.1.1|1194|udp"
-    local out="$TEST_TMP/refresh_iptables.log"
+    local out="$BATS_TEST_TMPDIR/refresh_iptables.log"
     : > "$out"
 
     iptables() { echo "iptables $*" >> "$out"; return 0; }
@@ -359,7 +373,7 @@ teardown() {
 @test "refresh_vpn_remote_ips is a no-op when IPs are unchanged" {
     export VPN_REMOTE_MAP="vpn.example.com=3.3.3.3"
     export VPN_REMOTE_IPS="3.3.3.3|1194|udp"
-    local out="$TEST_TMP/refresh_iptables.log"
+    local out="$BATS_TEST_TMPDIR/refresh_iptables.log"
     : > "$out"
 
     iptables() { echo "iptables $*" >> "$out"; return 0; }
@@ -379,7 +393,7 @@ teardown() {
 # responding" en boucle). Le default ne doit JAMAIS etre supprime.
 
 @test "cleanup_routes_on_restart never deletes the default route" {
-    local out="$TEST_TMP/routes.log"
+    local out="$BATS_TEST_TMPDIR/routes.log"
     : > "$out"
 
     timeout() { shift; "$@"; }
