@@ -739,6 +739,20 @@ setup_iptables() {
             "port=${PROXY_PORT}"
     fi
 
+    # Metriques Prometheus : acces reseau opt-in. Par defaut l'endpoint ecoute
+    # en loopback dans le conteneur (docker exec / mapping 127.0.0.1) et
+    # AUCUNE regle INPUT n'est ouverte. Avec METRICS_BIND != 127.0.0.1
+    # (ex: 0.0.0.0 pour un scrape Prometheus depuis le LAN), on ouvre le
+    # port d'ecoute en INPUT - l'exposition reste sous le controle explicite
+    # de l'utilisateur (voir README "Prometheus Metrics").
+    if [ "${ENABLE_METRICS:-false}" = "true" ] &&
+       [ "${METRICS_BIND:-127.0.0.1}" != "127.0.0.1" ]; then
+        iptables -A INPUT -p tcp --dport "${METRICS_PORT:-9100}" -j ACCEPT
+        log_json WARN "setup_iptables" \
+            "metrics endpoint reachable from the network (explicit opt-in)" \
+            "bind=${METRICS_BIND}" "port=${METRICS_PORT:-9100}"
+    fi
+
     # FORWARD
     iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -A FORWARD -i lo -j ACCEPT
@@ -792,8 +806,8 @@ setup_iptables() {
             "port=${PROXY_PORT}"
     fi
 
-    # Métriques
-    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 9100 -j ACCEPT
+    # Metriques : sortie locale vers l'endpoint (port configurable METRICS_PORT)
+    iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport "${METRICS_PORT:-9100}" -j ACCEPT
 
     # DNS local
     iptables -A OUTPUT -p udp -d 127.0.0.1 --dport 53 -j ACCEPT
@@ -1007,7 +1021,8 @@ setup_ip6tables() {
         ipt6 -A OUTPUT -p tcp --sport "$PROXY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     fi
 
-    ipt6 -A OUTPUT -p tcp -d ::1 --dport 9100 -j ACCEPT
+    # Metriques : sortie locale vers l'endpoint (port configurable METRICS_PORT)
+    ipt6 -A OUTPUT -p tcp -d ::1 --dport "${METRICS_PORT:-9100}" -j ACCEPT
 
     ipt6 -A OUTPUT -p udp -d ::1 --dport 53 -j ACCEPT
     ipt6 -A OUTPUT -p tcp -d ::1 --dport 53 -j ACCEPT

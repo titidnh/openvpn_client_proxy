@@ -297,3 +297,28 @@ leaky_dns_rules() {
         grep -q "include: \"${DNS_BLOCKLIST_COMPILED_UNBOUND}\"" "$UNBOUND_CONF"
     done
 }
+
+# ------------------------------------------------------------- Metrics ------
+# L'endpoint Prometheus doit rester injoignable du reseau tant que
+# METRICS_BIND n'est pas explicitement ouvert (opt-in) - cf. README
+# "Prometheus Metrics". METRICS_PORT doit etre honore partout (listener,
+# regles OUTPUT loopback, regle INPUT opt-in).
+
+@test "metrics INPUT stays closed with the default loopback bind" {
+    export ENABLE_METRICS="true"
+    export METRICS_BIND="127.0.0.1"
+    setup_iptables 2>/dev/null
+    run ! grep -q -- '-A INPUT -p tcp --dport 9100 -j ACCEPT' "$IPT_LOG"
+}
+
+@test "metrics INPUT opens only with explicit METRICS_BIND and honors METRICS_PORT" {
+    export ENABLE_METRICS="true"
+    export METRICS_BIND="0.0.0.0"
+    export METRICS_PORT="9200"
+    setup_iptables 2>/dev/null
+    # Regle INPUT ouverte uniquement pour le port configure
+    grep -q -- '-A INPUT -p tcp --dport 9200 -j ACCEPT' "$IPT_LOG"
+    run ! grep -q -- '--dport 9100 ' "$IPT_LOG"
+    # La regle OUTPUT loopback suit aussi METRICS_PORT
+    grep -q -- '-A OUTPUT -p tcp -d 127.0.0.1 --dport 9200 -j ACCEPT' "$IPT_LOG"
+}

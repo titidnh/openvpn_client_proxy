@@ -60,7 +60,7 @@
 | 🌍 **DoH Support** | Use `https://` prefix in `DOT_DNS_SERVERS` to forward to a DNS-over-HTTPS upstream |
 | 🔀 **Split DNS** | Route specific domains to an internal resolver (`DNS_SPLIT="corp.local=10.0.0.53"`). Works in both plain and DoT modes. |
 | 🔄 **Dynamic DoT IP Refresh** | Periodically re-resolves DoT server hostnames and updates iptables rules atomically (zero connectivity interruption) |
-| 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint on `127.0.0.1:9100` with VPN status, restart count, DoT state, and uptime |
+| 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint (default `127.0.0.1:9100`, configurable via `METRICS_PORT`/`METRICS_BIND`) with VPN status, restart count, DoT state, and uptime |
 | 🛡️ **Capability Drop** | Done at the container level with `cap_drop` / `cap_add` (see [Capability Drop](#capability-drop-optional)). The old `DROP_CAPS` variable is deprecated and has no effect. |
 | 📋 **Structured JSON Logs** | All log output is JSON (`{"ts":"...","level":"INFO","component":"...","msg":"..."}`), ready for Loki/Splunk/any log aggregator |
 
@@ -363,7 +363,9 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `DNS_BLOCKLIST_MIN_AGE` | `3600` | Minimum age (in seconds) of a cached blocklist before attempting a refresh. Prevents thrashing on network errors. |
 | `DNS_BLOCKLIST_ALLOWLIST` | *(empty)* | Comma or newline-separated list of domains to whitelist (prevent from being blocked by the DNS blocklist). Example: `example.com,trusted.local`. |
 | `DNS_SPLIT` | *(empty)* | Comma-separated list of `domain=resolver[:port]` entries for split DNS. Routes those domains to an internal resolver instead of the default upstream. Works in both DoT and plain modes. Example: `corp.local=10.0.0.53,internal.net=10.0.1.53:5353` |
-| `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint on `127.0.0.1:9100`. The port is loopback-only (iptables enforced). |
+| `ENABLE_METRICS` | `false` | Set to `true` to expose a Prometheus-compatible metrics endpoint. Default bind: `127.0.0.1:9100` (loopback-only inside the container). |
+| `METRICS_PORT` | `9100` | Port the `/metrics` endpoint listens on (inside the container). Honor the same port in your Docker port mapping. |
+| `METRICS_BIND` | `127.0.0.1` | Address the metrics endpoint binds to. Default is loopback-only (never reachable from outside the container). Set to `0.0.0.0` as an **explicit opt-in** to allow scraping from the LAN (e.g. a remote Prometheus) — the firewall then opens the matching INPUT rule. ⚠️ Exposes VPN status to the network — restrict to a trusted network. |
 | `DROP_CAPS` | `false` | **Deprecated - has no effect.** The previous implementation only dropped capabilities inside a short-lived helper process. Use `cap_drop` / `cap_add` in docker-compose instead (see [Capability Drop](#capability-drop-optional)). A warning is logged if set to `true`. |
 | `ALLOW_EXTERNAL_PROXY_ACCESS` | `false` | Set to `true` to allow external connections to the proxy port (`PROXY_PORT`, default: 3128). By default, the port is only accessible from the Docker network. **Requires `PROXY_USER` and `PROXY_PASS`**: the container refuses to start an unauthenticated proxy that is reachable from outside (see `ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY`). ⚠️ **Firewall-permissive mode** — only use if you understand the security implications. |
 | `ALLOW_UNAUTHENTICATED_EXTERNAL_PROXY` | `false` | Explicit override: allow `ALLOW_EXTERNAL_PROXY_ACCESS=true` **without** credentials. This creates an open proxy - anyone who can reach the port can use your VPN. Not recommended. |
@@ -768,12 +770,40 @@ The internal resolver receives queries for the specified domain in **plain DNS**
 
 ## Prometheus Metrics (Optional)
 
-Enable with `ENABLE_METRICS=true`. The endpoint is served on `127.0.0.1:9100` via `socat`, loopback-only (iptables enforces this — the port is never reachable from outside the container).
+Enable with `ENABLE_METRICS=true`. The endpoint is served via `socat` on `METRICS_BIND:METRICS_PORT` (default `127.0.0.1:9100`).
+
+**Default (loopback-only):** the endpoint listens on the container's loopback interface only and the firewall opens **no INPUT rule** — it is never reachable from outside the container.
 
 ```sh
 # Access from the host via docker exec:
 docker exec <container> curl -s http://127.0.0.1:9100/metrics
 ```
+
+**Scrape from the Docker host:** publish the port on the host's loopback only:
+
+```yaml
+# docker-compose.yml
+ports:
+  - "127.0.0.1:9100:9100"
+```
+
+```sh
+curl -s http://127.0.0.1:9100/metrics   # on the Docker host
+```
+
+**Scrape from the LAN (e.g. a remote Prometheus) — explicit opt-in:**
+
+```yaml
+# docker-compose.yml
+ports:
+  - "9100:9100"          # or "192.168.x.x:9100:9100" to pin one host IP
+environment:
+  ENABLE_METRICS: "true"
+  METRICS_BIND: "0.0.0.0"   # opt-in: listen on all container interfaces
+  METRICS_PORT: "9100"
+```
+
+With `METRICS_BIND=0.0.0.0`, the container firewall opens the matching INPUT rule and a warning is logged at startup. ⚠️ This exposes the VPN status (up/down, restarts, uptime) to anything that can reach the published port — restrict to a trusted network (LAN/VPN), or keep the default loopback bind and scrape through the Docker host instead.
 
 **Available metrics:**
 
@@ -785,16 +815,16 @@ docker exec <container> curl -s http://127.0.0.1:9100/metrics
 | `process_uptime_seconds` | gauge | Container uptime in seconds |
 | `last_restart_timestamp_seconds` | gauge | Unix epoch of the last supervisor restart |
 
-**Prometheus scrape config example:**
+**Prometheus scrape config example (LAN opt-in):**
 
 ```yaml
 scrape_configs:
   - job_name: openvpn_proxy
     static_configs:
-      - targets: ['<docker_host_ip>:9100']   # expose via SSH tunnel or sidecar
+      - targets: ['192.168.x.x:9100']   # host IP + published metrics port
 ```
 
-> ⚠️ Never bind port 9100 to `0.0.0.0` — always access it via `docker exec` or an SSH tunnel.
+> Note: the endpoint is served by the container's own supervisor (not a Prometheus client library), so request paths are ignored — any request returns the metrics payload.
 
 ---
 
@@ -1804,12 +1834,14 @@ docker exec <container> unbound-anchor -a /var/lib/unbound/root.key -v
 # Check socat is running
 docker exec <container> ps aux | grep socat
 
-# Test directly inside the container
+# Test directly inside the container (default bind/port)
 docker exec <container> curl -s http://127.0.0.1:9100/metrics
 
-# Check startup log
+# Check startup log (also shows the effective bind:port)
 docker logs <container> | grep metrics
 ```
+
+If you scrape from another machine: `ENABLE_METRICS` must be `true`, `METRICS_BIND` must be `0.0.0.0` (the default `127.0.0.1` is unreachable through a Docker port mapping), and the port must be published in docker-compose with the same value as `METRICS_PORT`. Also verify you are not hitting the proxy port by mistake — a `400 Invalid header received from client` page is the **proxy** (tinyproxy) answering, not the metrics endpoint.
 
 ### Capability errors (`Operation not permitted`)
 

@@ -50,6 +50,16 @@ start_metrics() {
 
     mkdir -p "$METRICS_DIR"
 
+    # Port et adresse d'écoute configurables (METRICS_PORT / METRICS_BIND).
+    # Défaut : loopback uniquement (127.0.0.1:9100), l'endpoint n'est jamais
+    # joignable depuis l'extérieur du conteneur. METRICS_BIND=0.0.0.0 est un
+    # opt-in EXPLICITE pour scraper depuis le LAN (Prometheus) : il expose
+    # l'état du VPN à tout le réseau, à réserver à un réseau de confiance, et
+    # doit s'accompagner d'un mapping de port dans docker-compose.
+    # Le pare-feu (setup_iptables) n'ouvre INPUT que si bind != loopback.
+    local bind="${METRICS_BIND:-127.0.0.1}"
+    local port="${METRICS_PORT:-9100}"
+
     # R4 : heredoc CITE - le contenu ne doit pas etre evalue a la generation.
     # METRICS_DIR est injecte via printf, pas par interpolation du shell.
     {
@@ -95,14 +105,14 @@ HANDLER
 
     if command_exists socat; then
         socat \
-            TCP-LISTEN:9100,bind=127.0.0.1,reuseaddr,fork \
+            TCP-LISTEN:"$port",bind="$bind",reuseaddr,fork \
             EXEC:/tmp/metrics_handler.sh &
 
         SERVICE_PIDS["metrics"]=$!
     else
         (
             while true; do
-                nc -l 127.0.0.1 9100 \
+                nc -l "$bind" "$port" \
                     < <(/tmp/metrics_handler.sh) \
                     2>/dev/null || sleep 1
             done
@@ -117,7 +127,7 @@ HANDLER
     log_json INFO "start_metrics" \
         "metrics endpoint started" \
         "pid=${SERVICE_PIDS["metrics"]}" \
-        "addr=127.0.0.1:9100"
+        "addr=${bind}:${port}"
 }
 
 # ===========================================================================
