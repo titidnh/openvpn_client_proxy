@@ -30,7 +30,7 @@ Les constats ci-dessous ont été corrigés dans la PR security/hardening-2026-1
 | # | Constat | Gravité | Correctif |
 |---|---------|---------|-----------|
 | H1 | .env versionné dans Git — risque qu'un TAILSCALE_AUTHKEY ou PROXY_PASS y soit un jour committé ; aucun .gitignore | Moyenne | .env supprimé du dépôt, remplacé par .env.example, .gitignore ajouté (vpn/, clés, .env) |
-| H2 | Conteneur lancé avec les capabilities Linux par défaut et sans no-new-privileges | Moyenne | cap_drop ALL + allow-list minimale (NET_ADMIN, NET_RAW, NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE, FOWNER, KILL), security_opt no-new-privileges:true, pids_limit 256 |
+| H2 | Conteneur lancé avec les capabilities Linux par défaut et sans no-new-privileges | Moyenne | cap_drop ALL + allow-list minimale (NET_ADMIN, NET_RAW, NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE, FOWNER, KILL), security_opt no-new-privileges:true, limite pids 256 (deploy.resources.limits.pids) |
 | H3 | openvpn tourne en root pendant toute sa vie alors qu il traite des options poussées par le serveur VPN | Moyenne | --user vpn --group vpn --persist-tun --persist-key (OPENVPN_DROP_PRIVILEGES=true par défaut) |
 | H4 | Code mort : vpn-startup.sh (legacy, parsing WireGuard faible, openvpn en daemon), lib/proxy.sh et lib/vpn.sh (skeletons TODO jamais sourcés) | Faible | Supprimés du dépôt et de l'image (Dockerfile) |
 | H5 | La CI référence SECURITY_REVIEW.md qui n existait pas dans le dépôt | Faible | Ce document |
