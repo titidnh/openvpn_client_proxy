@@ -24,13 +24,13 @@
 #
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
-# Version: 2.0.0
+# Version: 3.0.0
 # ===========================================================================
 
 services:
   openvpn-proxy:
     build: .
-    # image: ghcr.io/titidnh/openvpn-client-proxy:latest
+    # image: titidnh/openvpn_client_proxy:latest
     container_name: openvpn-client-proxy
     restart: unless-stopped
     

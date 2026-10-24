@@ -10,7 +10,7 @@
 # 
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
-# Version: 2.0.0
+# Version: 3.0.0
 # ===========================================================================
 
 # ===========================================================================
@@ -91,7 +91,7 @@ FROM alpine:3.24
 # ---------------------------------------------------------------------------
 LABEL org.opencontainers.image.title="openvpn-client-proxy" \
       org.opencontainers.image.description="Lightweight Docker container running an OpenVPN client, an HTTP proxy (Privoxy), and a local DNS resolver (dnsmasq) — featuring a network kill switch, DNS leak protection, optional proxy authentication, and optional Tailscale and NetBird integration." \
-      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.version="3.0.0" \
       org.opencontainers.image.authors="titidnh" \
       org.opencontainers.image.url="https://github.com/titidnh/openvpn_client_proxy" \
       org.opencontainers.image.licenses="MIT"
