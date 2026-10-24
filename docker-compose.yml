@@ -122,8 +122,12 @@ services:
       # Changez à "3128:3128" pour accès externe (avec auth recommandé)
       - "127.0.0.1:3128:3128"
       
-      # Métriques Prometheus - JAMAIS lier à 0.0.0.0
-      # Accès via: docker exec openvpn-proxy curl http://127.0.0.1:9100/metrics
+      # Métriques Prometheus - loopback dans le conteneur par défaut
+      # (METRICS_BIND=127.0.0.1). Deux options d'accès :
+      #  - depuis l'hôte Docker :   - "127.0.0.1:9100:9100"
+      #  - depuis le LAN (opt-in explicite) : METRICS_BIND=0.0.0.0 + mapping
+      #    "9100:9100" (le pare-feu du conteneur ouvre alors la règle INPUT
+      #    correspondante - à réserver à un réseau de confiance)
       # - "127.0.0.1:9100:9100"
     
     environment:
@@ -186,6 +190,12 @@ services:
       
       # Sécurité renforcée
       # ENABLE_METRICS: "true"                 # Prometheus metrics
+      # Port/adresse d'écoute des métriques (défaut 127.0.0.1:9100).
+      # 127.0.0.1 = accessible uniquement via docker exec / mapping
+      # "127.0.0.1:9100:9100" (hôte Docker). 0.0.0.0 = opt-in LAN :
+      # à combiner avec un mapping de port publié ci-dessus.
+      # METRICS_PORT: "9100"
+      # METRICS_BIND: "127.0.0.1"
       # Capabilities : DROP_CAPS est obsolete (sans effet). La réduction
       # cap_drop/cap_add est désormais appliquée par défaut ci-dessus
       # (review sécurité 2026-10).

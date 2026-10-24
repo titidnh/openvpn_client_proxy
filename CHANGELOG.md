@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LAN metrics scraping (explicit opt-in)** (`METRICS_BIND`, default `127.0.0.1`): bind the `/metrics` endpoint outside the container loopback (e.g. `0.0.0.0` for a remote Prometheus). The container firewall opens the matching INPUT rule only when the bind is not loopback, and a warning is logged at startup
+  - Access modes documented in the README "Prometheus Metrics" section: `docker exec` (default), Docker host via `127.0.0.1:9100:9100` port mapping, LAN via `METRICS_BIND=0.0.0.0` + published port
 - **NetBird integration** (`ENABLE_NETBIRD`, default `false`): optional [NetBird](https://netbird.io) mesh VPN client alongside Tailscale — open-source and self-hostable alternative
   - `netbird` binary (v0.81.3, SHA256-verified) installed via a dedicated Docker stage, same pattern as the Tailscale binaries
   - Configuration via environment / docker-compose: `NETBIRD_SETUP_KEY`, `NETBIRD_MANAGEMENT_URL` (self-hosted), `NETBIRD_FLAGS`, `NETBIRD_DATA_DIR`
@@ -22,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Idempotent firewall ACCEPT rules by destination, re-applied on every kill-switch rebuild, unbound restart and DoT IP refresh
   - Host routes via the physical gateway (`ip route replace`) so `redirect-gateway` (OpenVPN) or the `0.0.0.0/1`+`128.0.0.0/1` routes (WireGuard) don't swallow DNS traffic into the tunnel; re-asserted after every tunnel (re)connection
   - Security trade-off documented in the README: queries leave through the local network and keep working when the tunnel is down — only enable for local resolvers
+
+### Fixed
+- **Metrics endpoint ignored `METRICS_PORT`**: the listener (socat/nc) and the firewall loopback rules hard-coded `9100`; `METRICS_PORT` is now honored by the listener, the IPv4/IPv6 loopback OUTPUT rules, and validated (`validate_port`/`validate_ip`) like the other variables
 
 ### Changed
 - **Repository restructure** (no functional changes): runtime scripts moved to `scripts/` (`start.sh`, `openvpn.sh`, `healthcheck.sh`, `vpn-selector.sh`), Privoxy configuration to `config/privoxy/` (`privoxy.config`, `default.action`, `default.filter`, `user.action`, `user.filter`), test helper to `tests/parse_tests.sh`, and documentation to `docs/` (`CI_LINT_TESTS.md`, `SECURITY_REVIEW.md`)

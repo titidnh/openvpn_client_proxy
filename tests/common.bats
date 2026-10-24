@@ -106,3 +106,28 @@ setup() {
     run validate_environment
     [ "$status" -ne 0 ]
 }
+
+# Test: metrics defaults are populated and loopback-only
+@test "init_environment populates metrics variables (loopback default)" {
+    init_environment
+
+    [ "${ENABLE_METRICS:-}" = "false" ]
+    [ "${METRICS_PORT:-}" = "9100" ]
+    [ "${METRICS_BIND:-}" = "127.0.0.1" ]
+}
+
+# Test: METRICS_PORT / METRICS_BIND are validated when metrics are enabled
+@test "validate_environment rejects invalid metrics port and bind" {
+    init_environment
+    ENABLE_METRICS="true"
+    METRICS_PORT="not-a-port"
+
+    run validate_environment
+    [ "$status" -ne 0 ]
+
+    METRICS_PORT="9100"
+    METRICS_BIND="not-an-ip"
+
+    run validate_environment
+    [ "$status" -ne 0 ]
+}

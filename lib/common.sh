@@ -153,7 +153,7 @@ validate_environment() {
     local num_var
     for num_var in VPN_REMOTE_REFRESH_INTERVAL SKIP_HEALTHCHECK_FIRST_MINUTES \
                    DOT_IP_REFRESH_INTERVAL DNS_BLOCKLIST_REFRESH_INTERVAL \
-                   DNS_BLOCKLIST_MIN_AGE; do
+                   DNS_BLOCKLIST_MIN_AGE METRICS_PORT; do
         if [ -n "${!num_var:-}" ]; then
             validate_number "$num_var" "${!num_var}" || validation_failed=1
         fi
@@ -175,6 +175,17 @@ validate_environment() {
     validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
     validate_boolean "ENABLE_TAILSCALE" "${ENABLE_TAILSCALE:-false}" || validation_failed=1
     validate_boolean "ENABLE_NETBIRD" "${ENABLE_NETBIRD:-false}" || validation_failed=1
+
+    # Metriques Prometheus : port valide + adresse d'ecoute valide
+    # (METRICS_BIND doit etre une IP ; 0.0.0.0 declenche un avertissement).
+    if [ "${ENABLE_METRICS:-false}" = "true" ]; then
+        validate_port "METRICS_PORT" "${METRICS_PORT:-9100}" || validation_failed=1
+        validate_ip "METRICS_BIND" "${METRICS_BIND:-127.0.0.1}" || validation_failed=1
+        if [ "${METRICS_BIND:-127.0.0.1}" = "0.0.0.0" ]; then
+            log_json WARN "validate_environment" \
+                "METRICS_BIND=0.0.0.0 exposes the metrics endpoint to the network - restrict to trusted LAN"
+        fi
+    fi
 
     # Deux mesh VPN simultanes est inhabituel (conflits de routage
     # possibles) : autorise mais signale explicitement.
@@ -819,6 +830,7 @@ init_environment() {
     # Metrics
     : "${ENABLE_METRICS:=false}"
     : "${METRICS_PORT:=$DEFAULT_METRICS_PORT}"
+    : "${METRICS_BIND:=127.0.0.1}"
     : "${METRIC_VPN_UP:=0}"
     : "${METRIC_RESTART_COUNT:=0}"
     : "${METRIC_DOT_ACTIVE:=0}"
