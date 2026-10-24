@@ -30,12 +30,12 @@ jobs:
         run: shellcheck -S error $(git ls-files '*.sh') tests/security_regression.bats
 
       - name: OpenVPN remote parser tests
-        run: CODE="$GITHUB_WORKSPACE" bash parse_tests.sh
+        run: CODE="$GITHUB_WORKSPACE" bash tests/parse_tests.sh
 
       - name: Security regression tests
         run: bats tests/security_regression.bats
 
-      # The older bats files contain known-broken tests (see SECURITY_REVIEW.md, Q1).
+      # The older bats files contain known-broken tests (see docs/SECURITY_REVIEW.md, Q1).
       # They run for visibility but do not block publishing until they are fixed.
       - name: Legacy bats suite (non-blocking)
         continue-on-error: true
@@ -86,7 +86,7 @@ jobs:
 
       # Review sécurité 2026-10 : scan de vulnérabilités de l image publiée.
       # Informationnel pour l instant (exit-code 0) : passer en bloquant
-      # (exit-code 1) une fois la baseline établie (voir SECURITY_REVIEW.md §4.3).
+      # (exit-code 1) une fois la baseline établie (voir docs/SECURITY_REVIEW.md §4.3).
       - name: Trivy vulnerability scan
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.28.0

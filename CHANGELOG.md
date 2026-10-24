@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Host routes via the physical gateway (`ip route replace`) so `redirect-gateway` (OpenVPN) or the `0.0.0.0/1`+`128.0.0.0/1` routes (WireGuard) don't swallow DNS traffic into the tunnel; re-asserted after every tunnel (re)connection
   - Security trade-off documented in the README: queries leave through the local network and keep working when the tunnel is down — only enable for local resolvers
 
+### Changed
+- **Repository restructure** (no functional changes): runtime scripts moved to `scripts/` (`start.sh`, `openvpn.sh`, `healthcheck.sh`, `vpn-selector.sh`), Privoxy configuration to `config/privoxy/` (`privoxy.config`, `default.action`, `default.filter`, `user.action`, `user.filter`), test helper to `tests/parse_tests.sh`, and documentation to `docs/` (`CI_LINT_TESTS.md`, `SECURITY_REVIEW.md`)
+  - Moved files are byte-identical; only path references were updated (Dockerfile, Makefile, CI workflow, bats tests, README)
+  - Destination paths inside the container are unchanged (`/start.sh`, `/usr/local/bin/*.sh`, `/usr/local/lib/*.sh`, `/etc/privoxy/`) — no impact on the published image behaviour
+
 ---
 
 ## [3.0.0] - 2026-10-07

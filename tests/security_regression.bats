@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # ============================================================================
-# Security regression tests (SECURITY_REVIEW.md : S1 S2 S3 S4 S5 S10 B1).
+# Security regression tests (docs/SECURITY_REVIEW.md : S1 S2 S3 S4 S5 S10 B1).
 # Aucun root ni reseau requis : iptables/ip6tables/ip sont remplaces par des
 # fonctions qui journalisent leurs arguments dans un fichier.
 # ============================================================================
@@ -155,13 +155,13 @@ leaky_dns_rules() {
 }
 
 @test "S3: privoxy is started as an unprivileged user" {
-    grep -q -- '--user "${PROXY_RUN_USER:-vpn}"' "$REPO/start.sh"
+    grep -q -- '--user "${PROXY_RUN_USER:-vpn}"' "$REPO/scripts/start.sh"
 }
 
 # ---------------------------------------------------------------- S4 -------
 
 @test "S4: the fake python prctl capability drop is gone" {
-    run ! grep -q 'PR_CAPBSET_DROP = 24' "$REPO/start.sh"
+    run ! grep -q 'PR_CAPBSET_DROP = 24' "$REPO/scripts/start.sh"
     run ! grep -qE '^[[:space:]]+python3 \\$' "$REPO/Dockerfile"
 }
 

@@ -211,10 +211,10 @@ RUN mkdir -p /usr/local/lib
 # Copier les scripts avec les bonnes permissions
 # Review sécurité 2026-10 : vpn-startup.sh (legacy daemon, parsing WireGuard
 # faible) retiré de l'image - le superviseur utilise openvpn.sh + lib/wireguard.sh.
-COPY --chmod=0755 openvpn.sh      /usr/local/bin/openvpn.sh
-COPY --chmod=0755 vpn-selector.sh /usr/local/bin/vpn-selector.sh
-COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
-COPY --chmod=0755 start.sh        /start.sh
+COPY --chmod=0755 scripts/openvpn.sh      /usr/local/bin/openvpn.sh
+COPY --chmod=0755 scripts/vpn-selector.sh /usr/local/bin/vpn-selector.sh
+COPY --chmod=0755 scripts/healthcheck.sh  /usr/local/bin/healthcheck.sh
+COPY --chmod=0755 scripts/start.sh        /start.sh
 
 # Copier les bibliothèques de fonctions
 COPY --chmod=0755 lib/common.sh        /usr/local/lib/common.sh
@@ -230,7 +230,11 @@ RUN find /usr/local/bin /usr/local/lib /start.sh -type f \( -name '*.sh' -o -nam
 
 # Copier la configuration Privoxy et les fichiers de filtres
 COPY --chown=vpn:vpn \
-     privoxy.config default.action default.filter user.action user.filter \
+     config/privoxy/privoxy.config \
+     config/privoxy/default.action \
+     config/privoxy/default.filter \
+     config/privoxy/user.action \
+     config/privoxy/user.filter \
      /etc/privoxy/
 
 # ---------------------------------------------------------------------------
