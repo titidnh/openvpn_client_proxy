@@ -53,7 +53,7 @@
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
 | 🔗 **NetBird Integration** | Optional — join a [NetBird](https://netbird.io) network (open-source, self-hostable Tailscale alternative) and route it through the VPN tunnel |
-| 📦 **Minimal Image** | Based on `alpine:3.22` — minimal footprint (~120 MB), multi-stage build isolates Tailscale binaries |
+| 📦 **Minimal Image** | Based on `alpine:3.24` — minimal footprint (~120 MB), multi-stage build isolates the Tailscale and NetBird binaries |
 | 🔐 **DNS-over-TLS** | Optional — all DNS queries encrypted via `unbound` → DoT upstream (port 853). Blocks plain DNS port 53 leaks when enabled. |
 | 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor |
 | 📌 **DoT Cert Pinning** | Mount a custom CA bundle (`DOT_TLS_CERT_BUNDLE`) to restrict which TLS certificates are accepted for DoT connections |
@@ -86,7 +86,7 @@
 │  ┌─────────────────────────── │ ──────────────────────────────┐ │
 │  │ Supervisor (start.sh)      │                               │ │
 │  │  • JSON structured logs    │  • Prometheus metrics :9100   │ │
-│  │  • Dynamic DoT IP refresh  │  • Capability drop (optional) │ │
+│  │  • Dynamic DoT IP refresh  │  • Tailscale/NetBird (option) │ │
 │  └────────────────────────────┴───────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
                               │ VPN Tunnel
@@ -100,7 +100,7 @@
 - **dnsmasq** listens on `127.0.0.1:53` and forwards queries either directly to `DNS_SERVER_1` / `DNS_SERVER_2` (plain DNS mode) or to `unbound` on `127.0.0.1:5053` (DoT mode). Default upstream: AdGuard `94.140.14.14` / `94.140.15.15`. No process inside or outside the container can reach another resolver.
 - **Privoxy** listens on `0.0.0.0:3128` and routes all HTTP/HTTPS traffic through the VPN tunnel.
 - **iptables** enforces a DROP-everything-by-default policy. Only traffic going out via `tun+` / `tap+` interfaces is allowed.
-- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure. It also runs optional services: `socat` metrics endpoint on `:9100`, dynamic DoT IP refresh, and post-startup capability drop.
+- **start.sh** is the entrypoint supervisor — it starts all services, watches them every 10 seconds, and restarts on failure. It also runs optional services: `socat` metrics endpoint on `:9100` and the dynamic DoT IP refresh loop.
 
 ---
 
@@ -110,7 +110,7 @@
 - A valid OpenVPN configuration file (`.ovpn` or `.conf`)
 - The host kernel must have the `tun` module loaded: `modprobe tun`
 - `NET_ADMIN` capability and access to `/dev/net/tun`
-- `python3` and `socat` are bundled in the image — no host-side installation needed
+- `socat` is bundled in the image — no host-side installation needed
 
 ---
 
@@ -255,7 +255,7 @@ mypassword
 
 ### `dnsmasq.conf` — DNS Resolver
 
-Located at `/etc/dnsmasq.conf` inside the container. **This file is generated at container startup** from the `DNS_SERVER_1` and `DNS_SERVER_2` environment variables — editing the repository file has no effect at runtime.
+Located at `/etc/dnsmasq.conf` inside the container. **This file is generated at container startup** from the `DNS_SERVER_1` and `DNS_SERVER_2` environment variables — there is no `dnsmasq.conf` in the repository.
 
 **Default upstream resolvers (AdGuard Default — blocks ads only):**
 
@@ -328,7 +328,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | Variable | Default | Description |
 |---|---|---|
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
-| `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Family — blocks ads and adult content). |
+| `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Default — ads only). |
 | `DNS_BYPASS_VPN` | `false` | Route upstream DNS servers (`DNS_SERVER_1`/`DNS_SERVER_2` in plain mode, DoT/DoH servers in `ENABLE_DOT=true` mode) through the **local network** instead of the VPN tunnel — firewall ACCEPT rules + host routes via the physical gateway. Only for a **local** resolver (box DNS, LAN Pi-hole). `false` (default): all DNS goes through the tunnel. See [Local DNS bypass](#local-dns-bypass-dns_bypass_vpn). |
 | `PROXY_PORT` | `3128` | TCP port for the HTTP proxy. **Without auth:** Privoxy listens on `0.0.0.0:PROXY_PORT`. **With auth:** Privoxy listens internally on `127.0.0.1:PROXY_PORT+1` and tinyproxy fronts on `0.0.0.0:PROXY_PORT`. Example: `PROXY_PORT=8080` → tinyproxy `0.0.0.0:8080` → Privoxy `127.0.0.1:8081`. |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
@@ -345,7 +345,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `NETBIRD_FLAGS` | *(empty)* | Extra flags appended verbatim to `netbird up` (e.g. `--extra-dns-labels vpc1`). |
 | `NETBIRD_DATA_DIR` | `/var/lib/netbird` | NetBird state directory — mount it as a volume to persist the peer identity between container recreations. |
 | `ENABLE_DOT` | `false` | Set to `true` to enable DNS-over-TLS. All DNS queries are routed through a local `unbound` instance that forwards to DoT upstream servers on port 853. Plain DNS port 53 egress is blocked. |
-| `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com,tls://dns.quad9.net` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
+| `DOT_DNS_SERVERS` | `tls://dns.adguard-dns.com` | Space or comma-separated list of DoT/DoH servers. Format: `tls://hostname` or `https://hostname`. Used only when `ENABLE_DOT=true`. |
 | `HEALTHCHECK_IP` | `9.9.9.9` | Deprecated - no longer used. The firewall no longer opens any exception for this IP (it allowed traffic outside the tunnel). Kept for backward compatibility. |
 | `ROUTE_TEST_IP` | `9.9.9.9` | IP used to test basic routing/connectivity from inside the container. |
 | `SKIP_HEALTHCHECK_FIRST_MINUTES` | `2` | Number of minutes to skip the healthcheck after container startup. Useful to avoid false failures during initialization. |
@@ -941,7 +941,7 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 
 | Condition | Action |
 |---|---|
-| OpenVPN process died | Kills and restarts OpenVPN only. Waits up to 5s for routing. If restored → continue normally. If not → full restart. |
+| OpenVPN process died | Kills and restarts OpenVPN only. Waits up to 30s for routing. If restored → continue normally. If not → full restart. |
 | OpenVPN routing still broken after restart | Full service restart (dnsmasq + iptables + Privoxy + tinyproxy + OpenVPN + Tailscale + NetBird) |
 | Privoxy not listening on its port | Full service restart |
 | tinyproxy auth proxy died or not listening (if enabled) | Full service restart |
@@ -953,7 +953,7 @@ The container runs a built-in supervisor loop (`start.sh`) that polls all servic
 | Metrics endpoint (`socat`) died (if metrics enabled) | Logged only — non-critical |
 | DoT IP refresh loop died | Logged only — refreshed on next full restart cycle |
 
-Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **120s**. The counter resets after a successful monitoring cycle.
+Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **60s**. The counter resets after a successful monitoring cycle.
 
 ---
 
@@ -962,20 +962,16 @@ Restart delay uses **exponential backoff**: 5s, 10s, 15s, … capped at **120s**
 The image declares a native `HEALTHCHECK` in the `Dockerfile` — no configuration needed:
 
 ```dockerfile
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=20s --start-period=30s --retries=3 \
   CMD /usr/local/bin/healthcheck.sh || exit 1
 ```
 
 `healthcheck.sh` runs the following checks in order:
 
-1. **Sentinel file** — `/tmp/vpn_healthy` must exist. The supervisor writes it once the tunnel is confirmed up, and removes it on failure.
-2. **OpenVPN process** — verifies `openvpn` is running.
+1. **VPN process** — verifies `openvpn` is running (or that the `wg0` interface exists when `VPN_TYPE=wireguard`).
+2. **Routing** — the tunnel interface (`tun+`/`tap+`) is present and used for routing.
 3. **Local DNS resolution** — tests DNS resolution via `127.0.0.1`.
-4. **External HTTP proxy connectivity** — tests real external URLs via Privoxy with fallback chain:
-   - Primary: Google Connectivity Check (`connectivitycheck.gstatic.com/generate_204`) — returns 204 if accessible.
-   - Fallback #1: Cloudflare (`one.one.one.one/cdn-cgi/trace`).
-   - Fallback #2: HTTP HEAD request to `example.com`.
-   - Fallback #3: Simple port connectivity via `nc`.
+4. **External HTTP proxy connectivity** — a real request to `PROXY_TEST_URL` (default: Google Connectivity Check, expects 204) through Privoxy. No fallback chain: a Privoxy error page (502/503) must not count as healthy.
 
 All checks are self-contained — `nc`, `curl`, and `openvpn` are all installed in the image.
 
@@ -1805,13 +1801,9 @@ docker exec <container> curl -s http://127.0.0.1:9100/metrics
 docker logs <container> | grep metrics
 ```
 
-### Capability drop errors
+### Capability errors (`Operation not permitted`)
 
-```sh
-docker logs <container> | grep drop_caps
-```
-
-If `python3` is missing, the drop is skipped gracefully (logged as WARN). The container remains fully functional.
+`DROP_CAPS` has no effect (deprecated — it only logs a warning). Capabilities are managed at the container level with `cap_drop` / `cap_add` (see [Capability Drop](#capability-drop-optional)). If a feature fails with `Operation not permitted` after the hardening, re-add the missing capability to `cap_add:` in `docker-compose.yml` and re-test (`make up` + healthcheck).
 
 ### Tailscale not starting
 
@@ -1827,15 +1819,17 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 
 | File | Location in container | Description |
 |---|---|---|
-| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh, capability drop |
+| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh |
 | `openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
+| `vpn-selector.sh` | `/usr/local/bin/vpn-selector.sh` | VPN type selection (OpenVPN / WireGuard) |
+| `lib/*.sh` | `/usr/local/lib/` | Shared libraries: firewall (kill switch), DNS runtime, DoT, blocklist, WireGuard, supervisor |
 | `healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
 | `privoxy.config` | `/etc/privoxy/privoxy.config` | Privoxy HTTP proxy main config |
 | `default.action` | `/etc/privoxy/default.action` | Privoxy default action rules |
 | `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
 | `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
 | `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
-| `Dockerfile` | — | Multi-stage build: `alpine:3.22` base + Tailscale binary stage |
+| `Dockerfile` | — | Multi-stage build: `alpine:3.24` base + Tailscale / NetBird binary stages |
 | `docker-compose.yml` | — | Full example compose file with all options |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
 
@@ -1857,7 +1851,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 | DNSSEC validation | ✅ Implemented — `ENABLE_DNSSEC=true` |
 | DoT certificate pinning | ✅ Implemented — `DOT_TLS_CERT_BUNDLE` |
 | DNS-over-HTTPS (DoH) | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
-| Drop capabilities | ✅ Implemented — `DROP_CAPS=true` |
+| Capability drop | ✅ Implemented — `cap_drop` / `cap_add` at the container level |
 | Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (TLS terminator + mounted certificate) |
 | Read-only filesystem | 💡 `--read-only` flag with targeted tmpfs mounts to reduce attack surface |
 
