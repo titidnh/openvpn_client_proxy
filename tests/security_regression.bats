@@ -322,3 +322,43 @@ leaky_dns_rules() {
     # La regle OUTPUT loopback suit aussi METRICS_PORT
     grep -q -- '-A OUTPUT -p tcp -d 127.0.0.1 --dport 9200 -j ACCEPT' "$IPT_LOG"
 }
+
+# Regression : le handler doit consommer la requete HTTP avant de repondre.
+# Un handler qui repond sans lire laisse socat fermer le socket avec des
+# donnees non lues -> RST -> "read(...): Connection reset by peer" en boucle
+# dans docker logs a chaque scrape.
+@test "metrics handler drains the HTTP request before answering (no socat RST noise)" {
+    # Reconstruit le handler genere par scripts/start.sh (heredoc HANDLER)
+    awk "/^ *cat <<'HANDLER'\$/{flag=1;next} /^HANDLER\$/{flag=0} flag" \
+        "$REPO/scripts/start.sh" > "$BATS_TEST_TMPDIR/handler.body"
+    [ -s "$BATS_TEST_TMPDIR/handler.body" ]
+
+    mkdir -p "$BATS_TEST_TMPDIR/metrics"
+    echo 1 > "$BATS_TEST_TMPDIR/metrics/metric_vpn_up"
+    echo 2 > "$BATS_TEST_TMPDIR/metrics/metric_restart_count"
+    echo 0 > "$BATS_TEST_TMPDIR/metrics/metric_dot_active"
+    echo 1700000000 > "$BATS_TEST_TMPDIR/metrics/metric_start_ts"
+    echo 0 > "$BATS_TEST_TMPDIR/metrics/metric_last_restart_ts"
+
+    {
+        printf '#!/bin/sh\nMETRICS_DIR=%s\n' "$BATS_TEST_TMPDIR/metrics"
+        cat "$BATS_TEST_TMPDIR/handler.body"
+    } > "$BATS_TEST_TMPDIR/handler.sh"
+
+    # Requete HTTP complete : les en-tetes doivent etre consommes puis la
+    # reponse emise (HTTP 200 + payload Prometheus).
+    printf 'GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nUser-Agent: test\r\n\r\n' \
+        > "$BATS_TEST_TMPDIR/req"
+
+    run sh "$BATS_TEST_TMPDIR/handler.sh" < "$BATS_TEST_TMPDIR/req"
+    [ "$status" -eq 0 ]
+    grep -q 'HTTP/1.1 200 OK' <<< "$output"
+    grep -qx 'vpn_up 1' <<< "$output"
+    grep -qx 'vpn_restart_total 2' <<< "$output"
+    grep -q 'Content-Length: ' <<< "$output"
+
+    # Client muet (EOF immediat) : reponse quand meme, pas de blocage.
+    run sh "$BATS_TEST_TMPDIR/handler.sh" < /dev/null
+    [ "$status" -eq 0 ]
+    grep -q 'HTTP/1.1 200 OK' <<< "$output"
+}
