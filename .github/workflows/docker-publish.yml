@@ -83,3 +83,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Review sécurité 2026-10 : scan de vulnérabilités de l image publiée.
+      # Informationnel pour l instant (exit-code 0) : passer en bloquant
+      # (exit-code 1) une fois la baseline établie (voir SECURITY_REVIEW.md §4.3).
+      - name: Trivy vulnerability scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL

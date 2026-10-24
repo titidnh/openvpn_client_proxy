@@ -1,151 +1,68 @@
-# CI/Lint/Tests Documentation
+# CI / Lint / Tests
 
-This commit introduces quality gates and automated testing for the project.
+Documentation des contrôles qualité automatisés du projet.
 
-## Configuration Files Added
+## Pipeline CI (`.github/workflows/docker-publish.yml`)
 
-### 1. `.shellcheckrc`
-ShellCheck configuration with strict rules. Key settings:
-- `enable=all`: Enable all optional checks
-- Ignores specific checks that cause false positives in this codebase
+Un workflow unique, `docker-publish.yml`, exécute deux jobs :
 
-Run locally:
+### Job `checks` (bloque la publication en cas d'échec)
+
+1. **Syntaxe Bash** — `bash -n` sur tous les fichiers `*.sh` du dépôt
+2. **ShellCheck** — `shellcheck -S error` sur tous les scripts + `tests/security_regression.bats`
+3. **Tests du parser OpenVPN** — `CODE="$GITHUB_WORKSPACE" bash parse_tests.sh` (autonome : ni root ni réseau)
+4. **Tests de régression sécurité** — `bats tests/security_regression.bats` (bloquant)
+5. **Suite bats legacy** — `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` en `continue-on-error` : des tests connus sont cassés (voir SECURITY_REVIEW.md, backlog Q1) ; ils ne bloquent pas la publication tant qu'ils ne sont pas réparés
+
+### Job `build-and-push` (après `checks`, hors pull request)
+
+- Build multi-arch (`linux/amd64`, `linux/arm64`) via Buildx/QEMU
+- Publication sur **Docker Hub** (`titidnh/openvpn_client_proxy`) : `latest` sur `main`, `X.Y.Z` / `X.Y` / `X` sur les tags `v*`
+- Scan **Trivy** (HIGH/CRITICAL) — informationnel (`exit-code 0`) pour l'instant ; à passer en bloquant une fois la baseline établie (SECURITY_REVIEW.md §4.3)
+
+Le `GITHUB_TOKEN` est en lecture seule (`permissions: contents: read`) ; le push Docker Hub utilise ses propres secrets.
+
+## Vérifications locales
+
+### ShellCheck
+
+`.shellcheckrc` ajuste les vérifications au dépôt :
+
 ```bash
-shellcheck scripts/*.sh lib/*.sh start.sh
+shellcheck *.sh lib/*.sh scripts/*.sh
 ```
 
-### 2. `.shfmtrc`
-Shell script formatter configuration. Standards:
-- 4-space indentation
-- Consistent formatting across all scripts
-- Binary operators at line beginning
-- Space after redirect operators
+### shfmt
 
-Run locally:
+`.shfmtrc` impose l'indentation à 4 espaces :
+
 ```bash
-shfmt -d scripts/*.sh lib/*.sh  # Dry-run (show differences)
-shfmt -i 4 -w scripts/*.sh      # Write formatted version
+shfmt -d *.sh lib/*.sh          # vérification (dry-run)
+shfmt -i 4 -w *.sh lib/*.sh     # réécriture
 ```
 
-### 3. `.github/workflows/lint-and-test.yml`
-GitHub Actions CI pipeline with three gates:
+### BATS
 
-**ShellCheck**: Validates script correctness
-- Runs on all `.sh` files
-- Blocks PR if shellcheck warnings found
-- Catches common shell scripting mistakes
+```bash
+sudo apt-get install bats       # Debian/Ubuntu
+CODE="$PWD" bash parse_tests.sh # tests du parser (sans root)
+bats tests/security_regression.bats
+bats tests/*.bats               # suite legacy (tests cassés connus, non bloquants)
+```
 
-**shfmt**: Validates code style consistency
-- Checks all shell scripts for format compliance
-- Currently warnings-only (doesn't block yet)
-- Will enforce consistency
+### Hook pre-commit
 
-**BATS Tests**: Unit and integration tests
-- Located in `tests/` directory
-- Tests critical functions from `lib/` modules
-- Validates initialization, blocklist logic, etc.
+`scripts/pre-commit.sh` exécute ShellCheck sur les fichiers `.sh` stagés :
 
-### 4. `scripts/pre-commit.sh`
-Optional local git hook for quick lint feedback before commit.
-
-Install:
 ```bash
 cp scripts/pre-commit.sh .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 ```
 
-Then shellcheck runs automatically before each commit.
+## Vue d'ensemble des tests
 
-## Test Files Added
-
-### `tests/common.bats`
-Tests for `lib/common.sh`:
-- Module loading
-- Environment variable initialization
-- Log functions
-- Configuration validation
-
-### `tests/dns_blocklist.bats`
-Tests for `lib/dns_blocklist.sh`:
-- Module loading
-- Blocklist size validation
-- Allowlist parsing
-- DNS variable initialization
-
-## Running Checks Locally
-
-### ShellCheck
-```bash
-# Check all scripts
-shellcheck *.sh lib/*.sh scripts/*.sh
-
-# Check with strict settings
-shellcheck -S style -S warning lib/dns_blocklist.sh
-```
-
-### shfmt
-```bash
-# Check formatting (dry-run)
-shfmt -d *.sh lib/*.sh
-
-# Auto-fix formatting
-shfmt -i 4 -w *.sh lib/*.sh
-```
-
-### BATS Tests
-```bash
-# Install bats (Ubuntu/Debian)
-sudo apt-get install bats
-
-# Run all tests
-bats tests/*.bats
-
-# Run specific test file
-bats tests/common.bats
-
-# Run with verbose output
-bats tests/*.bats --trace
-```
-
-## CI Pipeline
-
-The GitHub Actions workflow runs on:
-- All pushes to `main`, `develop`, and `features/**` branches
-- All pull requests to `main` and `develop`
-
-### Pipeline Flow
-1. **ShellCheck** → Validates script correctness (BLOCKS if failed)
-2. **shfmt** → Checks format consistency (warnings only)
-3. **BATS** → Runs unit/integration tests (BLOCKS if failed)
-4. **Summary** → Reports overall status
-
-## Best Practices
-
-### Before Committing
-1. Run `shellcheck` on modified scripts
-2. Run `shfmt -d` to check formatting
-3. Run `bats` tests if you modified core functionality
-
-### For Contributors
-- Install the pre-commit hook to catch issues early
-- Follow the formatting rules in `.shfmtrc`
-- Add BATS tests for new functions in `lib/` modules
-- Don't ignore shellcheck warnings without good reason
-
-### For Reviewers
-- Check GitHub Actions CI status on PRs
-- Lint failures must be fixed before merge
-- Test results must pass for deployment
-
-## Key Metrics
-
-This commit establishes:
-- **Code Quality Gate**: 100% ShellCheck pass rate required
-- **Format Consistency**: Automated via shfmt config
-- **Test Coverage**: Unit and integration tests for critical paths
-- **Automation**: GitHub Actions runs all checks on every PR
-
----
-
-**Note**: This is Phase S3 of the maintenance plan:
-"Qualité automatique (CI) - Phase S3"
+| Fichier | Contenu | CI |
+|---|---|---|
+| `parse_tests.sh` | Parsing des `remote` OpenVPN (CRLF, BOM, blocs `<connection>`, `rport`) — autonome | Bloquant |
+| `tests/security_regression.bats` | Régressions sécurité | Bloquant |
+| `tests/common.bats`, `dns_blocklist.bats`, `dns_runtime.bats`, `dot.bats`, `firewall.bats` | Suite legacy — cassée par endroits | Non bloquant (Q1) |

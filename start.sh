@@ -830,7 +830,7 @@ init_environment
 
 log_json INFO "start.sh" \
     "Starting openvpn_client_proxy" \
-    "version=2.1.0"
+    "version=3.0.0"
 
 mkdir -p "$METRICS_DIR"
 

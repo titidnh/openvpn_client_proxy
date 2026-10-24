@@ -6,12 +6,12 @@
 # 
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
-# Version: 2.0.0
+# Version: 3.0.0
 # 
 # Utilisation:
 #   make build          - Construire l'image Docker
 #   make build-no-cache - Construire sans cache
-#   make up             - Démarrer les services avec docker-compose
+#   make up             - Démarrer les services avec docker compose
 #   make down           - Arrêter les services
 #   make logs           - Afficher les logs
 #   make shell          - Ouvrir un shell dans le conteneur
@@ -76,7 +76,7 @@ help:
 
 .PHONY: version
 version:
-	@echo "openvpn_client_proxy v2.0.0"
+	@echo "openvpn_client_proxy v3.0.0"
 	@echo "Auteur: titidnh"
 	@echo "Amélioration: Vibe Code (2026)"
 	@echo "Licence: MIT"
@@ -87,7 +87,7 @@ info:
 	@echo "  Architecture: $(shell uname -m)"
 	@echo "  Système: $(shell uname -srm)"
 	@echo "  Docker: $(shell docker --version 2>/dev/null || echo "non installé")"
-	@echo "  Docker Compose: $(shell docker-compose --version 2>/dev/null || echo "non installé")"
+	@echo "  Docker Compose: $(shell docker compose version 2>/dev/null || echo "non installé")"
 
 # ===========================================================================
 # Construction Docker
@@ -120,7 +120,7 @@ build-multiarch:
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--tag $(IMAGE_NAME):$(IMAGE_TAG) \
-		--tag $(IMAGE_NAME):2.0.0 \
+		--tag $(IMAGE_NAME):3.0.0 \
 		--push \
 		--build-arg TARGETARCH=amd64 \
 		$(if $(TAILSCALE_VERSION),--build-arg TAILSCALE_VERSION=$(TAILSCALE_VERSION),) \
@@ -132,35 +132,35 @@ build-multiarch:
 
 .PHONY: up
 up:
-	docker-compose -f $(COMPOSE_FILE) up
+	docker compose -f $(COMPOSE_FILE) up
 
 .PHONY: up-d
 up-d:
-	docker-compose -f $(COMPOSE_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) up -d
 
 .PHONY: down
 down:
-	docker-compose -f $(COMPOSE_FILE) down
+	docker compose -f $(COMPOSE_FILE) down
 
 .PHONY: restart
 restart:
-	docker-compose -f $(COMPOSE_FILE) restart
+	docker compose -f $(COMPOSE_FILE) restart
 
 .PHONY: logs
 logs:
-	docker-compose -f $(COMPOSE_FILE) logs
+	docker compose -f $(COMPOSE_FILE) logs
 
 .PHONY: logs-f
 logs-f:
-	docker-compose -f $(COMPOSE_FILE) logs -f
+	docker compose -f $(COMPOSE_FILE) logs -f
 
 .PHONY: ps
 ps:
-	docker-compose -f $(COMPOSE_FILE) ps
+	docker compose -f $(COMPOSE_FILE) ps
 
 .PHONY: shell
 shell:
-	docker-compose -f $(COMPOSE_FILE) exec vpn /bin/bash
+	docker compose -f $(COMPOSE_FILE) exec openvpn-proxy /bin/bash
 
 # ===========================================================================
 # Test et validation
@@ -242,7 +242,7 @@ clean:
 .PHONY: clean-all
 clean-all:
 	@echo "Nettoyage complet..."
-	docker-compose -f $(COMPOSE_FILE) down -v --rmi local
+	docker compose -f $(COMPOSE_FILE) down -v --rmi local
 	docker system prune -f
 	make clean
 	@echo "✓ Nettoyage complet terminé"
@@ -253,25 +253,25 @@ clean-all:
 
 .PHONY: pull
 pull:
-	docker-compose -f $(COMPOSE_FILE) pull
+	docker compose -f $(COMPOSE_FILE) pull
 
 .PHONY: build-push
 build-push:
-	docker-compose -f $(COMPOSE_FILE) build
-	docker-compose -f $(COMPOSE_FILE) push
+	docker compose -f $(COMPOSE_FILE) build
+	docker compose -f $(COMPOSE_FILE) push
 
 .PHONY: exec
 exec:
-	docker-compose -f $(COMPOSE_FILE) exec vpn $(ARG)
+	docker compose -f $(COMPOSE_FILE) exec openvpn-proxy $(ARG)
 
 .PHONY: stop
 stop:
-	docker-compose -f $(COMPOSE_FILE) stop
+	docker compose -f $(COMPOSE_FILE) stop
 
 .PHONY: start
 start:
-	docker-compose -f $(COMPOSE_FILE) start
+	docker compose -f $(COMPOSE_FILE) start
 
 .PHONY: restart-service
 restart-service:
-	docker-compose -f $(COMPOSE_FILE) restart vpn
+	docker compose -f $(COMPOSE_FILE) restart openvpn-proxy

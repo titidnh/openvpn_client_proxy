@@ -10,7 +10,7 @@
 # 
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
-# Version: 2.0.0
+# Version: 3.0.0
 # ===========================================================================
 
 # ===========================================================================
@@ -91,7 +91,7 @@ FROM alpine:3.24
 # ---------------------------------------------------------------------------
 LABEL org.opencontainers.image.title="openvpn-client-proxy" \
       org.opencontainers.image.description="Lightweight Docker container running an OpenVPN client, an HTTP proxy (Privoxy), and a local DNS resolver (dnsmasq) — featuring a network kill switch, DNS leak protection, optional proxy authentication, and optional Tailscale and NetBird integration." \
-      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.version="3.0.0" \
       org.opencontainers.image.authors="titidnh" \
       org.opencontainers.image.url="https://github.com/titidnh/openvpn_client_proxy" \
       org.opencontainers.image.licenses="MIT"
@@ -112,6 +112,9 @@ ENV ENABLE_TAILSCALE=false \
     VPN_TYPE="openvpn" \
     OPENVPN_ENABLED="true" \
     WIREGUARD_ENABLED="false" \
+    # Review sécurité 2026-10 : openvpn abandonne ses privilèges après la
+    # création du tun (--user vpn --group vpn, voir openvpn.sh).
+    OPENVPN_DROP_PRIVILEGES="true" \
     DNS_SERVER_1="94.140.14.14" \
     DNS_SERVER_2="94.140.15.15" \
     PROXY_USER="" \
@@ -206,9 +209,10 @@ COPY --from=netbird-dl /netbird /usr/local/bin/netbird
 RUN mkdir -p /usr/local/lib
 
 # Copier les scripts avec les bonnes permissions
+# Review sécurité 2026-10 : vpn-startup.sh (legacy daemon, parsing WireGuard
+# faible) retiré de l'image - le superviseur utilise openvpn.sh + lib/wireguard.sh.
 COPY --chmod=0755 openvpn.sh      /usr/local/bin/openvpn.sh
 COPY --chmod=0755 vpn-selector.sh /usr/local/bin/vpn-selector.sh
-COPY --chmod=0755 vpn-startup.sh  /usr/local/bin/vpn-startup.sh
 COPY --chmod=0755 healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 start.sh        /start.sh
 
