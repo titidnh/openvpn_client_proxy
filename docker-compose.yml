@@ -69,8 +69,13 @@ services:
       - FOWNER
       - KILL
     
-    # Anti fork-bomb / dérive du nombre de processus
-    pids_limit: 256
+    # Anti fork-bomb / dérive du nombre de processus :
+    # la limite pids est définie dans deploy.resources.limits.pids ci-dessous.
+    # NOTE : ne PAS utiliser pids_limit au niveau service en plus d'un bloc
+    # deploy.resources.limits - Compose >= v5 normalise pids_limit vers
+    # deploy.resources.limits.pids et refuse alors le projet avec
+    # "can't set distinct values on 'pids_limit' and
+    # 'deploy.resources.limits.pids': invalid compose project".
     
     # Périphériques requis pour OpenVPN/WireGuard
     devices:
@@ -92,6 +97,8 @@ services:
           # Profil DEFAULT: 128M
           # Profil STRICT-FILTERING: 192M+ (compilation de listes + auth)
           memory: 128M
+          # Anti fork-bomb / dérive du nombre de processus (hardening H2)
+          pids: 256
     
     # Volumes
     volumes:
@@ -239,4 +246,3 @@ volumes:
     # Cache des listes de blocage compilées (optionnel)
   unbound-anchor:
     # Ancre racine DNSSEC (root.key) et état RFC 5011 - persiste entre les recreations
-
