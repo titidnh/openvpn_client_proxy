@@ -53,7 +53,7 @@
 | 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
 | 🔗 **NetBird Integration** | Optional — join a [NetBird](https://netbird.io) network (open-source, self-hostable Tailscale alternative) and route it through the VPN tunnel |
-| 📦 **Minimal Image** | Based on `alpine:3.24` — minimal footprint (~120 MB), multi-stage build isolates the Tailscale and NetBird binaries |
+| 📦 **Minimal Image** | Based on `alpine:3.24` — minimal footprint, multi-stage build isolates the Tailscale and NetBird binaries |
 | 🔐 **DNS-over-TLS** | Optional — all DNS queries encrypted via `unbound` → DoT upstream (port 853). Blocks plain DNS port 53 leaks when enabled. |
 | 🔒 **DNSSEC Validation** | Optional (`ENABLE_DNSSEC=true`) — strict DNSSEC validation via unbound with auto-managed root trust anchor |
 | 📌 **DoT Cert Pinning** | Mount a custom CA bundle (`DOT_TLS_CERT_BUNDLE`) to restrict which TLS certificates are accepted for DoT connections |
@@ -1396,6 +1396,16 @@ docker build \
   -t openvpn-client-proxy:latest .
 ```
 
+The NetBird binary is pinned the same way (`NETBIRD_VERSION`, verified against `NETBIRD_SHA256_AMD64` / `NETBIRD_SHA256_ARM64`, checksums taken from the `netbird_<version>_checksums.txt` asset on the [NetBird releases page](https://github.com/netbirdio/netbird/releases)):
+
+```sh
+docker build \
+  --build-arg NETBIRD_VERSION=<version> \
+  --build-arg NETBIRD_SHA256_AMD64=<sha256 of the amd64 archive> \
+  --build-arg NETBIRD_SHA256_ARM64=<sha256 of the arm64 archive> \
+  -t openvpn-client-proxy:latest .
+```
+
 The CI/CD pipeline (`.github/workflows/docker-publish.yml`) automatically builds and pushes to Docker Hub on every push to `main` or on version tags (`v*`).
 
 ---
@@ -1813,6 +1823,14 @@ docker logs vpn_proxy | grep tailscale
 
 Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` is provided.
 
+### NetBird not starting
+
+```sh
+docker logs vpn_proxy | grep netbird
+```
+
+Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a persisted identity in `/var/lib/netbird` are provided. NetBird also needs the `SYS_ADMIN` and `SYS_RESOURCE` capabilities in addition to `NET_ADMIN` (see [NetBird Integration](#netbird-integration-optional)). The peer registers under the container hostname — set `hostname:` if the name looks wrong. NetBird only starts once the VPN tunnel is healthy: check the tunnel first if there is no NetBird log at all.
+
 ---
 
 ## Project File Reference
@@ -1829,7 +1847,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 | `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
 | `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
 | `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
-| `Dockerfile` | — | Multi-stage build: `alpine:3.24` base + Tailscale / NetBird binary stages |
+| `Dockerfile` | — | Multi-stage build: `alpine:3.24` base + Tailscale and NetBird binary stages (pinned versions, SHA256-verified) |
 | `docker-compose.yml` | — | Full example compose file with all options |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
 
@@ -1839,6 +1857,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 |---|---|
 | `/vpn` | **Required** — place `vpn.conf`, `vpn.auth`, and any cert files here (mounted read-only) |
 | `/var/lib/tailscale` | Optional — persist Tailscale identity across container recreations |
+| `/var/lib/netbird` | Optional — persist the NetBird peer identity across container recreations (see [NetBird Integration](#netbird-integration-optional)) |
 
 ---
 
@@ -1851,7 +1870,7 @@ Make sure `ENABLE_TAILSCALE=true` and a valid, non-expired `TAILSCALE_AUTHKEY` i
 | DNSSEC validation | ✅ Implemented — `ENABLE_DNSSEC=true` |
 | DoT certificate pinning | ✅ Implemented — `DOT_TLS_CERT_BUNDLE` |
 | DNS-over-HTTPS (DoH) | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
-| Capability drop | ✅ Implemented — `cap_drop` / `cap_add` at the container level |
+| Capability drop | ✅ Implemented at the container level — `cap_drop` / `cap_add` in compose (`DROP_CAPS` is deprecated and has no effect) |
 | Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (TLS terminator + mounted certificate) |
 | Read-only filesystem | 💡 `--read-only` flag with targeted tmpfs mounts to reduce attack surface |
 
