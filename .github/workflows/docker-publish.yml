@@ -89,7 +89,7 @@ jobs:
       # (exit-code 1) une fois la baseline établie (voir docs/SECURITY_REVIEW.md §4.3).
       - name: Trivy vulnerability scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
           format: table
