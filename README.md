@@ -1837,19 +1837,21 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 
 | File | Location in container | Description |
 |---|---|---|
-| `start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh |
-| `openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
-| `vpn-selector.sh` | `/usr/local/bin/vpn-selector.sh` | VPN type selection (OpenVPN / WireGuard) |
+| `scripts/start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh |
+| `scripts/openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
+| `scripts/vpn-selector.sh` | `/usr/local/bin/vpn-selector.sh` | VPN type selection (OpenVPN / WireGuard) |
 | `lib/*.sh` | `/usr/local/lib/` | Shared libraries: firewall (kill switch), DNS runtime, DoT, blocklist, WireGuard, supervisor |
-| `healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
-| `privoxy.config` | `/etc/privoxy/privoxy.config` | Privoxy HTTP proxy main config |
-| `default.action` | `/etc/privoxy/default.action` | Privoxy default action rules |
-| `user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
-| `default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
-| `user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
+| `scripts/healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
+| `config/privoxy/privoxy.config` | `/etc/privoxy/privoxy.config` | Privoxy HTTP proxy main config |
+| `config/privoxy/default.action` | `/etc/privoxy/default.action` | Privoxy default action rules |
+| `config/privoxy/user.action` | `/etc/privoxy/user.action` | Privoxy user-defined action overrides |
+| `config/privoxy/default.filter` | `/etc/privoxy/default.filter` | Privoxy default content filters |
+| `config/privoxy/user.filter` | `/etc/privoxy/user.filter` | Privoxy user-defined content filters |
 | `Dockerfile` | — | Multi-stage build: `alpine:3.24` base + Tailscale and NetBird binary stages (pinned versions, SHA256-verified) |
 | `docker-compose.yml` | — | Full example compose file with all options |
 | `.github/workflows/docker-publish.yml` | — | CI/CD — builds and pushes to Docker Hub on `main` and `v*` tags |
+| `tests/` | — | bats test suite — `tests/security_regression.bats` and `tests/parse_tests.sh` run in CI (see [docs/CI_LINT_TESTS.md](docs/CI_LINT_TESTS.md)) |
+| `docs/` | — | Project documentation — CI/lint/tests guide and [security review](docs/SECURITY_REVIEW.md) |
 
 **Volume mounts:**
 

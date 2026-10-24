@@ -170,20 +170,20 @@ shell:
 test:
 	@echo "Exécution des tests..."
 	@echo "1. Vérification de la syntaxe des scripts..."
-	bash -n start.sh || exit 1
-	bash -n healthcheck.sh || exit 1
-	bash -n openvpn.sh || exit 1
+	bash -n scripts/start.sh || exit 1
+	bash -n scripts/healthcheck.sh || exit 1
+	bash -n scripts/openvpn.sh || exit 1
 	@echo "✓ Tous les scripts ont une syntaxe valide"
 	@echo ""
 	@echo "2. Vérification des fichiers de configuration..."
 	@test -f Dockerfile && echo "✓ Dockerfile existe" || exit 1
 	@test -f docker-compose.yml && echo "✓ docker-compose.yml existe" || exit 1
-	@test -f privoxy.config && echo "✓ privoxy.config existe" || exit 1
+	@test -f config/privoxy/privoxy.config && echo "✓ config/privoxy/privoxy.config existe" || exit 1
 	@echo ""
 	@echo "3. Vérification des permissions..."
-	@test -x start.sh && echo "✓ start.sh est exécutable" || exit 1
-	@test -x healthcheck.sh && echo "✓ healthcheck.sh est exécutable" || exit 1
-	@test -x openvpn.sh && echo "✓ openvpn.sh est exécutable" || exit 1
+	@test -x scripts/start.sh && echo "✓ scripts/start.sh est exécutable" || exit 1
+	@test -x scripts/healthcheck.sh && echo "✓ scripts/healthcheck.sh est exécutable" || exit 1
+	@test -x scripts/openvpn.sh && echo "✓ scripts/openvpn.sh est exécutable" || exit 1
 	@echo ""
 	@echo "Tous les tests ont réussi!"
 
@@ -192,9 +192,9 @@ lint:
 	@echo "Vérification de la qualité du code..."
 	@echo "1. Vérification avec shellcheck (si installé)..."
 	if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck start.sh || echo "⚠ Avertissements shellcheck dans start.sh"; \
-		shellcheck healthcheck.sh || echo "⚠ Avertissements shellcheck dans healthcheck.sh"; \
-		shellcheck openvpn.sh || echo "⚠ Avertissements shellcheck dans openvpn.sh"; \
+		shellcheck scripts/start.sh || echo "⚠ Avertissements shellcheck dans scripts/start.sh"; \
+		shellcheck scripts/healthcheck.sh || echo "⚠ Avertissements shellcheck dans scripts/healthcheck.sh"; \
+		shellcheck scripts/openvpn.sh || echo "⚠ Avertissements shellcheck dans scripts/openvpn.sh"; \
 	else \
 		@echo "⚠ shellcheck non installé - installation recommandée"; \
 	fi

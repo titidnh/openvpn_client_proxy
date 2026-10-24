@@ -1,0 +1,132 @@
+###############################################################################
+# user.action - Surcharges personnelles pour Privoxy
+# 
+# Ce fichier est chargé APRÈS default.action : il peut activer, désactiver
+# ou remplacer n'importe quelle règle de default.action.
+# 
+# Auteur: Vibe Code (amélioration 2026)
+# Licence: MIT
+# Version: 2.0.0
+# 
+# Documentation: https://www.privoxy.org/user-manual/actions-file.html
+###############################################################################
+
+##
+## PROFILS DE FILTRAGE (PROXY_PROFILE)
+##
+## PROXY_PROFILE=normal   (défaut) - Filtrage modéré pour compatibilité maximum
+## PROXY_PROFILE=strict   - Filtrage agressif pour confidentialité maximale
+##
+## Changez le profil avec: docker run -e PROXY_PROFILE=strict ...
+##
+
+##
+## PROFIL NORMAL (défaut) - Filtrage compatible & efficace
+## Bloque tracking et publicités sans casser les sites web
+##
+{ -filter{remove-js-trackers} -filter{anti-fingerprint} }
+/
+
+# Exceptions de compatibilité - désactiver les filtres cassants sur certains domaines
+# À remplir au besoin - ex: streaming, banques, e-commerce
+# 
+# Syntaxe pour ajouter une exception:
+#   Les trois lignes suivantes (décommentées):
+#     { -filter{remove-js-trackers} -filter{anti-fingerprint} }
+#     .domaine-sensible.com
+#     .autre-domaine.local
+
+##
+## PROFIL STRICT - À activer via PROXY_PROFILE=strict
+## Filtrage maximal : bloque aussi les JS trackers et fingerprinting
+## ⚠️  Peut casser certains sites web (streaming, réseaux sociaux, etc.)
+##
+# NOTE: Ne s'applique que si PROXY_PROFILE=strict est défini
+# (À configurer au démarrage du conteneur)
+
+# NOTE: Pour ajouter des exceptions en mode normal, suivez le format ci-dessus
+
+##
+## BLOCAGE PERSONNEL SUPPLÉMENTAIRE
+##
+## Ajoutez vos propres domaines à bloquer ici.
+## Format: décommentez et modifiez les lignes ci-dessous:
+##   { +block{NOM_DU_BLOC} }
+##   .domaine-a-bloquer.com
+##   .autre-domaine.com
+##
+## Exemple commenté:
+## Les lignes suivantes (décommentées) bloqueraient domaine-a-bloquer.com:
+##   domaine-a-bloquer.com
+##   autre-domaine.com
+
+##
+## ===========================================================================
+## RECOMMANDATIONS 2026 POUR UNE CONFIDENTIALITÉ MAXIMALE
+## ===========================================================================
+##
+## 1. CONFIGURATIONS DNS (en parallèle à Privoxy)
+##    - Pi-hole, Unbound, ou NextDNS avec listes de blocage:
+##      * Hagezi's Pro (ads, tracking, malware)
+##      * StevenBlack's hosts (ads, social, fake akamai)
+##      * ENS Adblock List (French-friendly)
+##      * OISD Blocklist (comprehensive)
+##
+## 2. PARAMÈTRES NAVIGATEUR (via user.action ou DNS)
+##    - Bloquer WebGL fingerprinting
+##    - Désactiver Storage Access API
+##    - Refuser FLoC / Topics API
+##    - Bloquer Web Share Target
+##    - Limiter User-Agent Reduction
+##    - Désactiver WebRTC (pour éviter les fuites IP)
+##
+## 3. HEADERS AVANCÉS (à ajouter si besoin)
+##    - Permissions-Policy (ex: camera=(), microphone=(), geolocation=())
+##    - Strict-Transport-Security
+##    - X-Content-Type-Options: nosniff
+##    - X-Frame-Options: DENY
+##    - Referrer-Policy: no-referrer
+##
+## 4. BLOCAGE SUPPLÉMENTAIRE (moteurs alternatifs)
+##    - Utiliser Privy, Ghostery, uBlock Origin en plus de Privoxy
+##    - Activer "Hard Privacy" si disponible
+##    - Configurer des listes de blocage personnalisées
+##
+## 5. VPN + PROXY
+##    - Cette config utilise VPN + Privoxy (double couche)
+##    - Assurez-vous que le VPN ne fuite pas les DNS
+##    - Testez avec DNS leak test, IP leak test
+##    - Utilisez des outils comme: https://ipleak.net/
+##
+## 6. MAINTENANCE
+##    - Mettez à jour régulièrement les listes de filtres
+##    - Vérifiez les logs pour les faux positifs
+##    - Ajustez les règles en fonction de vos besoins spécifiques
+##
+## ===========================================================================
+## EXEMPLES DE RÈGLES AVANCÉES
+## ===========================================================================
+##
+## Bloquer tous les domaines contenant "tracking" ou "analytics"
+## Syntaxe (décommentée): { +block{Tracking} }
+## Puis ajouter les domaines:
+##   /tracking/
+##   /analytics/
+##
+## Bloquer les requêtes vers des pays spécifiques (via IP)
+## Syntaxe (décommentée): { +block{GeoBlock} }
+## Puis ajouter les domaines:
+##   .cn
+##   .ru
+##   .us
+##
+## Désactiver le filtrage pour les mises à jour logicielles
+## Syntaxe (décommentée): { -filter{all} }
+## Puis ajouter les domaines:
+##   .windowsupdate.com
+##   .update.microsoft.com
+##   .google.com/update
+
+##
+## FIN DU FICHIER
+##
