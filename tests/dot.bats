@@ -13,7 +13,6 @@ setup() {
     export DOT_IP_MAP_FILE="$TEST_TMP/dot_ip_map"
     export DOT_FORWARD_ADDRS_FILE="$TEST_TMP/dot_forward_addrs"
     export DOT_RESOLVED_IPS=""
-    export DOT_HOST_IP_MAP=()
     export ENABLE_DOT="true"
     export DOT_DNS_SERVERS="tls://dns.adguard-dns.com,tls://dns.quad9.net"
     export DOT_IP_REFRESH_INTERVAL="3600"
@@ -28,6 +27,12 @@ setup() {
     source "$(dirname "$BATS_TEST_FILENAME")"/../lib/common.sh
     source "$(dirname "$BATS_TEST_FILENAME")"/../lib/firewall.sh
     source "$(dirname "$BATS_TEST_FILENAME")"/../lib/dot.sh
+    
+    # DOT_HOST_IP_MAP doit être un tableau associatif : c'est init_environment
+    # qui le déclare (declare -gA). Un "export DOT_HOST_IP_MAP=()" créerait un
+    # tableau indexé et casserait dot_ip_map_set/get ("invalid arithmetic
+    # operator"). Les exports ci-dessus persistent via les défauts ":=".
+    init_environment
 }
 
 teardown() {

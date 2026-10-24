@@ -8,9 +8,14 @@
 # Licensed under the same terms as the main project
 #
 
-# Source common utilities
+# Source common utilities (no-op si common.sh est déjà chargé - superviseur,
+# tests bats : common.sh se garde lui-même du double sourcing via
+# COMMON_SH_LOADED ; le fallback /usr/local/lib/common.sh est inchangé dans
+# le conteneur)
 # shellcheck source=/dev/null
-source "/usr/local/lib/common.sh"
+if [ "${COMMON_SH_LOADED:-}" != "true" ]; then
+    source "/usr/local/lib/common.sh"
+fi
 
 download_blocklists() {
     [ "${ENABLE_DNS_BLOCKLIST:-false}" = "true" ] || return 0

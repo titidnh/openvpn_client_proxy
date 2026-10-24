@@ -40,6 +40,8 @@ Les constats ci-dessous ont été corrigés dans la PR security/hardening-2026-1
 1. **Bats legacy (Q1)** : la suite legacy (tests/common.bats, dns_blocklist,
    dns_runtime, dot, firewall) est en continue-on-error car des tests sont
    cassés. La réparer et la rendre bloquante.
+   **Corrigé (octobre 2026)** : la suite est réparée (40 échecs → 0) et
+   passée en bloquante dans la CI.
 2. **wg0.conf** : le montage /vpn est en lecture seule, mais ses permissions
    dépendent de l hôte. Documenter "chmod 600 ./vpn/wg0.conf" — la clé privée
    y figure en clair.
