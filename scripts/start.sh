@@ -66,6 +66,17 @@ start_metrics() {
         printf '#!/bin/sh\nMETRICS_DIR=%s\n' "$(printf "%q" "${METRICS_DIR}")"
         cat <<'HANDLER'
 
+# Consommer la requete HTTP (jusqu'a la ligne vide) avant de repondre.
+# Sans cela socat ferme le socket avec des donnees non lues -> le client
+# recoit un RST et socat loggue "read(...): Connection reset by peer" a
+# CHAQUE scrape (bruit permanent en boucle dans docker logs). Un client
+# muet (EOF immediat, fallback nc) sort proprement de la boucle.
+CR=$(printf '\r')
+while IFS= read -r line; do
+    line=${line%"$CR"}
+    [ -n "$line" ] || break
+done
+
 vpn_up=$(cat "$METRICS_DIR/metric_vpn_up" 2>/dev/null || echo 0)
 restart_total=$(cat "$METRICS_DIR/metric_restart_count" 2>/dev/null || echo 0)
 dot_active=$(cat "$METRICS_DIR/metric_dot_active" 2>/dev/null || echo 0)
@@ -104,7 +115,9 @@ HANDLER
     update_metrics
 
     if command_exists socat; then
-        socat \
+        # -T 30 : timeout d'inactivite par connexion - un client qui
+        # n'envoie jamais sa requete ne garde pas un fork socat vivant.
+        socat -T 30 \
             TCP-LISTEN:"$port",bind="$bind",reuseaddr,fork \
             EXEC:/tmp/metrics_handler.sh &
 

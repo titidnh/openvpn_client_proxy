@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Metrics endpoint ignored `METRICS_PORT`**: the listener (socat/nc) and the firewall loopback rules hard-coded `9100`; `METRICS_PORT` is now honored by the listener, the IPv4/IPv6 loopback OUTPUT rules, and validated (`validate_port`/`validate_ip`) like the other variables
+- **socat log noise on every metrics scrape**: the generated handler answered without consuming the client's HTTP request, so socat closed the socket with unread data and logged `read(...): Connection reset by peer` on each scrape; the handler now drains the request before answering, and socat runs with a 30 s inactivity timeout so stalled clients can't pile up forked handlers
 
 ### Changed
 - **Repository restructure** (no functional changes): runtime scripts moved to `scripts/` (`start.sh`, `openvpn.sh`, `healthcheck.sh`, `vpn-selector.sh`), Privoxy configuration to `config/privoxy/` (`privoxy.config`, `default.action`, `default.filter`, `user.action`, `user.filter`), test helper to `tests/parse_tests.sh`, and documentation to `docs/` (`CI_LINT_TESTS.md`, `SECURITY_REVIEW.md`)
