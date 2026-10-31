@@ -33,7 +33,7 @@ _BG_BLOCKLIST_REFRESH_STARTED=0
 supervise_all() {
     log_json INFO "supervisor" \
         "Starting supervisor" \
-        "version=2.2.0"
+        "version=3.0.0"
 
     local attempt=0
     local FW_FAIL_MAX=5
