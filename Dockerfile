@@ -242,6 +242,22 @@ COPY --chown=vpn:vpn \
      config/privoxy/user.filter \
      /etc/privoxy/
 
+# Read-only rootfs (roadmap "Read-only filesystem") : le paquet Alpine privoxy
+# livre /etc/privoxy en 0770 root:root (fichiers 0660). Apres le drop de
+# privileges de privoxy (--user vpn), les actionsfiles/filterfiles ne sont
+# plus lisibles ("can't load re_filterfile ...: Permission denied") : le
+# repertoire n'est pas traversable par vpn. Sur un rootfs inscriptible,
+# start.sh masquait le probleme par un chmod a+rx /etc/privoxy au runtime ;
+# en mode read-only /etc n'est plus modifiable -> normalisation au BUILD.
+# Idem pour templates/ (pages d'erreur/blocage, lues par le user vpn).
+RUN chmod 0755 /etc/privoxy /etc/privoxy/templates \
+ && chmod 0644 /etc/privoxy/privoxy.config \
+               /etc/privoxy/default.action \
+               /etc/privoxy/user.action \
+               /etc/privoxy/default.filter \
+               /etc/privoxy/user.filter \
+ && find /etc/privoxy/templates -maxdepth 1 -type f -exec chmod 0644 {} +
+
 # ---------------------------------------------------------------------------
 # Volumes et healthcheck
 # ---------------------------------------------------------------------------

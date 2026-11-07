@@ -971,6 +971,8 @@ docker run --read-only \
 
 `/etc` is **never** written at runtime: the Privoxy config shipped in the image (`/etc/privoxy/privoxy.config`) is copied to `/run` and only that copy is adapted — a supervisor restart never re-edits the image file. The `rt_tables` routing name registration is best-effort (routing commands use the numeric table `100`, so nothing changes on a read-only rootfs).
 
+**Read access after the privilege drop is fixed at build time.** The Alpine `privoxy` package ships `/etc/privoxy` as `0770 root:root` (files `0660`): once Privoxy drops to the `vpn` user it can no longer traverse the directory to re-read its `actionsfile`/`filterfile` (`can't load re_filterfile …: Permission denied`). On a writable root filesystem the old startup `chmod a+rx /etc/privoxy` masked this at runtime — impossible in read-only mode, so the Dockerfile now normalizes the permissions when the image is built (`chmod 0755` on the directory, `0644` on the config files and `templates/` error pages, plus an explicit `templdir` now that the runtime config lives in `/run`).
+
 **Fail-closed startup probe** — if `/run` or `/tmp` is not writable (a read-only rootfs without its tmpfs mounts), the container exits immediately with the exact remediation (`docker run --tmpfs /run ...`) instead of dying later with cryptic `Read-only file system` errors from `dnsmasq`/`privoxy`/`unbound`. A non-writable `/var/tmp` or `/var/log` only logs a warning (metrics files / daemon logs are optional).
 
 **Optional features under read-only mode:**

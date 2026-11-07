@@ -379,6 +379,31 @@ leaky_dns_rules() {
     [ "$PRIVOXY_SOURCE_CONF" = "/etc/privoxy/privoxy.config" ]
 }
 
+@test "image normalizes /etc/privoxy permissions at build time (read-only rootfs)" {
+    # Regression guard: le paquet Alpine privoxy livre /etc/privoxy en 0770
+    # root:root (fichiers 0660) - apres le drop de privileges de privoxy
+    # (--user vpn) ni le repertoire ni les actionsfiles/filterfiles ne sont
+    # lisibles ("can't load re_filterfile: Permission denied"). En read-only
+    # le runtime ne peut plus rattraper au chmod : le Dockerfile doit
+    # normaliser les permissions au BUILD.
+    local df="$REPO/Dockerfile"
+    [ -f "$df" ]
+
+    # Le répertoire /etc/privoxy (+ templates) doit être traversable.
+    grep -q -- "chmod 0755 /etc/privoxy /etc/privoxy/templates" "$df"
+    # Les 5 fichiers de config référencés par privoxy.config doivent être
+    # lisibles par le user de privoxy après le drop.
+    for f in privoxy.config default.action user.action default.filter user.filter; do
+        grep -q -- "/etc/privoxy/$f" "$df" \
+            || fail "Dockerfile: /etc/privoxy/$f non pris en charge par le chmod build"
+    done
+    # templates/ : les pages d'erreur/blocage sont lues par le user vpn.
+    grep -q -- "-exec chmod 0644" "$df"
+    # La config doit pointer explicitement vers templates/ (la config runtime
+    # vit dans /run : un chemin relatif résoudrait vers /run/templates).
+    grep -q -- "^templdir /etc/privoxy/templates$" "$REPO/config/privoxy/privoxy.config"
+}
+
 @test "configure_privoxy_auth copies the image config without editing /etc (read-only rootfs)" {
     local src="$BATS_TEST_TMPDIR/privoxy.source"
     printf 'listen-address 0.0.0.0:3128\nactionsfile /etc/privoxy/default.action\n' \
