@@ -362,3 +362,52 @@ leaky_dns_rules() {
     [ "$status" -eq 0 ]
     grep -q 'HTTP/1.1 200 OK' <<< "$output"
 }
+
+# ============================================================================
+# Read-only root filesystem (roadmap "Read-only filesystem")
+# ============================================================================
+
+@test "runtime-generated configs live outside /etc (read-only rootfs support)" {
+    # Avec un rootfs en lecture seule, AUCUNE valeur par défaut ne doit
+    # générer un write dans /etc : configs dnsmasq / unbound / privoxy.
+    unset DNSMASQ_CONF PRIVOXY_CONF UNBOUND_CONF PRIVOXY_SOURCE_CONF
+    init_environment >/dev/null 2>&1
+
+    [ "$DNSMASQ_CONF" = "/run/dnsmasq.conf" ]
+    [ "$UNBOUND_CONF" = "/run/unbound/unbound.conf" ]
+    [ "$PRIVOXY_CONF" = "/run/privoxy.config" ]
+    [ "$PRIVOXY_SOURCE_CONF" = "/etc/privoxy/privoxy.config" ]
+}
+
+@test "configure_privoxy_auth copies the image config without editing /etc (read-only rootfs)" {
+    local src="$BATS_TEST_TMPDIR/privoxy.source"
+    printf 'listen-address 0.0.0.0:3128\nactionsfile /etc/privoxy/default.action\n' \
+        > "$src"
+    export PRIVOXY_SOURCE_CONF="$src"
+    export PRIVOXY_CONF="$BATS_TEST_TMPDIR/run/privoxy.config"
+    export PROXY_USER="alice"
+    export PROXY_PASS="s3cret"
+    export PROXY_PORT="3128"
+
+    run configure_privoxy_auth
+    [ "$status" -eq 0 ]
+
+    # La config runtime est générée depuis la source (1er démarrage)...
+    [ -f "$PRIVOXY_CONF" ]
+    grep -q '^listen-address 127.0.0.1:3129$' "$PRIVOXY_CONF"
+    grep -q '^actionsfile /etc/privoxy/default.action$' "$PRIVOXY_CONF"
+    # ...et la source est intacte : jamais de sed -i dans /etc.
+    grep -q '^listen-address 0.0.0.0:3128$' "$src"
+
+    # Redémarrage superviseur : re-sed idempotent, pas de duplication.
+    run configure_privoxy_auth
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^listen-address' "$PRIVOXY_CONF")" -eq 1 ]
+
+    # Sans auth : listen-address publique sur PROXY_PORT.
+    unset PROXY_USER PROXY_PASS
+    rm -f "$PRIVOXY_CONF"
+    run configure_privoxy_auth
+    [ "$status" -eq 0 ]
+    grep -q '^listen-address 0.0.0.0:3128$' "$PRIVOXY_CONF"
+}

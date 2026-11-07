@@ -24,6 +24,7 @@
 - [Prometheus Metrics (Optional)](#prometheus-metrics-optional)
 - [Structured JSON Logs](#structured-json-logs)
 - [Capability Drop (Optional)](#capability-drop-optional)
+- [Read-only Filesystem (Hardening)](#read-only-filesystem-hardening)
 - [Proxy Authentication (Optional)](#proxy-authentication-optional)
 - [Supervision & Auto-Restart](#supervision--auto-restart)
 - [Healthcheck](#healthcheck)
@@ -62,6 +63,7 @@
 | 🔄 **Dynamic DoT IP Refresh** | Periodically re-resolves DoT server hostnames and updates iptables rules atomically (zero connectivity interruption) |
 | 📊 **Prometheus Metrics** | Optional (`ENABLE_METRICS=true`) — exposes a `/metrics` endpoint (default `127.0.0.1:9100`, configurable via `METRICS_PORT`/`METRICS_BIND`) with VPN status, restart count, DoT state, and uptime |
 | 🛡️ **Capability Drop** | Done at the container level with `cap_drop` / `cap_add` (see [Capability Drop](#capability-drop-optional)). The old `DROP_CAPS` variable is deprecated and has no effect. |
+| 🧊 **Read-only Filesystem** | Runs with an immutable root filesystem (`read_only: true` + tmpfs mounts): all runtime configs are generated in `/run`, `/etc` is never written (see [Read-only Filesystem](#read-only-filesystem-hardening)) |
 | 📋 **Structured JSON Logs** | All log output is JSON (`{"ts":"...","level":"INFO","component":"...","msg":"..."}`), ready for Loki/Splunk/any log aggregator |
 
 ---
@@ -255,7 +257,7 @@ mypassword
 
 ### `dnsmasq.conf` — DNS Resolver
 
-Located at `/etc/dnsmasq.conf` inside the container. **This file is generated at container startup** from the `DNS_SERVER_1` and `DNS_SERVER_2` environment variables — there is no `dnsmasq.conf` in the repository.
+Located at `/run/dnsmasq.conf` inside the container. **This file is generated at container startup** from the `DNS_SERVER_1` and `DNS_SERVER_2` environment variables — there is no `dnsmasq.conf` in the repository. It lives in the `/run` tmpfs so the root filesystem stays untouched (see [Read-only Filesystem](#read-only-filesystem-hardening)).
 
 **Default upstream resolvers (AdGuard Default — blocks ads only):**
 
@@ -286,7 +288,7 @@ server=94.140.15.15
 
 ### `privoxy.config` — HTTP Proxy
 
-Located at `/etc/privoxy/privoxy.config` inside the container.
+The image ships the pristine config at `/etc/privoxy/privoxy.config` (mounted read-only in read-only mode). At startup it is copied to `/run/privoxy.config` and only that runtime copy is adapted (`listen-address`) — `/etc` is never written (see [Read-only Filesystem](#read-only-filesystem-hardening)).
 
 **Current configuration:**
 
@@ -928,6 +930,56 @@ services:
 ```
 
 > ⚠️ Test this on your setup before relying on it (start the container, check the logs for `Operation not permitted`, confirm the proxy and tunnel work). Remove a capability only after checking that nothing breaks.
+
+---
+
+## Read-only Filesystem (Hardening)
+
+The container runs with an **immutable root filesystem**: nothing ever writes into the image layers, so a compromised daemon cannot persist a payload (or modify its own config/scripts) on disk. The example `docker-compose.yml` enables it by default:
+
+```yaml
+services:
+  openvpn-proxy:
+    read_only: true
+    tmpfs:
+      - /run       # generated configs: dnsmasq, unbound, privoxy, tinyproxy, VPN_PUSHED_DNS_FILE, sockets
+      - /var/tmp   # Prometheus metrics files
+      - /var/log   # daemon logs (Tailscale, NetBird, tinyproxy, unbound)
+      # /tmp is covered by the blocklist-cache volume (state files: dot_ip_map,
+      # healthcheck log, ...) - do NOT stack a tmpfs and a volume on one path
+```
+
+Equivalent `docker run`:
+
+```sh
+docker run --read-only \
+  --tmpfs /run --tmpfs /var/tmp --tmpfs /var/log \
+  -v ./vpn:/vpn:ro \
+  -v tailscale-data:/var/lib/tailscale -v netbird-data:/var/lib/netbird \
+  ... titidnh/openvpn_client_proxy:latest
+```
+
+**Where runtime writes go** — everything is generated in volatile memory (tmpfs) or in named volumes:
+
+| Path | Content | Writable via |
+|---|---|---|
+| `/run` | Generated configs (`/run/dnsmasq.conf`, `/run/unbound/unbound.conf`, `/run/privoxy.config`, `/run/tinyproxy/`), `VPN_PUSHED_DNS_FILE`, sockets | tmpfs |
+| `/tmp` | State files (`dot_ip_map`, healthcheck log, blocklist working dirs) | `blocklist-cache` volume / tmpfs |
+| `/var/tmp` | Prometheus metrics files | tmpfs |
+| `/var/log` | Daemon logs (optional features) | tmpfs |
+| `/var/lib/tailscale`, `/var/lib/netbird`, `/var/lib/unbound` | Persistent identities / DNSSEC anchor | named volumes |
+
+`/etc` is **never** written at runtime: the Privoxy config shipped in the image (`/etc/privoxy/privoxy.config`) is copied to `/run` and only that copy is adapted — a supervisor restart never re-edits the image file. The `rt_tables` routing name registration is best-effort (routing commands use the numeric table `100`, so nothing changes on a read-only rootfs).
+
+**Fail-closed startup probe** — if `/run` or `/tmp` is not writable (a read-only rootfs without its tmpfs mounts), the container exits immediately with the exact remediation (`docker run --tmpfs /run ...`) instead of dying later with cryptic `Read-only file system` errors from `dnsmasq`/`privoxy`/`unbound`. A non-writable `/var/tmp` or `/var/log` only logs a warning (metrics files / daemon logs are optional).
+
+**Optional features under read-only mode:**
+
+- **NetBird** (`ENABLE_NETBIRD=true`): `netbird up` writes its runtime config to `/etc/netbird/config.json` — add a tmpfs entry for `/etc/netbird` (the peer identity itself persists in the `/var/lib/netbird` volume).
+- **DNSSEC** (`ENABLE_DNSSEC=true`): keep a writable volume or tmpfs on `/var/lib/unbound` (RFC 5011 anchor updates), as the example compose already does with the `unbound-anchor` volume.
+- `/etc/resolv.conf` is a Docker bind mount, separate from the rootfs, and stays writable; the existing fallbacks are unchanged.
+
+To revert to the previous (writable rootfs) behavior: set `read_only: false` in `docker-compose.yml`.
 
 ---
 
@@ -1719,7 +1771,7 @@ docker exec vpn_proxy nslookup example.com 127.0.0.1
 If it fails, test the dnsmasq configuration:
 
 ```sh
-docker exec vpn_proxy dnsmasq --test --conf-file=/etc/dnsmasq.conf
+docker exec vpn_proxy dnsmasq --test --conf-file=/run/dnsmasq.conf
 ```
 
 ### `/etc/resolv.conf` is read-only
@@ -1748,8 +1800,8 @@ docker exec <container> nslookup example.com 8.8.8.8
 Check the generated unbound config:
 
 ```sh
-docker exec <container> cat /etc/unbound/unbound.conf
-docker exec <container> unbound-checkconf /etc/unbound/unbound.conf
+docker exec <container> cat /run/unbound/unbound.conf
+docker exec <container> unbound-checkconf /run/unbound/unbound.conf
 ```
 
 ### DNS Blocklist not blocking / failed to load
@@ -1775,7 +1827,7 @@ If the blocklist exists but domains are not being blocked:
 
 1. **Verify dnsmasq reloaded the config**:
    ```sh
-   docker exec <container> cat /etc/dnsmasq.conf | grep "addn-hosts"
+   docker exec <container> cat /run/dnsmasq.conf | grep "addn-hosts"
    ```
 
 2. **Test a known blocked domain**:
@@ -1947,7 +1999,7 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 | DNS-over-HTTPS (DoH) | ✅ Implemented — `https://` prefix in `DOT_DNS_SERVERS` |
 | Capability drop | ✅ Implemented at the container level — `cap_drop` / `cap_add` in compose (`DROP_CAPS` is deprecated and has no effect) |
 | Proxy TLS (HTTPS proxy) | 💡 Expose the proxy over TLS to protect credentials in transit (TLS terminator + mounted certificate) |
-| Read-only filesystem | 💡 `--read-only` flag with targeted tmpfs mounts to reduce attack surface |
+| Read-only filesystem | ✅ Implemented — `read_only: true` + targeted tmpfs mounts; runtime configs generated in `/run`, `/etc` never written (see [Read-only Filesystem](#read-only-filesystem-hardening)) |
 
 ### 🧰 Operational & Reliability
 
