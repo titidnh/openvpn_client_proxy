@@ -1,0 +1,95 @@
+# ===========================================================================
+# Release : le CHANGELOG est la source de verite (Keep a Changelog).
+#
+# Quand un run "Build and Publish Docker image" reussit sur main et que le
+# CHANGELOG contient une section "## [X.Y.Z]" dont le tag vX.Y.Z n'existe pas
+# encore, ce workflow cree la GitHub Release - l'API "Create a release" cree
+# aussi le tag, pointe sur le commit qui vient d'etre construit et publie.
+#
+# Declenche via workflow_run (et non via le push du tag) car un tag cree par
+# le GITHUB_TOKEN ne re-declenche pas les workflows GitHub (regle
+# anti-recursion) : les tags d'image versionnes sont publies par
+# docker-publish.yml, qui lit lui-meme la version dans le CHANGELOG.
+#
+# Convention : une version ne quitte [Unreleased] qu'au moment de publier la
+# release - sinon elle partirait au premier push sur main suivant.
+# ===========================================================================
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Build and Publish Docker image"]
+    types: [completed]
+
+# Creation d'un tag + d'une release : contents: write requis.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # La release n'est creee que si les images ont bien ete construites et
+    # publiees (conclusion success, branche main uniquement).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Le commit exact qui vient d'etre construit, pas le HEAD courant.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Extract version and notes from CHANGELOG
+        id: ver
+        run: |
+          VERSION="$(grep -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md | head -1)"
+          if [ -z "$VERSION" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Aucune section de version dans CHANGELOG.md - rien a faire."
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v$VERSION deja publie - rien a faire."
+            exit 0
+          fi
+          # Notes = section CHANGELOG de la version (les lignes vides et le
+          # separateur "---" de fin de section sont retires).
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag = 1; next }
+            flag && /^## \[/ { exit }
+            flag {
+              if ($0 == "---" || $0 == "") {
+                if (printed) { buf = buf $0 "\n" }
+                next
+              }
+              printed = 1
+              if (buf != "") { printf "%s", buf; buf = "" }
+              print
+            }
+          ' CHANGELOG.md > release_notes.md
+          {
+            echo "version=$VERSION"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release v$VERSION a creer."
+
+      - name: Create the GitHub Release (and its tag)
+        if: steps.ver.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          jq -n \
+            --arg tag "v$VERSION" \
+            --arg sha "${{ github.event.workflow_run.head_sha }}" \
+            --rawfile notes release_notes.md \
+            '{tag_name: $tag, name: $tag, target_commitish: $sha, body: $notes}' \
+            > payload.json
+          curl -sf -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary @payload.json \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases"
+          echo "Release v$VERSION creee."

@@ -6,7 +6,7 @@
 # 
 # Auteur: Vibe Code (amélioration 2026)
 # Licence: MIT
-# Version: 3.0.0
+# Version: 3.1.0
 # 
 # Utilisation:
 #   make build          - Construire l'image Docker
@@ -76,7 +76,7 @@ help:
 
 .PHONY: version
 version:
-	@echo "openvpn_client_proxy v3.0.0"
+	@echo "openvpn_client_proxy v3.1.0"
 	@echo "Auteur: titidnh"
 	@echo "Amélioration: Vibe Code (2026)"
 	@echo "Licence: MIT"
@@ -120,7 +120,7 @@ build-multiarch:
 	docker buildx build \
 		--platform linux/amd64,linux/arm64,linux/arm/v7 \
 		--tag $(IMAGE_NAME):$(IMAGE_TAG) \
-		--tag $(IMAGE_NAME):3.0.0 \
+		--tag $(IMAGE_NAME):3.1.0 \
 		--push \
 		--build-arg TARGETARCH=amd64 \
 		$(if $(TAILSCALE_VERSION),--build-arg TAILSCALE_VERSION=$(TAILSCALE_VERSION),) \

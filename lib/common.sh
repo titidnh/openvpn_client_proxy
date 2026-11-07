@@ -26,7 +26,7 @@ COMMON_SH_LOADED=true
 # ===========================================================================
 
 # Version du script pour suivi
-readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_VERSION="3.1.0"
 readonly SCRIPT_DATE="2026-10-07"
 
 # Chemins par défaut

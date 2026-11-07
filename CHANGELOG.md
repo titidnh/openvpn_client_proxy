@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-07
+
 ### Added
 - **ARM32v7 support** (roadmap "ARM32v7 support"): the multi-arch image now includes `linux/arm/v7` for older Raspberry Pi models (Pi 2/3/4 running a 32-bit OS)
   - CI builds and publishes all three platforms; `make build-multiarch` and the README build examples updated (incl. `armv6l`/`armv7l` → `arm` mapping for local builds)
@@ -216,6 +218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/titidnh/openvpn_client_proxy/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/titidnh/openvpn_client_proxy/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/titidnh/openvpn_client_proxy/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/titidnh/openvpn_client_proxy/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/titidnh/openvpn_client_proxy/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/titidnh/openvpn_client_proxy/compare/v1.0.0...v2.0.0

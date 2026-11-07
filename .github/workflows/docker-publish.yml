@@ -46,6 +46,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Historique complet : la version CHANGELOG est comparee au
+          # dernier tag ANTERIEUR au push (git tag --merged HEAD~1).
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -59,6 +63,41 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Version depuis le CHANGELOG (source de verite, Keep a Changelog).
+      # Sur le push qui introduit une nouvelle version publiee, les tags
+      # d'image versionnes sont emis dans le meta ci-dessous : un tag git
+      # cree par le GITHUB_TOKEN de release.yml ne re-declenche pas les
+      # workflows GitHub (regle anti-recursion), le type=semver ne suffit
+      # donc que pour les tags pousses manuellement.
+      - name: Extract version from CHANGELOG
+        id: ver
+        run: |
+          VERSION="$(grep -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md | head -1)"
+          if [ -z "$VERSION" ]; then
+            echo "Aucune section ## [X.Y.Z] dans CHANGELOG.md" >&2
+            exit 1
+          fi
+          MAJOR_MINOR="$(echo "$VERSION" | cut -d. -f1-2)"
+          MAJOR="$(echo "$VERSION" | cut -d. -f1)"
+          # Dernier tag ANTERIEUR au push : les tags crees apres (par
+          # release.yml, qui pointent sur HEAD) sont exclus par --merged
+          # HEAD~1 - pas de course critique avec le workflow de release.
+          LATEST_TAGGED="$(git tag -l 'v*' --merged HEAD~1 2>/dev/null | sort -V | tail -1)"
+          LATEST_VER="${LATEST_TAGGED#v}"
+          IS_RELEASE="false"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "$LATEST_VER" != "$VERSION" ]; then
+            IS_RELEASE="true"
+            echo "Release build : v$VERSION est une nouvelle version -> tags d'image versionnes"
+          else
+            echo "Build normal (changelog=$VERSION, dernier tag=v${LATEST_VER:-aucun}) -> seul 'latest' bouge"
+          fi
+          {
+            echo "version=$VERSION"
+            echo "major_minor=$MAJOR_MINOR"
+            echo "major=$MAJOR"
+            echo "is_release=$IS_RELEASE"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -71,6 +110,12 @@ jobs:
             type=semver,pattern={{major}}
             # Push on main → image tag: latest
             type=raw,value=latest,enable={{is_default_branch}}
+            # Release build (push sur main qui introduit une nouvelle
+            # version dans le CHANGELOG, avant creation du tag) -> memes
+            # tags d'image versionnes qu'un push de tag manuel.
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ steps.ver.outputs.is_release == 'true' }}
+            type=raw,value=${{ steps.ver.outputs.major_minor }},enable=${{ steps.ver.outputs.is_release == 'true' }}
+            type=raw,value=${{ steps.ver.outputs.major }},enable=${{ steps.ver.outputs.is_release == 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

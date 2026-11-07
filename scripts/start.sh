@@ -868,7 +868,7 @@ check_runtime_writability
 
 log_json INFO "start.sh" \
     "Starting openvpn_client_proxy" \
-    "version=3.0.0"
+    "version=3.1.0"
 
 mkdir -p "$METRICS_DIR"
 
