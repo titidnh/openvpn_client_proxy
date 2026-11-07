@@ -330,6 +330,8 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `DNS_SERVER_1` | `94.140.14.14` | Primary upstream DNS resolver (AdGuard Default — ads only). Set to any IPv4 address. |
 | `DNS_SERVER_2` | `94.140.15.15` | Secondary upstream DNS resolver (AdGuard Default — ads only). |
 | `DNS_BYPASS_VPN` | `false` | Route upstream DNS servers (`DNS_SERVER_1`/`DNS_SERVER_2` in plain mode, DoT/DoH servers in `ENABLE_DOT=true` mode) through the **local network** instead of the VPN tunnel — firewall ACCEPT rules + host routes via the physical gateway. Only for a **local** resolver (box DNS, LAN Pi-hole). `false` (default): all DNS goes through the tunnel. See [Local DNS bypass](#local-dns-bypass-dns_bypass_vpn). |
+| `DNS_FROM_VPN` | `false` | Once the tunnel is healthy, switch dnsmasq to the DNS **provided by the VPN provider** instead of `DNS_SERVER_1`/`DNS_SERVER_2` — keeps the resolver's geo consistent with the VPN exit country. OpenVPN: `dhcp-option DNS` pushed by the server; WireGuard: `DNS = ...` line of `wg0.conf`. `DNS_SERVER_1`/`DNS_SERVER_2` remain the bootstrap and fallback upstreams. Incompatible with `ENABLE_DOT=true` (the container refuses to start). See [Follow the VPN provider's DNS](#follow-the-vpn-providers-dns-dns_from_vpn). |
+| `VPN_PUSHED_DNS_FILE` | `/run/vpn-pushed-dns` | Exchange file holding the VPN-pushed DNS servers (one IP per line, deduplicated, max 8): written by the OpenVPN hook (`scripts/vpn-dns-up.sh`) or from the `wg0.conf` `DNS` line, consumed by the supervisor (`apply_vpn_pushed_dns`). Emptied at every VPN (re)start. Used only when `DNS_FROM_VPN=true`. |
 | `PROXY_PORT` | `3128` | TCP port for the HTTP proxy. **Without auth:** Privoxy listens on `0.0.0.0:PROXY_PORT`. **With auth:** Privoxy listens internally on `127.0.0.1:PROXY_PORT+1` and tinyproxy fronts on `0.0.0.0:PROXY_PORT`. Example: `PROXY_PORT=8080` → tinyproxy `0.0.0.0:8080` → Privoxy `127.0.0.1:8081`. |
 | `PROXY_USER` | *(empty)* | Username for HTTP Basic Auth on the proxy. Both `PROXY_USER` and `PROXY_PASS` must be set to activate auth. |
 | `PROXY_PASS` | *(empty)* | Password for HTTP Basic Auth (tinyproxy `BasicAuth`). **Only `[A-Za-z0-9._-]` characters are accepted** — tinyproxy rejects passwords containing spaces or special characters like `! @ $ : / , ;` (the container fails fast with an explicit error). For arbitrary passwords, front the proxy with Squid/3proxy instead. |
@@ -587,6 +589,44 @@ docker exec <container> ip route | grep -F "$(docker exec <container> printenv D
 
 docker exec <container> iptables -S OUTPUT | grep 'dport 53'
 # → ACCEPT rules for the local DNS servers
+```
+
+---
+
+## Follow the VPN provider's DNS (DNS_FROM_VPN)
+
+By default, dnsmasq forwards all queries to `DNS_SERVER_1` / `DNS_SERVER_2` — a public resolver of your choosing. Those queries go **through the tunnel**, but the resolver itself belongs to a third party: it sees every lookup, and its geo may not match the VPN exit country, breaking the geo-consistency of the tunnel (streaming platforms, site localisation, anti-fingerprinting).
+
+Set `DNS_FROM_VPN=true` to switch dnsmasq to the DNS **provided by the VPN provider** once the tunnel is healthy:
+
+```yaml
+environment:
+  DNS_FROM_VPN: "true"   # ENABLE_DOT must stay "false"
+```
+
+- **OpenVPN**: the `dhcp-option DNS <ip>` servers pushed by the VPN server, captured by a new `--up` / `--route-up` hook (`scripts/vpn-dns-up.sh`).
+- **WireGuard**: the `DNS = <ip>[, <ip>]` line of `wg0.conf` (e.g. Surfshark: `DNS = 162.252.172.57, 149.154.159.92`).
+
+### How it works
+
+- `DNS_SERVER_1` / `DNS_SERVER_2` remain the **bootstrap** upstreams — they resolve the VPN remotes before the tunnel exists — and the **fallback**: if the provider pushes nothing (no `dhcp-option DNS`, no `DNS` line), dnsmasq keeps them and a warning is logged.
+- Pushed servers land in `VPN_PUSHED_DNS_FILE` (default `/run/vpn-pushed-dns`): one IP per line, validated, deduplicated, max 8. The file is emptied at every VPN (re)start — the DNS of a previous connection is never reused.
+- Once the tunnel is healthy (`vpn_tunnel_ready`), the supervisor applies them via `apply_vpn_pushed_dns` — idempotent: dnsmasq is restarted only when the upstreams actually change.
+- All DNS traffic still goes **through the tunnel** (kill switch unchanged): this option changes *which* servers dnsmasq uses, not *how* they are reached.
+- A single pushed server keeps `DNS_SERVER_2` as the secondary upstream.
+
+### Incompatible with ENABLE_DOT
+
+`DNS_FROM_VPN=true` combined with `ENABLE_DOT=true` is rejected at startup (fail-closed): DoT forwards to the third-party servers of `DOT_DNS_SERVERS`, which would override the provider-pushed DNS and defeat the purpose. Disable one of the two.
+
+### Verify
+
+```sh
+docker logs <container> 2>&1 | grep apply_vpn_pushed_dns
+# → {"component":"apply_vpn_pushed_dns","msg":"switching dnsmasq upstream to VPN-pushed DNS", ...}
+
+docker exec <container> cat /run/vpn-pushed-dns
+# → one IP per line, pushed by the provider (OpenVPN) or from wg0.conf (WireGuard)
 ```
 
 ---
@@ -1872,6 +1912,7 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 | `scripts/start.sh` | `/start.sh` | Main entrypoint — supervisor, iptables setup, service orchestration, JSON logging, metrics, DoT IP refresh |
 | `scripts/openvpn.sh` | `/usr/local/bin/openvpn.sh` | Thin wrapper: `openvpn --cd /vpn --config /vpn/vpn.conf` |
 | `scripts/vpn-selector.sh` | `/usr/local/bin/vpn-selector.sh` | VPN type selection (OpenVPN / WireGuard) |
+| `scripts/vpn-dns-up.sh` | `/usr/local/bin/vpn-dns-up.sh` | OpenVPN `--up`/`--route-up` hook: captures the `dhcp-option DNS` servers pushed by the VPN server (`DNS_FROM_VPN`) |
 | `lib/*.sh` | `/usr/local/lib/` | Shared libraries: firewall (kill switch), DNS runtime, DoT, blocklist, WireGuard, supervisor |
 | `scripts/healthcheck.sh` | `/usr/local/bin/healthcheck.sh` | Container healthcheck script |
 | `config/privoxy/privoxy.config` | `/etc/privoxy/privoxy.config` | Privoxy HTTP proxy main config |

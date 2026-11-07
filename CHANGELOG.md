@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Follow the VPN provider's DNS** (`DNS_FROM_VPN`, default `false`): once the tunnel is healthy, dnsmasq switches to the DNS provided by the VPN provider instead of `DNS_SERVER_1`/`DNS_SERVER_2` — restores the geo-consistency of the tunnel (a third-party resolver can break it even when queries go through the tunnel)
+  - OpenVPN: `dhcp-option DNS` pushed options captured by a new `--up`/`--route-up` hook (`scripts/vpn-dns-up.sh`, `--script-security 2` enabled only for that hook); WireGuard: `DNS = ...` line of `wg0.conf`
+  - Pushed servers are validated, deduplicated and capped at 8 in `VPN_PUSHED_DNS_FILE` (default `/run/vpn-pushed-dns`), emptied at every VPN (re)start so a previous connection's DNS is never reused; the target file is pre-created `vpn:vpn` mode 664 so the post-privilege-drop `--route-up` hook stays able to write it (SIGUSR1 + `--persist-tun` reconnections replay `route-up`, not `up`)
+  - The supervisor applies them via `apply_vpn_pushed_dns` (idempotent: dnsmasq restarted only on an actual upstream change); `DNS_SERVER_1`/`DNS_SERVER_2` remain the bootstrap upstreams (remote resolution before the tunnel) and the fallback when nothing is pushed
+  - `DNS_FROM_VPN=true` combined with `ENABLE_DOT=true` is rejected by `validate_environment` (fail-closed): DoT to a third party would override the pushed DNS
+  - Covered by `tests/dns_from_vpn.bats` (25 tests: defaults, validation, switching, idempotence, hostile input, hook, WireGuard parsing); documented in the README
 - **LAN metrics scraping (explicit opt-in)** (`METRICS_BIND`, default `127.0.0.1`): bind the `/metrics` endpoint outside the container loopback (e.g. `0.0.0.0` for a remote Prometheus). The container firewall opens the matching INPUT rule only when the bind is not loopback, and a warning is logged at startup
   - Access modes documented in the README "Prometheus Metrics" section: `docker exec` (default), Docker host via `127.0.0.1:9100:9100` port mapping, LAN via `METRICS_BIND=0.0.0.0` + published port
 - **NetBird integration** (`ENABLE_NETBIRD`, default `false`): optional [NetBird](https://netbird.io) mesh VPN client alongside Tailscale — open-source and self-hostable alternative
