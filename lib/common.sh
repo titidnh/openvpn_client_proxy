@@ -33,8 +33,14 @@ readonly SCRIPT_DATE="2026-10-07"
 readonly DEFAULT_VPN_DIR="/vpn"
 readonly DEFAULT_VPN_CONF="${DEFAULT_VPN_DIR}/vpn.conf"
 readonly DEFAULT_RESOLV_CONF="/etc/resolv.conf"
-readonly DEFAULT_DNSMASQ_CONF="/etc/dnsmasq.conf"
-readonly DEFAULT_PRIVOXY_CONF="/etc/privoxy/privoxy.config"
+# Read-only rootfs (roadmap "Read-only filesystem") : les configs générées
+# au runtime vivent dans /run (tmpfs en mode --read-only / read_only: true),
+# jamais dans /etc - l'image n'est pas écrite au démarrage.
+readonly DEFAULT_DNSMASQ_CONF="/run/dnsmasq.conf"
+# Config runtime de Privoxy : copie de la config image (DEFAULT_PRIVOXY_SOURCE_CONF)
+# adaptée au démarrage (listen-address) - /etc/privoxy n'est jamais modifié.
+readonly DEFAULT_PRIVOXY_CONF="/run/privoxy.config"
+readonly DEFAULT_PRIVOXY_SOURCE_CONF="/etc/privoxy/privoxy.config"
 readonly DEFAULT_METRICS_DIR="/var/tmp/metrics"
 
 # DNS par défaut (AdGuard DNS - toujours valide en 2026)
@@ -694,6 +700,72 @@ get_privoxy_port() {
     echo "$port"
 }
 
+# Configure la config runtime de Privoxy (avec ou sans authentification).
+# Read-only rootfs (roadmap "Read-only filesystem") : la config image
+# ($PRIVOXY_SOURCE_CONF, /etc/privoxy/privoxy.config) n'est JAMAIS modifiée.
+# La 1re exécution la copie vers $PRIVOXY_CONF (/run, tmpfs en mode
+# --read-only) ; les redémarrages du superviseur re-sed le même fichier
+# (idempotent : la ligne listen-address est remplacée, jamais dupliquée).
+# Usage: configure_privoxy_auth
+configure_privoxy_auth() {
+    log_json INFO "configure_privoxy_auth" \
+        "Configuring Privoxy authentication"
+
+    # Read-only rootfs : /etc/privoxy/privoxy.config n'est jamais édité.
+    # 1er démarrage : copie de la config image vers $PRIVOXY_CONF (/run,
+    # tmpfs en mode read_only). Redémarrage superviseur : le fichier existe
+    # déjà, on re-sed le même exemplaire (idempotent).
+    if [ ! -f "$PRIVOXY_CONF" ]; then
+        if [ -f "${PRIVOXY_SOURCE_CONF:-$DEFAULT_PRIVOXY_SOURCE_CONF}" ]; then
+            mkdir -p "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || true
+            cp "${PRIVOXY_SOURCE_CONF:-$DEFAULT_PRIVOXY_SOURCE_CONF}" \
+                "$PRIVOXY_CONF" 2>/dev/null || true
+        fi
+    fi
+
+    local user="${PROXY_USER:-}"
+    local pass="${PROXY_PASS:-}"
+    local privoxy_port
+    local privoxy_addr
+
+    if [ -n "$user" ] && [ -n "$pass" ]; then
+        privoxy_port=$((PROXY_PORT + 1))
+        privoxy_addr="127.0.0.1"
+
+        sed -i \
+            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
+            "$PRIVOXY_CONF"
+
+        log_json INFO "configure_privoxy_auth" \
+            "auth enabled - privoxy on ${privoxy_addr}:${privoxy_port}"
+    else
+        privoxy_port="$PROXY_PORT"
+        privoxy_addr="0.0.0.0"
+
+        sed -i \
+            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
+            "$PRIVOXY_CONF"
+
+        log_json INFO "configure_privoxy_auth" \
+            "no auth - privoxy on ${privoxy_addr}:${privoxy_port}"
+    fi
+
+    # S3 : sed -i recree le fichier -> il redevient root:root. Privoxy lance
+    # avec --user refuse une config possedee par root (check_file_rights).
+    # Restaurer le proprietaire attendu par le demon. Le fichier est ouvert
+    # en lecture large (644) : la config Privoxy ne contient aucun secret
+    # (l auth est geree par tinyproxy) et stat() exige de traverser le
+    # repertoire - un mode trop strict fait echouer le demarrage du demon.
+    chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod 644 "$PRIVOXY_CONF" 2>/dev/null || true
+    chmod a+rx "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || true
+    log_json DEBUG "configure_privoxy_auth" \
+        "privoxy config ownership" \
+        "file=${PRIVOXY_CONF}" "owner=$(stat -c '%U:%G' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
+        "dir_mode=$(stat -c '%a' "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || echo '?')"
+}
+
 # ===========================================================================
 # Fonctions de test de connectivité
 # ===========================================================================
@@ -879,9 +951,10 @@ init_environment() {
     : "${RESOLV_CONF:=$DEFAULT_RESOLV_CONF}"
     : "${DNSMASQ_CONF:=$DEFAULT_DNSMASQ_CONF}"
     : "${PRIVOXY_CONF:=$DEFAULT_PRIVOXY_CONF}"
+    : "${PRIVOXY_SOURCE_CONF:=$DEFAULT_PRIVOXY_SOURCE_CONF}"
     : "${DOT_IP_MAP_FILE:=/tmp/dot_ip_map}"
     : "${DOT_FORWARD_ADDRS_FILE:=/tmp/dot_forward_addrs}"
-    : "${UNBOUND_CONF:=/etc/unbound/unbound.conf}"
+    : "${UNBOUND_CONF:=/run/unbound/unbound.conf}"
     : "${DNS_BLOCKLIST_COMPILED_UNBOUND:=/tmp/dns_blocklist_unbound.conf}"
     : "${DNS_BLOCKLIST_COMPILED_DNSMASQ:=/tmp/dns_blocklist_dnsmasq.conf}"
     : "${DNS_BLOCKLIST_RAW_DIR:=/tmp/dns_blocklist_raw}"

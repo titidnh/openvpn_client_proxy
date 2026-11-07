@@ -208,8 +208,14 @@ teardown() {
     local reconfig_calls=0
     reconfigure_dnsmasq_to_unbound() { reconfig_calls=$((reconfig_calls + 1)); }
 
-    apply_vpn_pushed_dns
-    [ "$?" -eq 1 ]
+    # bats exécute le corps avec errexit : un appel nu dont le code de
+    # retour est 1 échouerait le test AVANT l'assertion ci-dessous. La
+    # fonction renvoie volontairement 1 ("aucun serveur utilisable -
+    # on garde les upstreams courants"), on capture donc le code de retour
+    # explicitement.
+    local rc=0
+    apply_vpn_pushed_dns || rc=$?
+    [ "$rc" -eq 1 ]
     [ "$reconfig_calls" -eq 0 ]
 }
 

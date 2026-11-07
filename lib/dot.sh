@@ -399,13 +399,15 @@ forward-zone:
         done
     fi
 
-    mkdir -p /etc/unbound /var/lib/unbound
+    # Read-only rootfs : la conf générée vit dans /run (tmpfs), l'ancre
+    # DNSSEC dans le volume /var/lib/unbound. /etc n'est jamais écrit.
+    mkdir -p /run/unbound /var/lib/unbound
     chown -R unbound:unbound \
-        /etc/unbound \
+        /run/unbound \
         /var/lib/unbound \
         2>/dev/null || true
 
-    chmod 0755 /etc/unbound 2>/dev/null || true
+    chmod 0755 /run/unbound 2>/dev/null || true
 
     cat > "$conf_file" <<EOF
 server:

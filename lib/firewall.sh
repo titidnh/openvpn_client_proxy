@@ -1096,9 +1096,12 @@ setup_proxy_routing() {
 
     # Create a new routing table for marked traffic
     # Use table 100 (avoid conflicts with default tables 0-252)
-    # Ensure the rt_tables directory and file exist
-    mkdir -p /etc/iproute2
-    touch /etc/iproute2/rt_tables
+    # Ensure the rt_tables directory and file exist. Read-only rootfs : les
+    # écritures sont best-effort - les commandes de routage ci-dessous
+    # utilisent le NUMÉRO de table (100), le nom "proxy_rt" n'est qu'un
+    # confort de lecture pour l'opérateur, son absence ne change rien.
+    mkdir -p /etc/iproute2 2>/dev/null || true
+    touch /etc/iproute2/rt_tables 2>/dev/null || true
     
     if ! grep -q "^100" /etc/iproute2/rt_tables 2>/dev/null; then
         echo "100 proxy_rt" >> /etc/iproute2/rt_tables 2>/dev/null || true

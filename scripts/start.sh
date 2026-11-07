@@ -163,52 +163,9 @@ drop_capabilities() {
 # Proxy
 # ===========================================================================
 
-configure_privoxy_auth() {
-    log_json INFO "configure_privoxy_auth" \
-        "Configuring Privoxy authentication"
-
-    local user="${PROXY_USER:-}"
-    local pass="${PROXY_PASS:-}"
-    local privoxy_port
-    local privoxy_addr
-
-    if [ -n "$user" ] && [ -n "$pass" ]; then
-        privoxy_port=$((PROXY_PORT + 1))
-        privoxy_addr="127.0.0.1"
-
-        sed -i \
-            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
-            "$PRIVOXY_CONF"
-
-        log_json INFO "configure_privoxy_auth" \
-            "auth enabled - privoxy on ${privoxy_addr}:${privoxy_port}"
-    else
-        privoxy_port="$PROXY_PORT"
-        privoxy_addr="0.0.0.0"
-
-        sed -i \
-            "s|^listen-address .*|listen-address ${privoxy_addr}:${privoxy_port}|" \
-            "$PRIVOXY_CONF"
-
-        log_json INFO "configure_privoxy_auth" \
-            "no auth - privoxy on ${privoxy_addr}:${privoxy_port}"
-    fi
-
-    # S3 : sed -i recree le fichier -> il redevient root:root. Privoxy lance
-    # avec --user refuse une config possedee par root (check_file_rights).
-    # Restaurer le proprietaire attendu par le demon. Le fichier est ouvert
-    # en lecture large (644) : la config Privoxy ne contient aucun secret
-    # (l auth est geree par tinyproxy) et stat() exige de traverser le
-    # repertoire - un mode trop strict fait echouer le demarrage du demon.
-    chown "${PROXY_RUN_USER:-vpn}":"${PROXY_RUN_USER:-vpn}" "$PRIVOXY_CONF" 2>/dev/null || true
-    chmod 644 "$PRIVOXY_CONF" 2>/dev/null || true
-    chmod a+rx "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || true
-    log_json DEBUG "configure_privoxy_auth" \
-        "privoxy config ownership" \
-        "file=${PRIVOXY_CONF}" "owner=$(stat -c '%U:%G' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
-        "mode=$(stat -c '%a' "$PRIVOXY_CONF" 2>/dev/null || echo '?')" \
-        "dir_mode=$(stat -c '%a' "$(dirname "$PRIVOXY_CONF")" 2>/dev/null || echo '?')"
-}
+# NOTE : configure_privoxy_auth() est définie dans lib/common.sh - elle
+# génère la config runtime (/run/privoxy.config) depuis la config image
+# sans jamais modifier /etc (support rootfs read-only).
 
 start_privoxy() {
     log_json INFO "start_privoxy" \
@@ -285,8 +242,9 @@ start_nginx_auth() {
 
     mkdir -p /var/log/tinyproxy /run/tinyproxy
 
-    local tiny_conf=/etc/tinyproxy/tinyproxy_auth.conf
-    mkdir -p /etc/tinyproxy
+    # Read-only rootfs : la config générée (contient le mot de passe en
+    # clair) vit dans /run (tmpfs), jamais dans /etc.
+    local tiny_conf=/run/tinyproxy/tinyproxy_auth.conf
 
     # umask 077 : la config contient le mot de passe en clair.
     umask 077
@@ -861,10 +819,52 @@ cleanup() {
 trap cleanup INT TERM
 
 # ===========================================================================
+# Read-only filesystem (roadmap "Read-only filesystem")
+# ===========================================================================
+
+# Avec un root filesystem en lecture seule (docker run --read-only /
+# compose read_only: true), tout ce qui s'écrit au runtime doit vivre dans
+# des tmpfs : /run (configs générées dnsmasq/unbound/privoxy/tinyproxy,
+# VPN_PUSHED_DNS_FILE, sockets), /tmp (fichiers d'état), /var/tmp
+# (métriques), /var/log (logs des daemons). Échouer tôt et clairement si
+# un répertoire indispensable est en lecture seule - sinon les démons
+# mourraient plus tard avec des messages opaques (cat/sed sur un
+# filesystem EROFS). /var/log n'est pas fatal : seules les features
+# optionnelles (mesh VPN, logs daemons) y écrivent.
+# Usage: check_runtime_writability
+check_runtime_writability() {
+    local dir
+    for dir in /run /tmp; do
+        if ! touch "$dir/.rw-probe" 2>/dev/null; then
+            log_json ERROR "check_runtime_writability" \
+                "${dir} is not writable - runtime state cannot be created there" \
+                "hint=with a read-only root filesystem, mount it as tmpfs: docker run --tmpfs ${dir} (or a tmpfs: entry in docker-compose) - see README 'Read-only Filesystem'"
+            exit 1
+        fi
+        rm -f "$dir/.rw-probe"
+    done
+
+    for dir in /var/tmp /var/log; do
+        if ! touch "$dir/.rw-probe" 2>/dev/null; then
+            log_json WARN "check_runtime_writability" \
+                "${dir} is not writable - metrics files (/var/tmp) and daemon logs (/var/log) need it - see README 'Read-only Filesystem'"
+        else
+            rm -f "$dir/.rw-probe"
+        fi
+    done
+
+    log_json DEBUG "check_runtime_writability" \
+        "runtime directories writable" \
+        "rootfs_mode=$(awk '$2=="/"{print ($1~"rw")?"rw":"ro"}' /proc/mounts 2>/dev/null || echo '?')"
+}
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
 init_environment
+
+check_runtime_writability
 
 log_json INFO "start.sh" \
     "Starting openvpn_client_proxy" \

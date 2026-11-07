@@ -42,6 +42,25 @@ services:
     security_opt:
       - no-new-privileges:true
     
+    # Read-only root filesystem (roadmap "Read-only filesystem") : l'image
+    # n'est JAMAIS écrite au runtime. Toutes les configs générées vivent dans
+    # /run (dnsmasq, unbound, privoxy, tinyproxy, VPN_PUSHED_DNS_FILE), les
+    # métriques dans /var/tmp, les logs des daemons dans /var/log - les
+    # données persistantes restent dans les volumes nommés ci-dessous.
+    # /tmp est couvert par le volume blocklist-cache (ne cumulez pas un
+    # tmpfs ET un volume sur le même chemin). Pour revenir au comportement
+    # antérieur : read_only: false.
+    # Équivalent docker run :
+    #   --read-only --tmpfs /run --tmpfs /var/tmp --tmpfs /var/log
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/tmp
+      - /var/log
+      # NetBird (ENABLE_NETBIRD=true) : le daemon écrit /etc/netbird/
+      # config.json - décommentez la ligne suivante en mode read-only.
+      # - /etc/netbird
+    
     # Réduction des capabilities Linux au strict nécessaire :
     #   NET_ADMIN        - routage, iptables (kill switch), création tun/wg
     #   NET_RAW          - sockets bruts (WireGuard, Tailscale, healthcheck)
