@@ -34,7 +34,7 @@ COMPOSE_FILE ?= docker-compose.yml
 # Architecture cible (par défaut: architecture de l'hôte)
 TARGETARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 
-# Version de Tailscale (laisser vide pour la dernière version)
+# Version de Tailscale (vide = version figée dans le Dockerfilele)
 TAILSCALE_VERSION ?=
 
 # ===========================================================================
