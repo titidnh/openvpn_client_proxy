@@ -145,6 +145,12 @@ services:
       # sont joints via le réseau local (eth0) au lieu du tunnel - à réserver
       # à un résolveur LOCAL (DNS de la box, Pi-hole du LAN).
       DNS_BYPASS_VPN: "false"
+
+      # DNS du fournisseur VPN : "true" = une fois le tunnel actif, dnsmasq
+      # bascule sur le DNS pousse par le fournisseur (dhcp-option OpenVPN ou
+      # ligne DNS du wg0.conf). DNS_SERVER_1/2 restent bootstrap + repli.
+      # Incompatible avec ENABLE_DOT=true.
+      DNS_FROM_VPN: "false"
       
       # DNS Blocklist désactivée
       ENABLE_DNS_BLOCKLIST: "false"

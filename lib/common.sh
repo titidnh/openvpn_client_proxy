@@ -2,11 +2,11 @@
 # ===========================================================================
 # common.sh - Fonctions communes pour openvpn_client_proxy
 # 
-# Ce fichier contient les fonctions partagées entre start.sh et healthcheck.sh
-# pour éviter la duplication de code et améliorer la maintenabilité.
+# Ce fichier contient les fonctions partagÃƒÂ©es entre start.sh et healthcheck.sh
+# pour ÃƒÂ©viter la duplication de code et amÃƒÂ©liorer la maintenabilitÃƒÂ©.
 # 
-# Auteur: Vibe Code (amélioration 2026)
-# Licence: MIT (même licence que le projet parent)
+# Auteur: Vibe Code (amÃƒÂ©lioration 2026)
+# Licence: MIT (mÃƒÂªme licence que le projet parent)
 # ===========================================================================
 
 # ===========================================================================
@@ -26,10 +26,10 @@ COMMON_SH_LOADED=true
 # ===========================================================================
 
 # Version du script pour suivi
-readonly SCRIPT_VERSION="3.0.0"
-readonly SCRIPT_DATE="2026-10-07"
+readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_DATE="2026-01-01"
 
-# Chemins par défaut
+# Chemins par dÃƒÂ©faut
 readonly DEFAULT_VPN_DIR="/vpn"
 readonly DEFAULT_VPN_CONF="${DEFAULT_VPN_DIR}/vpn.conf"
 readonly DEFAULT_RESOLV_CONF="/etc/resolv.conf"
@@ -37,17 +37,22 @@ readonly DEFAULT_DNSMASQ_CONF="/etc/dnsmasq.conf"
 readonly DEFAULT_PRIVOXY_CONF="/etc/privoxy/privoxy.config"
 readonly DEFAULT_METRICS_DIR="/var/tmp/metrics"
 
-# DNS par défaut (AdGuard DNS - toujours valide en 2026)
+# DNS par dÃƒÂ©faut (AdGuard DNS - toujours valide en 2026)
 readonly DEFAULT_DNS_SERVER_1="94.140.14.14"
 readonly DEFAULT_DNS_SERVER_2="94.140.15.15"
 
-# IPs de test par défaut
+# Fichier d'échange des serveurs DNS poussés par le VPN (DNS_FROM_VPN) :
+# rempli par scripts/vpn-dns-up.sh (hook OpenVPN) ou lib/wireguard.sh (ligne
+# DNS du wg0.conf), consommé par apply_vpn_pushed_dns (lib/dns_runtime.sh).
+readonly DEFAULT_VPN_PUSHED_DNS_FILE="/run/vpn-pushed-dns"
+
+# IPs de test par dÃƒÂ©faut
 readonly DEFAULT_HEALTHCHECK_IP="9.9.9.9"      # Quad9
 readonly DEFAULT_ROUTE_TEST_IP="9.9.9.9"        # Quad9
 readonly DEFAULT_PROXY_TEST_HOST="connectivitycheck.gstatic.com"
 readonly DEFAULT_PROXY_TEST_URL="http://connectivitycheck.gstatic.com/generate_204"
 
-# Ports par défaut
+# Ports par dÃƒÂ©faut
 readonly DEFAULT_VPN_PORT="1194"
 readonly DEFAULT_VPN_PROTO="udp"
 readonly DEFAULT_PROXY_PORT="3128"
@@ -74,7 +79,7 @@ validate_number() {
     return 0
 }
 
-# Valide qu'une variable est un booléen
+# Valide qu'une variable est un boolÃƒÂ©en
 # Usage: validate_boolean VAR_NAME VAR_VALUE
 validate_boolean() {
     local var_name="$1"
@@ -168,9 +173,10 @@ validate_environment() {
         validate_ip "DNS_SERVER_2" "$DNS_SERVER_2" || validation_failed=1
     fi
 
-    # Valider les booléens
+    # Valider les boolÃƒÂ©ens
     validate_boolean "ENABLE_DOT" "${ENABLE_DOT:-false}" || validation_failed=1
     validate_boolean "DNS_BYPASS_VPN" "${DNS_BYPASS_VPN:-false}" || validation_failed=1
+    validate_boolean "DNS_FROM_VPN" "${DNS_FROM_VPN:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNS_BLOCKLIST" "${ENABLE_DNS_BLOCKLIST:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
     validate_boolean "ENABLE_TAILSCALE" "${ENABLE_TAILSCALE:-false}" || validation_failed=1
@@ -193,6 +199,18 @@ validate_environment() {
        [ "${ENABLE_NETBIRD:-false}" = "true" ]; then
         log_json WARN "validate_environment" \
             "both Tailscale and NetBird are enabled - two mesh VPNs will run concurrently, verify routing requirements"
+    fi
+
+    # DNS_FROM_VPN suppose le mode DNS classique : le DoT vers un tiers
+    # (unbound -> AdGuard/Quad9) court-circuiterait les serveurs pousses
+    # par le fournisseur et recasserait la coherence geographique du
+    # tunnel. Refus explicite (fail-closed) plutot qu'un basculement
+    # silencieux : l'un des deux doit etre desactive.
+    if [ "${DNS_FROM_VPN:-false}" = "true" ] &&
+       [ "${ENABLE_DOT:-false}" = "true" ]; then
+        log_json WARN "validate_environment" \
+            "DNS_FROM_VPN=true requires ENABLE_DOT=false - DoT to a third party would override the VPN-pushed DNS"
+        validation_failed=1
     fi
 
     if [ "$validation_failed" -eq 1 ]; then
@@ -230,7 +248,7 @@ check_proxy_exposure() {
 }
 
 # ===========================================================================
-# Logging JSON structuré (compatible avec start.sh)
+# Logging JSON structurÃƒÂ© (compatible avec start.sh)
 # ===========================================================================
 
 # Log un message au format JSON
@@ -249,7 +267,7 @@ log_json() {
         local k v
         k="${kv%%=*}"
         v="${kv#*=}"
-        # Éƒâ€°chapper les caractères spéciaux pour JSON
+        # Ãƒâ€°chapper les caractÃƒÂ¨res spÃƒÂ©ciaux pour JSON
         v="${v//\\/\\\\}"
         v="${v//\"/\\\"}"
         v="${v//$'\n'/\\n}"
@@ -269,11 +287,11 @@ log_json() {
 }
 
 # ===========================================================================
-# Fonctions réseau
+# Fonctions rÃƒÂ©seau
 # ===========================================================================
 
 # Trouve l'interface VPN (tun ou tap) active
-# Retourne le nom de l'interface ou vide si non trouvée
+# Retourne le nom de l'interface ou vide si non trouvÃƒÂ©e
 # Usage: find_vpn_interface
 find_vpn_interface() {
     local dev
@@ -281,7 +299,7 @@ find_vpn_interface() {
     while read -r dev; do
         case "$dev" in
             tun*|tap*|wg*)
-                # Vérifier que l'interface a une adresse IP valide
+                # VÃƒÂ©rifier que l'interface a une adresse IP valide
                 if ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet '; then
                     printf '%s\n' "$dev"
                     return 0
@@ -293,7 +311,7 @@ find_vpn_interface() {
     return 1
 }
 
-# Vérifie si le tunnel VPN est prêt
+# VÃƒÂ©rifie si le tunnel VPN est prÃƒÂªt
 # Usage: vpn_tunnel_ready
 vpn_tunnel_ready() {
     local dev
@@ -301,7 +319,7 @@ vpn_tunnel_ready() {
     ip -4 addr show dev "$dev" up scope global 2>/dev/null | grep -q 'inet '
 }
 
-# Attend que le tunnel VPN soit prêt
+# Attend que le tunnel VPN soit prÃƒÂªt
 # Usage: wait_for_vpn_tunnel TIMEOUT_SECONDS
 wait_for_vpn_tunnel() {
     local timeout_s="$1"
@@ -322,15 +340,15 @@ wait_for_vpn_tunnel() {
 # Fonctions DNS
 # ===========================================================================
 
-# Résout un nom d'hôte en IP en utilisant plusieurs serveurs DNS de fallback
-# Retourne SEULEMENT la première IP
+# RÃƒÂ©sout un nom d'hÃƒÂ´te en IP en utilisant plusieurs serveurs DNS de fallback
+# Retourne SEULEMENT la premiÃƒÂ¨re IP
 # Usage: resolve_hostname HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
 resolve_hostname() {
     local hostname="$1"
     shift
     local dns_servers=("$@")
     
-    # Si aucun serveur DNS fourni, utiliser les serveurs par défaut
+    # Si aucun serveur DNS fourni, utiliser les serveurs par dÃƒÂ©faut
     if [ ${#dns_servers[@]} -eq 0 ]; then
         dns_servers=("$DEFAULT_DNS_SERVER_1" "$DEFAULT_DNS_SERVER_2")
     fi
@@ -358,8 +376,8 @@ resolve_hostname() {
     return 1
 }
 
-# Résout un nom d'hôte en TOUTES les IPs (retourne une IP par ligne)
-# FIX STABILITÉƒâ€° #10 (suite): Résout TOUTES les IPs pour un hostname
+# RÃƒÂ©sout un nom d'hÃƒÂ´te en TOUTES les IPs (retourne une IP par ligne)
+# FIX STABILITÃƒâ€° #10 (suite): RÃƒÂ©sout TOUTES les IPs pour un hostname
 # Usage: resolve_hostname_all HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
 resolve_vpn_ips() {
     local hostname="$1"
@@ -418,7 +436,7 @@ resolve_hostname_all() {
     shift
     local dns_servers=("$@")
     
-    # Si aucun serveur DNS fourni, utiliser les serveurs par défaut
+    # Si aucun serveur DNS fourni, utiliser les serveurs par dÃƒÂ©faut
     if [ ${#dns_servers[@]} -eq 0 ]; then
         dns_servers=("$DEFAULT_DNS_SERVER_1" "$DEFAULT_DNS_SERVER_2")
     fi
@@ -450,7 +468,7 @@ resolve_hostname_all() {
 # Fonctions de gestion de processus
 # ===========================================================================
 
-# Tue un processus s'il est en cours d'exécution
+# Tue un processus s'il est en cours d'exÃƒÂ©cution
 # Usage: kill_if_running PID
 kill_if_running() {
     local pid="${1:-}"
@@ -460,7 +478,7 @@ kill_if_running() {
     kill "$pid" 2>/dev/null || true
 }
 
-# Vérifie si un processus est en cours d'exécution
+# VÃƒÂ©rifie si un processus est en cours d'exÃƒÂ©cution
 # Usage: is_process_running PID
 is_process_running() {
     local pid="${1:-}"
@@ -661,7 +679,7 @@ get_dns_upstreams() {
 # Fonctions de configuration Privoxy
 # ===========================================================================
 
-# Extrait le port d'écoute de Privoxy depuis sa configuration
+# Extrait le port d'ÃƒÂ©coute de Privoxy depuis sa configuration
 # Usage: get_privoxy_port [CONFIG_FILE]
 get_privoxy_port() {
     local conf="${1:-$DEFAULT_PRIVOXY_CONF}"
@@ -677,10 +695,10 @@ get_privoxy_port() {
 }
 
 # ===========================================================================
-# Fonctions de test de connectivité
+# Fonctions de test de connectivitÃƒÂ©
 # ===========================================================================
 
-# Teste la connectivité HTTP via le proxy
+# Teste la connectivitÃƒÂ© HTTP via le proxy
 # Usage: test_http_proxy [PROXY_URL] [TEST_URL]
 test_http_proxy() {
     local proxy_url="${1:-http://127.0.0.1:$DEFAULT_PROXY_PORT}"
@@ -698,7 +716,7 @@ test_http_proxy() {
     return 1
 }
 
-# Teste la résolution DNS locale
+# Teste la rÃƒÂ©solution DNS locale
 # Usage: test_dns_resolution [HOSTNAME] [DNS_SERVER]
 test_dns_resolution() {
     local hostname="${1:-$DEFAULT_PROXY_TEST_HOST}"
@@ -727,13 +745,13 @@ test_dns_resolution() {
 # Fonctions utilitaires
 # ===========================================================================
 
-# Vérifie si une commande existe
+# VÃƒÂ©rifie si une commande existe
 # Usage: command_exists COMMAND
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Génère un nom de fichier temporaire unique
+# GÃƒÂ©nÃƒÂ¨re un nom de fichier temporaire unique
 # Usage: temp_file [PREFIX]
 temp_file() {
     local prefix="${1:-tmp}"
@@ -747,7 +765,7 @@ read_file() {
     [ -f "$file" ] && cat "$file" || echo ""
 }
 
-# Éƒâ€°crit dans un fichier de manière atomique
+# Ãƒâ€°crit dans un fichier de maniÃƒÂ¨re atomique
 # Usage: write_file FILE CONTENT
 write_file() {
     local file="$1"
@@ -763,7 +781,7 @@ write_file() {
 # Initialisation
 # ===========================================================================
 
-# Initialise les variables d'environnement avec des valeurs par défaut
+# Initialise les variables d'environnement avec des valeurs par dÃƒÂ©faut
 # Usage: init_environment
 init_environment() {
     # VPN configuration
@@ -792,6 +810,13 @@ init_environment() {
     # false = DNS via le tunnel uniquement (comportement historique).
     # true  = DNS_SERVER_1/2 et serveurs DoT/DoH joints via le reseau local.
     : "${DNS_BYPASS_VPN:=false}"
+    # DNS_FROM_VPN : false = dnsmasq garde DNS_SERVER_1/2 en upstream.
+    # true  = une fois le tunnel actif, dnsmasq bascule sur les serveurs DNS
+    #         fournis par le fournisseur VPN : dhcp-option poussé par OpenVPN
+    #         (hook scripts/vpn-dns-up.sh) ou ligne DNS du wg0.conf
+    #         (lib/wireguard.sh). DNS_SERVER_1/2 restent les upstreams de
+    #         bootstrap (résolution des remotes) et de repli.
+    : "${DNS_FROM_VPN:=false}"
     
     # DoT
     : "${ENABLE_DOT:=false}"
@@ -847,6 +872,7 @@ init_environment() {
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"
     : "${VPN_CONF:=$DEFAULT_VPN_CONF}"
     : "${conf:=$VPN_CONF}"
+    : "${VPN_PUSHED_DNS_FILE:=$DEFAULT_VPN_PUSHED_DNS_FILE}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
     : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
     : "${VPN_HEALTHY_FILE:=/tmp/vpn_healthy}"

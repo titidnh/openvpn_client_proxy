@@ -33,7 +33,7 @@ _BG_BLOCKLIST_REFRESH_STARTED=0
 supervise_all() {
     log_json INFO "supervisor" \
         "Starting supervisor" \
-        "version=3.0.0"
+        "version=2.2.0"
 
     local attempt=0
     local FW_FAIL_MAX=5
@@ -374,6 +374,18 @@ supervise_all() {
                     log_json INFO "supervisor" \
                         "VPN remote IPs changed - firewall updated, new IPs will be pinned on next VPN (re)start"
                 fi
+            fi
+
+            # DNS_FROM_VPN : une fois le tunnel réellement actif, basculer
+            # dnsmasq sur les DNS poussés par le fournisseur (dhcp-option
+            # OpenVPN capturés par vpn-dns-up.sh, ou ligne DNS du wg0.conf
+            # capturée par start_wireguard). apply_vpn_pushed_dns est
+            # idempotent : sans changement de fichier ni d'upstreams, il ne
+            # redémarre rien.
+            if [ "${DNS_FROM_VPN:-false}" = "true" ] && \
+               vpn_tunnel_ready && \
+               [ -s "${VPN_PUSHED_DNS_FILE:-/run/vpn-pushed-dns}" ]; then
+                apply_vpn_pushed_dns || true
             fi
 
             if ! check_vpn_routing; then

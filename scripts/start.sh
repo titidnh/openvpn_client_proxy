@@ -353,6 +353,21 @@ start_openvpn_local() {
     log_json INFO "start_openvpn" \
         "Starting OpenVPN"
 
+    # DNS_FROM_VPN : pré-créer le fichier cible vide appartenant à vpn:vpn
+    # (mode 664). Le hook --route-up d'OpenVPN s'exécute APRÈS le drop de
+    # privilèges (--user vpn) et /run n'est pas inscriptible par vpn :
+    # sans pré-création, une reconnexion SIGUSR1 ne pourrait pas mettre à
+    # jour les DNS poussés. vidé à chaque (re)démarrage du VPN pour ne
+    # jamais appliquer les DNS d'une connexion précédente.
+    if [ "${DNS_FROM_VPN:-false}" = "true" ]; then
+        local dns_file="${VPN_PUSHED_DNS_FILE:-/run/vpn-pushed-dns}"
+        mkdir -p "$(dirname "$dns_file")" 2>/dev/null || true
+        rm -f "$dns_file"
+        : > "$dns_file"
+        chown vpn:vpn "$dns_file" 2>/dev/null || true
+        chmod 664 "$dns_file" 2>/dev/null || true
+    fi
+
     /usr/local/bin/openvpn.sh &
 
     SERVICE_PIDS["vpn"]=$!
