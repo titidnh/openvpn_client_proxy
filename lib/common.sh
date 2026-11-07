@@ -273,7 +273,7 @@ log_json() {
         local k v
         k="${kv%%=*}"
         v="${kv#*=}"
-        # Éƒâ€°chapper les caractères spéciaux pour JSON
+        # Échapper les caractères spéciaux pour JSON
         v="${v//\\/\\\\}"
         v="${v//\"/\\\"}"
         v="${v//$'\n'/\\n}"
@@ -383,7 +383,7 @@ resolve_hostname() {
 }
 
 # Résout un nom d'hôte en TOUTES les IPs (retourne une IP par ligne)
-# FIX STABILITÉƒâ€° #10 (suite): Résout TOUTES les IPs pour un hostname
+# FIX STABILITÉ #10 (suite): Résout TOUTES les IPs pour un hostname
 # Usage: resolve_hostname_all HOSTNAME [DNS_SERVER_1 DNS_SERVER_2 ...]
 resolve_vpn_ips() {
     local hostname="$1"
@@ -837,7 +837,7 @@ read_file() {
     [ -f "$file" ] && cat "$file" || echo ""
 }
 
-# Éƒâ€°crit dans un fichier de manière atomique
+# Écrit dans un fichier de manière atomique
 # Usage: write_file FILE CONTENT
 write_file() {
     local file="$1"
