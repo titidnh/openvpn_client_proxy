@@ -51,7 +51,7 @@
 | 🌐 **HTTP Proxy** | Privoxy on port `PROXY_PORT` (default: `3128`) — usable by any app or container that supports HTTP proxies |
 | 🔑 **Optional Proxy Auth** | Set `PROXY_USER` + `PROXY_PASS` to require HTTP Basic Auth on the proxy (tinyproxy fronts Privoxy) |
 | 🧹 **Ad/Content Filtering** | DNS-level filtering via upstream resolver — configurable with `DNS_SERVER_1` / `DNS_SERVER_2` (default: AdGuard, ads only) |
-| 🐳 **Multi-arch** | Docker image published for `linux/amd64` and `linux/arm64` |
+| 🐳 **Multi-arch** | Docker image published for `linux/amd64`, `linux/arm64` and `linux/arm/v7` (ARM32v7 — older Raspberry Pi models) |
 | 🔗 **Tailscale Exit Node** | Optional — route your entire Tailscale network through the VPN tunnel |
 | 🔗 **NetBird Integration** | Optional — join a [NetBird](https://netbird.io) network (open-source, self-hostable Tailscale alternative) and route it through the VPN tunnel |
 | 📦 **Minimal Image** | Based on `alpine:3.24` — minimal footprint, multi-stage build isolates the Tailscale and NetBird binaries |
@@ -1505,28 +1505,30 @@ Build for multiple architectures (requires Buildx):
 
 ```sh
 docker buildx build \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64,linux/arm64,linux/arm/v7 \
   -t openvpn-client-proxy:latest \
   --push .
 ```
 
-The Tailscale version is pinned in the `Dockerfile` (`TAILSCALE_VERSION`) and each downloaded archive is verified against a SHA256 checksum (`TAILSCALE_SHA256_AMD64` / `TAILSCALE_SHA256_ARM64`). The build fails if the checksum does not match. To use another version, pass the version **and** its checksums, taken from `https://pkgs.tailscale.com/stable/tailscale_<version>_<arch>.tgz.sha256`:
+The Tailscale version is pinned in the `Dockerfile` (`TAILSCALE_VERSION`) and each downloaded archive is verified against a SHA256 checksum (`TAILSCALE_SHA256_AMD64` / `TAILSCALE_SHA256_ARM64` / `TAILSCALE_SHA256_ARM`). The build fails if the checksum does not match. To use another version, pass the version **and** its checksums, taken from `https://pkgs.tailscale.com/stable/tailscale_<version>_<arch>.tgz.sha256`:
 
 ```sh
 docker build \
   --build-arg TAILSCALE_VERSION=<version> \
   --build-arg TAILSCALE_SHA256_AMD64=<sha256 of the amd64 archive> \
   --build-arg TAILSCALE_SHA256_ARM64=<sha256 of the arm64 archive> \
+  --build-arg TAILSCALE_SHA256_ARM=<sha256 of the arm archive> \
   -t openvpn-client-proxy:latest .
 ```
 
-The NetBird binary is pinned the same way (`NETBIRD_VERSION`, verified against `NETBIRD_SHA256_AMD64` / `NETBIRD_SHA256_ARM64`, checksums taken from the `netbird_<version>_checksums.txt` asset on the [NetBird releases page](https://github.com/netbirdio/netbird/releases)):
+The NetBird binary is pinned the same way (`NETBIRD_VERSION`, verified against `NETBIRD_SHA256_AMD64` / `NETBIRD_SHA256_ARM64` / `NETBIRD_SHA256_ARM`, checksums taken from the `netbird_<version>_checksums.txt` asset on the [NetBird releases page](https://github.com/netbirdio/netbird/releases)). On `linux/arm/v7` NetBird publishes no `arm` archive for the main binary — the `linux_armv6` asset (GOARM=6, runs natively on armv7 CPUs) is selected instead:
 
 ```sh
 docker build \
   --build-arg NETBIRD_VERSION=<version> \
   --build-arg NETBIRD_SHA256_AMD64=<sha256 of the amd64 archive> \
   --build-arg NETBIRD_SHA256_ARM64=<sha256 of the arm64 archive> \
+  --build-arg NETBIRD_SHA256_ARM=<sha256 of the linux_armv6 archive> \
   -t openvpn-client-proxy:latest .
 ```
 
@@ -2019,7 +2021,7 @@ Check that `ENABLE_NETBIRD=true` and either a valid `NETBIRD_SETUP_KEY` or a per
 | Idea | Status |
 |---|---|
 | Docker secrets support | 💡 Read `PROXY_PASS` / `TAILSCALE_AUTHKEY` from `/run/secrets/` to avoid secrets in `docker inspect` |
-| ARM32v7 support | 💡 Add `linux/arm/v7` for older Raspberry Pi models |
+| ARM32v7 support | ✅ Implemented — `linux/arm/v7` published by CI |
 | Healthcheck via DoT | 💡 Verify the full resolver chain (dnsmasq → unbound) when DoT is enabled |
 | Config validation at startup | 💡 Pre-flight check on all env vars with fast-fail and clear error messages |
 

@@ -32,7 +32,7 @@ IMAGE_TAG ?= latest
 COMPOSE_FILE ?= docker-compose.yml
 
 # Architecture cible (par défaut: architecture de l'hôte)
-TARGETARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+TARGETARCH ?= $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv[67]l/arm/')
 
 # Version de Tailscale (vide = version figée dans le Dockerfilele)
 TAILSCALE_VERSION ?=
@@ -118,7 +118,7 @@ build-no-cache:
 build-multiarch:
 	@echo "Construction multi-architecture..."
 	docker buildx build \
-		--platform linux/amd64,linux/arm64 \
+		--platform linux/amd64,linux/arm64,linux/arm/v7 \
 		--tag $(IMAGE_NAME):$(IMAGE_TAG) \
 		--tag $(IMAGE_NAME):3.0.0 \
 		--push \
