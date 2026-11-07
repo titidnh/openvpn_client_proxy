@@ -31,12 +31,15 @@ ARG TARGETARCH
 ARG TAILSCALE_VERSION=1.102.5
 ARG TAILSCALE_SHA256_AMD64=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12
 ARG TAILSCALE_SHA256_ARM64=60d60109e33d097318c66adc1f1b4e78e528fa1c0357e8bfe82af99f21a18b89
+# ARM32 (linux/arm/v7, anciens Raspberry Pi) : archive "arm" du meme canal.
+ARG TAILSCALE_SHA256_ARM=18435a88651dc69cb762cdcbe4910b05d8b8c038604cb17e1492770a58e2feb0
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
  && case "${ARCH}" in \
       amd64) SHA="${TAILSCALE_SHA256_AMD64}" ;; \
       arm64) SHA="${TAILSCALE_SHA256_ARM64}" ;; \
+      arm)   SHA="${TAILSCALE_SHA256_ARM}" ;; \
       *) echo "Unsupported TARGETARCH=${ARCH} - add its SHA256 build arg" >&2; exit 1 ;; \
     esac \
  && URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz" \
@@ -65,15 +68,21 @@ ARG TARGETARCH
 ARG NETBIRD_VERSION=0.81.3
 ARG NETBIRD_SHA256_AMD64=cbdea310068e35449f034544d5137fefee8f6d948fffd020883ffc8b3bab63b1
 ARG NETBIRD_SHA256_ARM64=980eef938177108bdfa7d802566b6309123592a58631349a78f11cd97c76c22d
+# ARM32 (linux/arm/v7) : NetBird ne publie pas d'asset "arm" pour le binaire
+# principal ; l'asset linux_armv6 (GOARM=6, empreinte ci-dessous) est utilise -
+# un binaire compile GOARM=6 tourne nativement sur tout CPU armv7 (Raspberry
+# Pi 2/3/4 en OS 32 bits, etc.). NB_ASSET_ARCH fait la traduction archee.
+ARG NETBIRD_SHA256_ARM=d3f8b25610bbd5bff86aa70cc5e11334c43589c5ff1873c9536732cbec616f01
 
 RUN apk add --no-cache curl tar \
  && ARCH="${TARGETARCH:-amd64}" \
  && case "${ARCH}" in \
-      amd64) SHA="${NETBIRD_SHA256_AMD64}" ;; \
-      arm64) SHA="${NETBIRD_SHA256_ARM64}" ;; \
+      amd64) SHA="${NETBIRD_SHA256_AMD64}"; NB_ASSET_ARCH="amd64" ;; \
+      arm64) SHA="${NETBIRD_SHA256_ARM64}"; NB_ASSET_ARCH="arm64" ;; \
+      arm)   SHA="${NETBIRD_SHA256_ARM}";   NB_ASSET_ARCH="armv6" ;; \
       *) echo "Unsupported TARGETARCH=${ARCH} - add its SHA256 build arg" >&2; exit 1 ;; \
     esac \
- && URL="https://github.com/netbirdio/netbird/releases/download/v${NETBIRD_VERSION}/netbird_${NETBIRD_VERSION}_linux_${ARCH}.tar.gz" \
+ && URL="https://github.com/netbirdio/netbird/releases/download/v${NETBIRD_VERSION}/netbird_${NETBIRD_VERSION}_linux_${NB_ASSET_ARCH}.tar.gz" \
  && echo "Downloading: ${URL}" \
  && curl -fsSL "${URL}" -o netbird.tgz \
  && echo "${SHA}  netbird.tgz" | sha256sum -c - \

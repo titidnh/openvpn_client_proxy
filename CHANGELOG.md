@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ARM32v7 support** (roadmap "ARM32v7 support"): the multi-arch image now includes `linux/arm/v7` for older Raspberry Pi models (Pi 2/3/4 running a 32-bit OS)
+  - CI builds and publishes all three platforms; `make build-multiarch` and the README build examples updated (incl. `armv6l`/`armv7l` → `arm` mapping for local builds)
+  - Tailscale `arm` archive (SHA256-verified) — same fail-closed pinning pattern as amd64/arm64
+  - NetBird publishes no `arm` asset for the main binary: the `linux_armv6` archive (GOARM=6) is selected instead — GOARM=6 binaries run natively on armv7 CPUs (SHA256-verified, same pattern)
+  - An unsupported `TARGETARCH` still aborts the build with the exact remediation; guarded by `tests/security_regression.bats`
 - **Read-only root filesystem** (roadmap "Read-only filesystem"): the container runs with an immutable root filesystem — `read_only: true` + targeted tmpfs mounts in docker-compose, or `docker run --read-only --tmpfs /run --tmpfs /var/tmp --tmpfs /var/log`
   - All runtime-generated configs moved out of `/etc` into the `/run` tmpfs: dnsmasq (`/run/dnsmasq.conf`), unbound (`/run/unbound/unbound.conf`), the tinyproxy auth config (`/run/tinyproxy/`); the Privoxy runtime config is a copy of the image config adapted in `/run/privoxy.config` (new `PRIVOXY_SOURCE_CONF`, default `/etc/privoxy/privoxy.config`) — `/etc` is never written at runtime
   - Fail-closed startup probe: if `/run` or `/tmp` is not writable (read-only rootfs without tmpfs mounts), the container exits immediately with the exact remediation instead of failing later with cryptic `EROFS` errors; unwritable `/var/tmp`/`/var/log` log a warning

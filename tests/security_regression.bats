@@ -436,3 +436,35 @@ leaky_dns_rules() {
     [ "$status" -eq 0 ]
     grep -q '^listen-address 0.0.0.0:3128$' "$PRIVOXY_CONF"
 }
+
+@test "image and CI build for linux/arm/v7 (ARM32v7, older Raspberry Pi)" {
+    # Regression guard ARM32v7 (roadmap "ARM32v7 support") : la CI doit
+    # construire linux/arm/v7, le Makefile doit rester aligne (build-multiarch
+    # + mapping uname -m des Pi 32 bits) et le Dockerfile doit fournir les
+    # empreintes SHA256 des archives arm. NetBird ne publie pas d'asset "arm"
+    # pour le binaire principal : le Dockerfile doit selectionner l'asset
+    # linux_armv6 (GOARM=6, natif sur tout CPU armv7) sans affaiblir le
+    # fail-closed sur les architectures non prises en charge.
+    local df="$REPO/Dockerfile"
+    local wf="$REPO/.github/workflows/docker-publish.yml"
+    local mk="$REPO/Makefile"
+    [ -f "$df" ]
+    [ -f "$wf" ]
+    [ -f "$mk" ]
+
+    # CI : les trois plateformes construites et publiees.
+    grep -q -- "platforms: linux/amd64,linux/arm64,linux/arm/v7" "$wf"
+    # Makefile : build-multiarch aligne + mapping armv6l/armv7l -> arm.
+    grep -q -- "--platform linux/amd64,linux/arm64,linux/arm/v7" "$mk"
+    grep -qF -- "s/armv[67]l/arm/" "$mk"
+
+    # Tailscale : archive "arm" epinglee et verifiee (fail-closed conserve).
+    grep -qF -- "ARG TAILSCALE_SHA256_ARM=" "$df"
+    grep -qF -- 'arm)   SHA="${TAILSCALE_SHA256_ARM}" ;;' "$df"
+    # NetBird : empreinte de l'asset linux_armv6 + selection via NB_ASSET_ARCH.
+    grep -qF -- "ARG NETBIRD_SHA256_ARM=" "$df"
+    grep -qF -- 'arm)   SHA="${NETBIRD_SHA256_ARM}";   NB_ASSET_ARCH="armv6" ;;' "$df"
+    grep -qF -- 'netbird_${NETBIRD_VERSION}_linux_${NB_ASSET_ARCH}.tar.gz' "$df"
+    # Fail-closed : une TARGETARCH sans empreinte doit toujours avorter.
+    [ "$(grep -c -- "Unsupported TARGETARCH" "$df")" -eq 2 ]
+}
