@@ -41,6 +41,11 @@ readonly DEFAULT_METRICS_DIR="/var/tmp/metrics"
 readonly DEFAULT_DNS_SERVER_1="94.140.14.14"
 readonly DEFAULT_DNS_SERVER_2="94.140.15.15"
 
+# Fichier d'échange des serveurs DNS poussés par le VPN (DNS_FROM_VPN) :
+# rempli par scripts/vpn-dns-up.sh (hook OpenVPN) ou lib/wireguard.sh (ligne
+# DNS du wg0.conf), consommé par apply_vpn_pushed_dns (lib/dns_runtime.sh).
+readonly DEFAULT_VPN_PUSHED_DNS_FILE="/run/vpn-pushed-dns"
+
 # IPs de test par défaut
 readonly DEFAULT_HEALTHCHECK_IP="9.9.9.9"      # Quad9
 readonly DEFAULT_ROUTE_TEST_IP="9.9.9.9"        # Quad9
@@ -171,6 +176,7 @@ validate_environment() {
     # Valider les booléens
     validate_boolean "ENABLE_DOT" "${ENABLE_DOT:-false}" || validation_failed=1
     validate_boolean "DNS_BYPASS_VPN" "${DNS_BYPASS_VPN:-false}" || validation_failed=1
+    validate_boolean "DNS_FROM_VPN" "${DNS_FROM_VPN:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNS_BLOCKLIST" "${ENABLE_DNS_BLOCKLIST:-false}" || validation_failed=1
     validate_boolean "ENABLE_DNSSEC" "${ENABLE_DNSSEC:-false}" || validation_failed=1
     validate_boolean "ENABLE_TAILSCALE" "${ENABLE_TAILSCALE:-false}" || validation_failed=1
@@ -193,6 +199,18 @@ validate_environment() {
        [ "${ENABLE_NETBIRD:-false}" = "true" ]; then
         log_json WARN "validate_environment" \
             "both Tailscale and NetBird are enabled - two mesh VPNs will run concurrently, verify routing requirements"
+    fi
+
+# DNS_FROM_VPN suppose le mode DNS classique : le DoT vers un tiers
+# (unbound -> AdGuard/Quad9) court-circuiterait les serveurs pousses
+# par le fournisseur et recasserait la coherence geographique du
+# tunnel. Refus explicite (fail-closed) plutot qu'un basculement
+# silencieux : l'un des deux doit etre desactive.
+    if [ "${DNS_FROM_VPN:-false}" = "true" ] &&
+       [ "${ENABLE_DOT:-false}" = "true" ]; then
+        log_json WARN "validate_environment" \
+            "DNS_FROM_VPN=true requires ENABLE_DOT=false - DoT to a third party would override the VPN-pushed DNS"
+        validation_failed=1
     fi
 
     if [ "$validation_failed" -eq 1 ]; then
@@ -792,6 +810,13 @@ init_environment() {
     # false = DNS via le tunnel uniquement (comportement historique).
     # true  = DNS_SERVER_1/2 et serveurs DoT/DoH joints via le reseau local.
     : "${DNS_BYPASS_VPN:=false}"
+    # DNS_FROM_VPN : false = dnsmasq garde DNS_SERVER_1/2 en upstream.
+    # true  = une fois le tunnel actif, dnsmasq bascule sur les serveurs DNS
+    #         fournis par le fournisseur VPN : dhcp-option poussé par OpenVPN
+    #         (hook scripts/vpn-dns-up.sh) ou ligne DNS du wg0.conf
+    #         (lib/wireguard.sh). DNS_SERVER_1/2 restent les upstreams de
+    #         bootstrap (résolution des remotes) et de repli.
+    : "${DNS_FROM_VPN:=false}"
     
     # DoT
     : "${ENABLE_DOT:=false}"
@@ -847,6 +872,7 @@ init_environment() {
     : "${VPN_DIR:=$DEFAULT_VPN_DIR}"
     : "${VPN_CONF:=$DEFAULT_VPN_CONF}"
     : "${conf:=$VPN_CONF}"
+    : "${VPN_PUSHED_DNS_FILE:=$DEFAULT_VPN_PUSHED_DNS_FILE}"
     : "${TAILSCALE_RUN_DIR:=/var/run/tailscale}"
     : "${METRICS_DIR:=$DEFAULT_METRICS_DIR}"
     : "${VPN_HEALTHY_FILE:=/tmp/vpn_healthy}"

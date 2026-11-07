@@ -117,6 +117,10 @@ ENV ENABLE_TAILSCALE=false \
     OPENVPN_DROP_PRIVILEGES="true" \
     DNS_SERVER_1="94.140.14.14" \
     DNS_SERVER_2="94.140.15.15" \
+    # DNS_FROM_VPN : bascule dnsmasq sur le DNS poussé par le fournisseur
+    # (dhcp-option OpenVPN / ligne DNS du wg0.conf) une fois le tunnel actif.
+    DNS_FROM_VPN="false" \
+    VPN_PUSHED_DNS_FILE="/run/vpn-pushed-dns" \
     PROXY_USER="" \
     PROXY_PASS="" \
     PROXY_PROFILE="normal" \
@@ -213,6 +217,7 @@ RUN mkdir -p /usr/local/lib
 # faible) retiré de l'image - le superviseur utilise openvpn.sh + lib/wireguard.sh.
 COPY --chmod=0755 scripts/openvpn.sh      /usr/local/bin/openvpn.sh
 COPY --chmod=0755 scripts/vpn-selector.sh /usr/local/bin/vpn-selector.sh
+COPY --chmod=0755 scripts/vpn-dns-up.sh  /usr/local/bin/vpn-dns-up.sh
 COPY --chmod=0755 scripts/healthcheck.sh  /usr/local/bin/healthcheck.sh
 COPY --chmod=0755 scripts/start.sh        /start.sh
 

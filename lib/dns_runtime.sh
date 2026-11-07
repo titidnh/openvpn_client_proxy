@@ -192,3 +192,60 @@ reconfigure_dnsmasq_to_unbound() {
     SERVICE_PIDS[dnsmasq]=0
     start_dnsmasq
 }
+
+# DNS_FROM_VPN : bascule dnsmasq vers les serveurs DNS poussés par le VPN
+# (fichier rempli par scripts/vpn-dns-up.sh pour OpenVPN, ou par
+# lib/wireguard.sh depuis la ligne DNS du wg0.conf). Idempotent : dnsmasq
+# n'est redémarré que si les upstreams changent réellement.
+# Appelée par le superviseur une fois le tunnel actif (vpn_tunnel_ready).
+# Usage: apply_vpn_pushed_dns
+apply_vpn_pushed_dns() {
+    [ "${DNS_FROM_VPN:-false}" = "true" ] || return 0
+
+    local file="${VPN_PUSHED_DNS_FILE:-/run/vpn-pushed-dns}"
+    [ -s "$file" ] || return 0
+
+    local new1="" new2="" line count=0
+    while IFS= read -r line; do
+        line="${line//[[:space:]]/}"
+        [ -n "$line" ] || continue
+        # Validation minimale : IPv4 pointée ou IPv6 (contient ':'). Une
+        # valeur parasite ne doit jamais finir dans un server= de dnsmasq.
+        [[ "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$line" == *:* ]] || continue
+        count=$((count + 1))
+        if [ "$count" -eq 1 ]; then
+            new1="$line"
+        elif [ "$count" -eq 2 ]; then
+            new2="$line"
+        else
+            break
+        fi
+    done < "$file"
+
+    if [ -z "$new1" ]; then
+        log_json WARN "apply_vpn_pushed_dns" \
+            "pushed DNS file has no usable server - keeping current upstreams"
+        return 1
+    fi
+    # Un seul DNS poussé : DNS_SERVER_2 (repli bootstrap) reste secondaire.
+    new2="${new2:-${DNS_SERVER_2:-}}"
+
+    # Idempotence : rien à refaire si les upstreams sont déjà en place.
+    if [ "${DNS_SERVER_1:-}" = "$new1" ] && [ "${DNS_SERVER_2:-}" = "$new2" ]; then
+        return 0
+    fi
+
+    log_json INFO "apply_vpn_pushed_dns" \
+        "switching dnsmasq upstream to VPN-pushed DNS" \
+        "from=${DNS_SERVER_1:-none},${DNS_SERVER_2:-none}" \
+        "to=${new1},${new2}"
+
+    export DNS_SERVER_1="$new1"
+    export DNS_SERVER_2="$new2"
+
+    # Réutilise le redémarrage propre existant (kill + start_dnsmasq ->
+    # configure_dnsmasq régénère le conf-file depuis DNS_SERVER_1/2). Le DoT
+    # est garanti désactivé ici : validate_environment rejette
+    # DNS_FROM_VPN=true combiné à ENABLE_DOT=true.
+    reconfigure_dnsmasq_to_unbound
+}

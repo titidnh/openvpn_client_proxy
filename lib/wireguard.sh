@@ -267,6 +267,30 @@ start_wireguard() {
         log_json INFO "start_wireguard" "AllowedIPs routes via wg0 installed"
     fi
 
+# DNS_FROM_VPN : le protocole WireGuard ne pousse rien - le DNS "fourni
+# par le VPN" est la ligne DNS du wg0.conf (ex. Surfshark :
+# "DNS = 162.252.172.57, 149.154.159.92"). wg_get_value gere "DNS = x"
+# et "DNS=x" ; les valeurs multiples sont separees par des virgules.
+# Le superviseur bascule dnsmasq dessus via apply_vpn_pushed_dns des que
+# le tunnel est sain ; DNS_SERVER_1/2 restent le repli.
+    if [ "${DNS_FROM_VPN:-false}" = "true" ]; then
+        local wg_dns wg_entry pushed=""
+        wg_dns=$(wg_get_value "$conf" "DNS")
+        for wg_entry in ${wg_dns//,/ }; do
+            [ -n "$wg_entry" ] || continue
+            pushed="${pushed}${wg_entry}"$'\n'
+        done
+        if [ -n "$pushed" ]; then
+            printf '%s' "$pushed" > "${VPN_PUSHED_DNS_FILE:-/run/vpn-pushed-dns}"
+            log_json INFO "start_wireguard" \
+                "DNS_FROM_VPN - DNS servers from WireGuard config captured" \
+                "file=${VPN_PUSHED_DNS_FILE:-/run/vpn-pushed-dns}"
+        else
+            log_json WARN "start_wireguard" \
+                "DNS_FROM_VPN enabled but wg0.conf has no DNS line - keeping DNS_SERVER_1/2 fallback"
+        fi
+    fi
+
     log_json INFO "start_wireguard" \
         "WireGuard tunnel up" \
         "endpoint=${endpoint_addr}" \
