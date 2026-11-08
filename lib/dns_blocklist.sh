@@ -67,6 +67,10 @@ download_blocklists() {
             mv -f "$tmp" "$dest"
             ok=$((ok + 1))
 
+            # Mémoriser l'URL d'origine à côté du fichier pour que la
+            # compilation puisse logger le nombre de règles par liste.
+            printf '%s\n' "$url" > "${DNS_BLOCKLIST_RAW_DIR}/list_${idx}.url"
+
             log_json INFO "dns_blocklist" \
                 "liste téléchargée" \
                 "url=${url}" \
@@ -110,21 +114,53 @@ compile_blocklists() {
     local tmp_all
     tmp_all=$(temp_file "blocklist_all")
 
-    local f
+    local f source_url tmp_list count_list
+    local total_extracted=0
+
     for f in "${DNS_BLOCKLIST_RAW_DIR}"/*.txt; do
         [ -f "$f" ] || continue
 
+        # URL d'origine si le manifest .url a été écrit au téléchargement,
+        # sinon le nom du fichier (cache issu d'une version antérieure)
+        source_url=$(cat "${f%.txt}.url" 2>/dev/null || basename "$f")
+
+        tmp_list=$(temp_file "blocklist_list")
+
         # Format hosts : "0.0.0.0 domaine" ou "127.0.0.1 domaine"
         grep -E '^[[:space:]]*(0\.0\.0\.0|127\.0\.0\.1)[[:space:]]+[a-zA-Z0-9]' \
-            "$f" 2>/dev/null | awk '{print $2}' >> "$tmp_all" || true
+            "$f" 2>/dev/null | awk '{print $2}' >> "$tmp_list" || true
 
         # Format Adblock/uBlock : "||domaine^"
         grep -oE '\|\|[a-zA-Z0-9.-]+\^' \
-            "$f" 2>/dev/null | sed 's/^||//; s/\^$//' >> "$tmp_all" || true
+            "$f" 2>/dev/null | sed 's/^||//; s/\^$//' >> "$tmp_list" || true
+
+        # Format dnsmasq : "local=/domaine/" (ex. hagezi dnsmasq)
+        grep -oE 'local=/[a-zA-Z0-9.-]+/' \
+            "$f" 2>/dev/null | sed 's|^local=/||; s|/$||' >> "$tmp_list" || true
 
         # Format liste brute : un domaine par ligne, sans commentaire
         grep -E '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[[:space:]]*$' \
-            "$f" 2>/dev/null | awk '{print $1}' >> "$tmp_all" || true
+            "$f" 2>/dev/null | awk '{print $1}' >> "$tmp_list" || true
+
+        count_list=$(wc -l < "$tmp_list" 2>/dev/null || echo 0)
+        total_extracted=$((total_extracted + count_list))
+
+        cat "$tmp_list" >> "$tmp_all"
+        rm -f "$tmp_list"
+
+        # Visibilité par liste : 0 règle extrait = probablement un format
+        # non reconnu (déjà vu avec les listes dnsmasq "local=/domaine/")
+        if [ "$count_list" -eq 0 ]; then
+            log_json WARN "dns_blocklist" \
+                "aucune règle extraite de la liste (format non reconnu ?)" \
+                "liste=${source_url}" \
+                "regles=${count_list}"
+        else
+            log_json INFO "dns_blocklist" \
+                "règles chargées depuis la liste" \
+                "liste=${source_url}" \
+                "regles=${count_list}"
+        fi
     done
 
     # Normalisation : minuscules, tri, dédoublonnage, format de domaine valide
@@ -210,7 +246,9 @@ compile_blocklists() {
 
     log_json INFO "dns_blocklist" \
         "blocklist compilée" \
-        "domaines=${total}"
+        "domaines=${total}" \
+        "regles_extraites=${total_extracted}" \
+        "doublons_et_filtres=$((total_extracted - total))"
 
     return 0
 }

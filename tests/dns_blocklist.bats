@@ -333,3 +333,88 @@ EOF
     grep -q "address=/ads.example.com/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
     grep -q "address=/validdomain123.org/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
 }
+
+# ============================================================================
+# Test Group 4: compile_blocklists() - dnsmasq format & per-list logging
+# (cf. format dnsmasq "local=/domaine/" des listes hagezi, et logs du
+# nombre de règles chargées par liste)
+# ============================================================================
+
+@test "compile_blocklists parses dnsmasq local= format correctly" {
+    export ENABLE_DNS_BLOCKLIST=true
+
+    # dnsmasq include format (filler pour dépasser le seuil de 100)
+    { fill_domains 100
+      cat << 'INNER_EOF'
+local=/ads.example.com/
+local=/tracker.test.org/
+local=/malware.net/
+INNER_EOF
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
+
+    run compile_blocklists
+    [ "$status" -eq 0 ]
+
+    [ -f "$DNS_BLOCKLIST_COMPILED_DNSMASQ" ]
+    grep -q "address=/ads.example.com/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/tracker.test.org/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+    grep -q "address=/malware.net/0.0.0.0" "$DNS_BLOCKLIST_COMPILED_DNSMASQ"
+}
+
+@test "compile_blocklists logs rule count per list with source URL" {
+    export ENABLE_DNS_BLOCKLIST=true
+
+    # Deux listes + manifests .url écrits par download_blocklists
+    { fill_domains 100
+      echo "127.0.0.1 ads.example.com"
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
+    echo "https://example.com/hosts.txt" > "$DNS_BLOCKLIST_RAW_DIR/list_1.url"
+
+    { fill_domains 100
+      echo "local=/tracker.net/"
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_2.txt"
+    echo "https://example.com/dnsmasq.txt" > "$DNS_BLOCKLIST_RAW_DIR/list_2.url"
+
+    run compile_blocklists
+    [ "$status" -eq 0 ]
+
+    # Un log INFO par liste, avec l'URL source et le nombre de règles
+    echo "$output" | grep -q '"msg":"règles chargées depuis la liste".*"liste": "https://example.com/hosts.txt".*"regles": "101"'
+    echo "$output" | grep -q '"msg":"règles chargées depuis la liste".*"liste": "https://example.com/dnsmasq.txt".*"regles": "101"'
+    # Total final avec le décompte avant dédoublonnage
+    echo "$output" | grep -q '"msg":"blocklist compilée".*"regles_extraites": "202"'
+}
+
+@test "compile_blocklists warns when a list yields no rules" {
+    export ENABLE_DNS_BLOCKLIST=true
+
+    # Une liste valide + une liste dans un format non reconnu
+    { fill_domains 150
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
+    echo "https://example.com/hosts.txt" > "$DNS_BLOCKLIST_RAW_DIR/list_1.url"
+
+    printf 'this is not a blocklist format\njust text lines\n' \
+        > "$DNS_BLOCKLIST_RAW_DIR/list_2.txt"
+    echo "https://example.com/unknown.txt" > "$DNS_BLOCKLIST_RAW_DIR/list_2.url"
+
+    run compile_blocklists
+    [ "$status" -eq 0 ]
+
+    # La liste muette est signalée en WARN avec 0 règle
+    echo "$output" | grep -q '"level":"WARN".*"liste": "https://example.com/unknown.txt".*"regles": "0"'
+    # La liste valide reste en INFO
+    echo "$output" | grep -q '"msg":"règles chargées depuis la liste".*"liste": "https://example.com/hosts.txt"'
+}
+
+@test "compile_blocklists falls back to filename when url manifest is missing" {
+    export ENABLE_DNS_BLOCKLIST=true
+
+    # Cache issu d'une version sans manifest .url : le log nomme le fichier
+    { fill_domains 150
+    } > "$DNS_BLOCKLIST_RAW_DIR/list_1.txt"
+
+    run compile_blocklists
+    [ "$status" -eq 0 ]
+
+    echo "$output" | grep -q '"liste": "list_1.txt".*"regles": "150"'
+}

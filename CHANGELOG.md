@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Per-blocklist rule counts in the logs**: each list is now logged individually at compile time with its source URL and extracted rule count (`règles chargées depuis la liste`, `liste=<url>`, `regles=<n>`), plus the total deduplicated count (`blocklist compilée`, with `regles_extraites` and `doublons_et_filtres`). The download step records the source URL of each cached list (`list_<n>.url`) so the compile logs can name each list.
+
+### Fixed
+- **`dnsmasq` blocklist format (`local=/domain.com/`, e.g. HaGeZi `dnsmasq` lists) extracted zero rules**: the parser only handled `hosts`, adblock `||domain^` and raw domain lines, so a `DNS_BLOCKLIST_URLS` entry pointing at a dnsmasq-format list was silently unapplied. The format is now parsed, and a list that still extracts zero rules (unrecognized format) logs a `WARN` instead of being silently ignored.
+
 ## [3.1.0] - 2026-11-07
 
 ### Added

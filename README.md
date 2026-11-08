@@ -362,7 +362,7 @@ All variables are optional. Defaults match a plain OpenVPN-only setup.
 | `DOT_IP_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of DoT server hostnames. If an IP changes, iptables rules are updated atomically. Set to `0` to disable. |
 | `VPN_REMOTE_REFRESH_INTERVAL` | `3600` | Seconds between re-resolution of VPN remote hostnames (kill switch pins the IPs at startup). If an IP changes, iptables rules and the pinned remote map are updated atomically; a healthy tunnel is NOT restarted - the new IPs are pinned by OpenVPN on the next VPN (re)start. Set to `0` to disable. |
 | `ENABLE_DNS_BLOCKLIST` | `false` | Set to `true` to enable optional DNS blocklist support. Downloads, compiles, and periodically refreshes blocklists from `DNS_BLOCKLIST_URLS`. |
-| `DNS_BLOCKLIST_URLS` | *(empty)* | Space or comma-separated list of blocklist URLs (supports `hosts`, `adblock`, and raw newline-delimited formats). Example: `https://raw.githubusercontent.com/.../hosts.txt https://adaway.org/hosts.txt`. Used only when `ENABLE_DNS_BLOCKLIST=true`. |
+| `DNS_BLOCKLIST_URLS` | *(empty)* | Space or comma-separated list of blocklist URLs (supports `hosts`, `adblock`, `dnsmasq` (`local=/domain/`), and raw newline-delimited formats). Example: `https://raw.githubusercontent.com/.../hosts.txt https://adaway.org/hosts.txt`. Used only when `ENABLE_DNS_BLOCKLIST=true`. |
 | `DNS_BLOCKLIST_REFRESH_INTERVAL` | `86400` | Seconds between automatic blocklist refresh cycles (default: 24 hours). Set to `0` to disable periodic refresh. |
 | `DNS_BLOCKLIST_MIN_AGE` | `3600` | Minimum age (in seconds) of a cached blocklist before attempting a refresh. Prevents thrashing on network errors. |
 | `DNS_BLOCKLIST_ALLOWLIST` | *(empty)* | Comma or newline-separated list of domains to whitelist (prevent from being blocked by the DNS blocklist). Example: `example.com,trusted.local`. |
@@ -663,7 +663,8 @@ DNS-level blocklisting adds an extra layer of protection by sinkhole-blocking kn
 | Format | Example Source | Syntax |
 |---|---|---|
 | **hosts** | `/etc/hosts` style | `0.0.0.0 domain.com` or `127.0.0.1 domain.com` |
-| **adblock** | `uBlock Origin` compatible | `domain.com^` or `domain.com` (one per line) |
+| **adblock** | `uBlock Origin` compatible | `||domain.com^` (one per line) |
+| **dnsmasq** | dnsmasq include | `local=/domain.com/` (one per line, e.g. HaGeZi `dnsmasq` lists) |
 | **raw list** | Newline-delimited domains | `domain.com` (plain domain name, one per line) |
 
 ### Enabling DNS Blocklist
@@ -697,6 +698,12 @@ DNS_BLOCKLIST_URLS: >
   https://adaway.org/hosts.txt
   https://malwaredomains.com/files/justdomains
 ```
+
+At compile time, the container logs the number of rules extracted from each list
+(`msg: "règles chargées depuis la liste"`, one log line per URL, with `liste=` and
+`regles=` fields), plus the total deduplicated domain count. A list that yields
+**zero rules** — typically an unrecognized format — is logged as a `WARN`, so a
+silently unapplied blocklist is immediately visible in the logs.
 
 ### Allowlist — Preventing false positives
 
