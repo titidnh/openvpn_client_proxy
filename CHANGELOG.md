@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-blocklist rule counts in the logs**: each list is now logged individually at compile time with its source URL and extracted rule count (`règles chargées depuis la liste`, `liste=<url>`, `regles=<n>`), plus the total deduplicated count (`blocklist compilée`, with `regles_extraites` and `doublons_et_filtres`). The download step records the source URL of each cached list (`list_<n>.url`) so the compile logs can name each list.
 
 ### Fixed
+- **`openvpn.sh` died at startup before ever launching OpenVPN** (`config=/dev/shm/vpn.resolved.XXXXXX: No such file or directory`, exit 127): the `DNS_FROM_VPN` block (PR #24) had been inserted in the middle of the final `log_json` call, leaving `"config=…"`/`"dir=…"` as orphan command fragments. The corruption is syntactically valid — invisible to `bash -n` and shellcheck — so at runtime bash executed the fragment as a command path and `set -euo pipefail` killed the script before `exec openvpn`. The tunnel never came up and the supervisor looped on restarts. The block now runs before the restored `log_json` call; the new `tests/openvpn.bats` (9 tests) runs the script end-to-end with a stubbed `openvpn` and fails 8/9 on the corrupted version. Also added `tests/dns_from_vpn.bats` (25 tests, PR #24) to the CI bats suite, where it had been left out.
 - **`dnsmasq` blocklist format (`local=/domain.com/`, e.g. HaGeZi `dnsmasq` lists) extracted zero rules**: the parser only handled `hosts`, adblock `||domain^` and raw domain lines, so a `DNS_BLOCKLIST_URLS` entry pointing at a dnsmasq-format list was silently unapplied. The format is now parsed, and a list that still extracts zero rules (unrecognized format) logs a `WARN` instead of being silently ignored.
 
 ## [3.1.0] - 2026-11-07
@@ -149,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Improved Scripts
 
 **start.sh (v2.0.0):**
-- **Modular structure**: Clear separation into sections (initialization, firewall, DNS, proxy, Tailscale, monitoring)
+- **Modular structure**: Clear separation into sections (initialization, firewall, DNS, proxy, monitoring)
 - **PID management**: Used an associative array `SERVICE_PIDS` for cleaner tracking
 - **Environment validation**: Added validation functions for environment variables
 - **Better error handling**: Consistent use of `set -euo pipefail`
@@ -158,7 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Structured logging**: Improved JSON format with proper escaping of special characters
 
 **healthcheck.sh (v2.0.0):**
-- **Use of common library**: Imported `lib/common.sh` to avoid duplication
+- **Use of common library**: Imported `lib/common.sh`
 - **Modular functions**: Separated checks into distinct functions
 - **Better readability**: More structured and commented code
 - **Error handling**: More informative error messages
@@ -172,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Base update**: Switched to `alpine:3.23` (2026-compatible)
 - **Enriched metadata**: Added OpenContainers labels
 - **Optimization**: Better layer organization
-- **Documentation**: More detailed comments
+- **Documentation**: Clearer and more complete comments
 
 #### Improved docker-compose.yml
 - **Organization**: Better structuring of sections
@@ -192,8 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Maintainability Improvements
 - **Naming conventions**: More consistent variable and function names
 - **Input validation**: Type checking (boolean, number, IP, port)
-- **Error handling**: More informative and structured error messages
-- **Documentation**: More detailed comments for complex functions
+- **Error handling**: More informative error messages
+- **Documentation**: More detailed comments for complex logic
 - **Modularity**: Code separation into logical modules
 
 #### 2026 Compatibility
@@ -217,8 +218,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Initial Release
 - Created the `openvpn_client_proxy` project
-- Basic implementation of the Docker container
-- Initial configuration of OpenVPN, Privoxy, and dnsmasq
+- Basic implementation of the Docker container: OpenVPN, Privoxy, and dnsmasq
 - Implemented kill switch and DNS leak protection
 - Optional integration of Tailscale
 
