@@ -128,9 +128,6 @@ if [ "${OPENVPN_DROP_PRIVILEGES:-true}" = "true" ]; then
         "privilege drop enabled - openvpn will run as vpn:vpn after tun setup"
 fi
 
-log_json INFO "openvpn.sh" \
-    "Starting OpenVPN" \
-
 # DNS_FROM_VPN : capter les dhcp-option DNS poussés par le serveur.
 # --up s'exécute en root AVANT le drop de privilèges ; --route-up couvre
 # les reconnexions SIGUSR1 (--persist-tun rejoue route-up, pas up) et
@@ -146,6 +143,9 @@ if [ "${DNS_FROM_VPN:-false}" = "true" ]; then
         "DNS_FROM_VPN enabled - pushed dhcp-option DNS servers will be captured" \
         "file=${VPN_PUSHED_DNS_FILE}"
 fi
+
+log_json INFO "openvpn.sh" \
+    "Starting OpenVPN" \
     "config=${conf}" \
     "dir=${dir}"
 
