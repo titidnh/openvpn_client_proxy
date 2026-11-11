@@ -37,8 +37,11 @@ jobs:
 
       # Legacy bats suite: repaired in October 2026 (docs/SECURITY_REVIEW.md,
       # backlog Q1) and now blocking, like the rest of the checks.
+      # tests/dns_from_vpn.bats (PR #24) had been left out of this list;
+      # tests/openvpn.bats guards the openvpn.sh launch regression fixed
+      # alongside it (orphan fragments after the DNS_FROM_VPN block).
       - name: Legacy bats suite
-        run: bats tests/common.bats tests/dns_blocklist.bats tests/dns_runtime.bats tests/dot.bats tests/firewall.bats
+        run: bats tests/common.bats tests/dns_blocklist.bats tests/dns_from_vpn.bats tests/dns_runtime.bats tests/dot.bats tests/firewall.bats tests/openvpn.bats
 
   build-and-push:
     needs: checks
