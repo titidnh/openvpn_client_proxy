@@ -38,6 +38,14 @@ jobs:
         with:
           # Le commit exact qui vient d'etre construit, pas le HEAD courant.
           ref: ${{ github.event.workflow_run.head_sha }}
+          # Le garde-fou "tag deja publie ?" de l'etape "Extract version"
+          # fait un rev-parse refs/tags/vX.Y.Z : un checkout shallow par
+          # defaut (fetch-depth: 1) ne recupere AUCUN tag, le rev-parse
+          # echoue silencieusement, le garde-fou ne skippe pas et le POST
+          # /releases renvoie 422 (release deja existante) - exit 22 sous
+          # curl -f. Full history + tags pour que le check soit honnete.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Extract version and notes from CHANGELOG
         id: ver
@@ -80,6 +88,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          # Defense en profondeur (ex: release creee par un run parallele
+          # entre le check de tag et le POST) : ne pas faire echouer le
+          # job en 422 si la release existe deja.
+          if curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+               -H "Accept: application/vnd.github+json" \
+               "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" \
+               -o /dev/null; then
+            echo "Release v$VERSION deja existante - rien a faire."
+            exit 0
+          fi
           jq -n \
             --arg tag "v$VERSION" \
             --arg sha "${{ github.event.workflow_run.head_sha }}" \
