@@ -150,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Improved Scripts
 
 **start.sh (v2.0.0):**
-- **Modular structure**: Clear separation into sections (initialization, firewall, DNS, proxy, monitoring)
+- **Modular structure**: Clear separation into sections (initialization, firewall, DNS, proxy, Tailscale, monitoring)
 - **PID management**: Used an associative array `SERVICE_PIDS` for cleaner tracking
 - **Environment validation**: Added validation functions for environment variables
 - **Better error handling**: Consistent use of `set -euo pipefail`
@@ -159,7 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Structured logging**: Improved JSON format with proper escaping of special characters
 
 **healthcheck.sh (v2.0.0):**
-- **Use of common library**: Imported `lib/common.sh`
+- **Use of common library**: Imported `lib/common.sh` to avoid duplication
 - **Modular functions**: Separated checks into distinct functions
 - **Better readability**: More structured and commented code
 - **Error handling**: More informative error messages
@@ -167,7 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **openvpn.sh (v2.0.0):**
 - **Prerequisite validation**: Checked for the existence of files and commands
 - **Improved logging**: Used the common library for logging
-- **Documentation**: Added comments and metadata
+- **Documentation**: More detailed comments
 
 #### Improved Dockerfile
 - **Base update**: Switched to `alpine:3.23` (2026-compatible)
@@ -193,8 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Maintainability Improvements
 - **Naming conventions**: More consistent variable and function names
 - **Input validation**: Type checking (boolean, number, IP, port)
-- **Error handling**: More informative error messages
-- **Documentation**: More detailed comments for complex logic
+- **Error handling**: More informative and structured error messages
+- **Documentation**: More detailed comments for complex functions
 - **Modularity**: Code separation into logical modules
 
 #### 2026 Compatibility
@@ -218,7 +218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Initial Release
 - Created the `openvpn_client_proxy` project
-- Basic implementation of the Docker container: OpenVPN, Privoxy, and dnsmasq
+- Basic implementation of the Docker container
+- Initial configuration of OpenVPN, Privoxy, and dnsmasq
 - Implemented kill switch and DNS leak protection
 - Optional integration of Tailscale
 
