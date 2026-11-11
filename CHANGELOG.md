@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Client started in foreground mode and supervised like the other services: deferred start until the tunnel is healthy, idempotent restarts, full restart if the process dies
   - Kill switch extended: forwarding between the NetBird interface (`wt+`) and the VPN tunnel (`tun+`/`tap+`/`wg+`) allowed in IPv4 and IPv6
   - `/var/lib/netbird` volume for persistent peer identity; docs and docker-compose examples updated (Tailscale and NetBird can run simultaneously, with a supervisor warning)
-- **Local DNS bypass** (`DNS_BYPASS_VPN`, default `false`): pins the upstream DNS servers outside the VPN tunnel so a **local** resolver (box DNS, Pi-hole LAN) stays reachable through the physical network
+- **Local DNS bypass** (`DNS_BYPASS_VPN`, default `false`): pins the upstream DNS servers outside the VPN tunnel so a **local** resolver (box DNS, LAN Pi-hole) stays reachable through the physical network
   - Works in plain mode (`DNS_SERVER_1`/`DNS_SERVER_2`, ports 53 UDP+TCP) and in DoT/DoH mode (resolved server IPs, ports 853/443 per `DOT_FORWARD_ADDRS_FILE`)
   - Idempotent firewall ACCEPT rules by destination, re-applied on every kill-switch rebuild, unbound restart and DoT IP refresh
   - Host routes via the physical gateway (`ip route replace`) so `redirect-gateway` (OpenVPN) or the `0.0.0.0/1`+`128.0.0.0/1` routes (WireGuard) don't swallow DNS traffic into the tunnel; re-asserted after every tunnel (re)connection
